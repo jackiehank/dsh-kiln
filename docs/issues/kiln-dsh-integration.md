@@ -161,3 +161,79 @@ kiln 能否以 **CLI 之外**的形态接入 DSH？具体是哪些载体、各�
 - DSH Web 中可见 issue 列表：id、状态（进行中/完成）、domain、关系；
 - 点进单个 issue 可见时间线：动作序列、标题、涉及文件与 diff 入口；
 - 无 kiln 或空仓库显示空态，不报错。
+
+## 调研记录（collect 2）：DSH 可视化插件一般怎么做
+
+结论先行：DSH 插件几乎都是「**Host 半 + 浏览器半**」——Host 半是 Cordis 插件（Node），负责数据、工具、
+RPC、设置命名空间；浏览器半是一个 client module（React 或纯 DOM），由宿主扫进
+`window.__DSH_BOOT__`，挂到某个 **slot** 上。可视化 = 选对 slot + 做对这半。
+
+### 1. 形态分类
+
+| 形态 | 挂载点 | 数据来源 | 对 kiln 的适用度 | 代表 |
+| --- | --- | --- | --- | --- |
+| 设置卡片 | `settings.plugin.item`（键控 slot），Host 半用 `ctx.settings.installSection()` 建命名空间 | 宿主 RPC / settings scope | 只适合放配置（kiln 路径、仓库根、只读开关），不适合大数据浏览 | [cookbook: 新增设置卡片](https://dshfind.com/zh/docs/cookbook/adding-a-settings-card) |
+| 整页面板 | 左栏 `sidebar.panellist` 入口 + 中央 `main` 键控槽位切页 | 宿主 RPC（remote methods） | **最贴合**：issue 全景、单 issue 时间线 | [dsh-skill-mcp-panel](https://www.npmjs.com/package/dsh-skill-mcp-panel) v2.1+ |
+| 声明式卡片 | 插件注册 `render_ui` 工具，agent 调用后由 client 解释器渲染卡片 | agent 生成 | 适合“会话里画一张 issue 摘要卡”，不适合固定浏览器 | [dsh-intelligent-ui](https://github.com/an-an-618/dsh-intelligent-ui) |
+| 宿主路由 + 自建页面 | 插件向 `dsh-host-webserver` 注册 HTTP 前缀路由 | 插件自己的服务 | 适合复用现成 Web 实现，或用 iframe 嵌外部 UI | 通用模式；[VS Code 插件](https://github.com/Cdown1/deepseek-harness-vscode) 就是 iframe 嵌 `dsh web` |
+| 独立外部 UI | 不挂 DSH | `kiln --json` | 零适配成本，可作兜底 | git-bug 自带 web UI |
+
+### 2. 整页面板的实际骨架（以 dsh-skill-mcp-panel v2.3.5 为例）
+
+它的 `package.json` 把两半都声明清楚：
+
+```json
+"dsh": {
+  "bundle": { "patch": "./cordis.patch.yml" },
+  "client": {
+    "platform": "web",
+    "inject": ["@deepseek-ai/dsh-client-locale", "@deepseek-ai/dsh-api-gateway",
+               "@deepseek-ai/dsh-client-ui-layout", "@deepseek-ai/dsh-client-ui-sidebar"]
+  }
+},
+"exports": { ".": "./lib/index.js", "./client": "./lib/client.js" }
+```
+
+- **Host 半**（`lib/index.js`）：在 `cordis.patch.yml` 里注册，注册工具/RPC/设置命名空间；
+- **浏览器半**（`lib/client.js`）：宿主扫描 `dsh.client`，把 bundle 组合进 `window.__DSH_BOOT__`，
+  由 `/plugins` 路由按 revision 提供；改完由 `dsh-client-hmr` 经 SSE `/plugins/events` 热替换
+  （[client-modules 文档](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/client-modules.zh.md)）；
+- **页面**：左栏一行入口（`sidebar.panellist`）+ 点开把中央主区切到 `main` 键控槽位，和宿主自带
+  「插件」页同一套槽位机制，左上角「← 返回会话」；
+- **数据**：Host 侧注册 RPC（typert remote methods），浏览器侧调用。宿主与浏览器各有一份方法清单，
+  必须同步——该插件 changelog 里就有“浏览器束清单漏登记导致面板点不开”的修复（#51）；
+- **安装**：`dsh plugin --profile web add <tarball|npm 包名|github:owner/repo>`；peer 声明 DSH 版本范围
+  （`>=0.2.0-rc.1 <0.3.0-0`），不符时宿主拒绝加载并打印豁免命令。
+
+### 3. 数据通路选项（对 kiln）
+
+| 通路 | 做法 | 优点 | 风险 |
+| --- | --- | --- | --- |
+| Host RPC + 子进程 | Host 半 spawn `kiln --json`，结果经 remote method 给浏览器 | 复用 kiln 解析，最忠实 | 要处理仓库路径、错误、缓存与刷新 |
+| 宿主 HTTP 路由 | 插件注册 `/kiln/...` 返回 JSON，浏览器直接 fetch | 简单、无 RPC 清单维护 | 同源/鉴权需自建，路由随宿主版本 |
+| 浏览器直读 `.git` | 前端自己解析提交 | 无宿主依赖 | 等于复刻 kiln 语义，**不可取** |
+| 外部服务 | 独立小服务输出 JSON/HTML，DSH 只 iframe | 与 DSH 解耦 | 多一个进程，失去 DSH 原生感 |
+
+### 4. 成本与版本风险
+
+- **纯 DOM 可行**：dsh-plugin-kit 的“纯前端 DOM 面板（React 只承担卡片外壳与展开状态），无构建步骤”
+  证明浏览器半不一定要重型构建；但 Host 半仍然要写；
+- **slot / 协议 / peer 版本随 DSH 演进**：skill-mcp-panel 为 0.1.x → 0.2.x 反复适配（图标导出改名、
+  typert 协议钉版本、peer 上界），说明插件必须钉 peer 范围并准备跟版；
+- **开发体验**：只有 `pnpm run dev:web` 在场时 HMR 才能免刷新热替换，否则重建后刷新页面；
+- **i18n**：`dsh-client-locale` 提供本地化注入，中文界面需要按它的契约写。
+
+### 5. 对目标形态的映射
+
+- **全景 + 单 issue 时间线** = 一个整页面板（`sidebar.panellist` 入口 + `main` 页面），数据走 Host RPC
+  调 `kiln status/list/path --json`；
+- **设置卡片**只放配置（仓库根、kiln 可执行文件路径、自动刷新开关）；
+- **声明式 `render_ui`** 只适合让 agent 在会话里画摘要卡，不是主界面；
+- **外部 UI** 作为兜底：若插件 API 不满足，静态导出 + 独立页面。
+
+### 6. 留给 hypothesize 的问题
+
+- 整页面板 vs 设置卡片（倾向整页面板：符合“人看项目”的浏览诉求）；
+- 数据通路选 Host RPC 还是自带 HTTP 路由；
+- 要不要像 skill-mcp-panel 那样附带 `dsh-panel` 式伴生命令（kiln 已有 CLI，价值不大）；
+- peer 版本策略：只支持当前 DSH 版本，还是兼容多版本。
