@@ -51,3 +51,68 @@ kiln 能否以 **CLI 之外**的形态接入 DSH？具体是哪些载体、各�
 - DSH 插件能否在 agent 执行 `git commit` 时可靠地补 trailer（懒安装 hook 的可行性）；
 - MCP 形态下写路径怎么归属：MCP 工具代跑 `git commit`，还是只生成提交信息交由 shell 执行；
 - 多个 agent 并发提交时，trailer 状态是否仍可线性解析（kiln 的 `check` 是否够用）。
+
+## 调研记录（collect）
+
+证据来源：DSH 官方 MCP client 文档、DSH 插件目录与若干插件仓库、git-bug / ditz / git-issue
+的公开文档。以下均为外部资料与实测，未做结论。
+
+### 1. DSH 侧可用的接入载体
+
+| 载体 | 契约 | 能做什么 | 局限 |
+| --- | --- | --- | --- |
+| AGENTS.md 指令 | 会话自动加载（本仓已实测：进 dsh-kiln 操作时会话注入 "Additional instructions from: dsh-kiln\AGENTS.md"） | 把流程、纪律写成 agent 默认上下文 | 纯文本，无强制力 |
+| 技能（SKILL.md） | 技能目录 + `skill` 工具按需加载；插件可充当 skill provider（`list()` 提供技能列表） | 把 kiln 用法做成按需加载的手册，减少常驻上下文 | 仍靠 agent 自觉调用 |
+| 插件（Cordis bundle） | profile 的 `package.json` 里 `dsh.profile.bundles`，叠加 `cordis.yml` 条目（`id` / `name` / `config`）；DSH 架构口号是 "Everything is a plugin" | 注册工具、Web UI、钩子、skill provider | 需跟随 DSH 版本维护；发布要过插件市场/安装器 |
+| MCP server | `@deepseek-ai/dsh-mcp-client`：每个 server 一条配置（`serverName` 1–32 字符 `[A-Za-z0-9_-]`、`transport` = `stdio` 或 `streamable-http`）；工具以 `mcp__<serverName>__<rawName>` 注册，跨重启稳定 | 把 kiln 的 JSON 面直接变成模型可调工具，可被多个 DSH/Codex 客户端共用 | MCP 只提供工具调用，**管不到 agent 的提交流程**；写操作通常要挂人工审批 |
+| 钩子 | 插件可在 agent 直接 `git commit` 时懒安装 `prepare-commit-msg` 钩子并追加 trailer（`dsh-co-authored-by` 插件的做法） | 拦截提交、补 `issue:`/`action:` 或拒绝缺 trailer 的提交 | 依赖 git 钩子生效时机；agent 绕过（`--no-verify`、直接写 ref）时失效 |
+
+参考：
+- [dsh-mcp-client README（官方）](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md)
+- [dsh-co-authored-by 插件（懒安装 prepare-commit-msg 加 trailer）](https://deepseekplugin.org/plugins/shelken-dsh-co-authored-by)
+- [dsh-doctor（把"技能提供方"当作可诊断对象）](https://dsh-hub.cc/plugins/louisyeaaah/dsh-doctor?lang=en)
+
+### 2. kiln 同类工具及其现有 DSH 形态
+
+| 工具 | 存储形态 | 自身形态 | 在 DSH 中的形态 | 备注 |
+| --- | --- | --- | --- | --- |
+| git-bug | issue 作为 git 对象存 refs，离线、可 push/pull | CLI + TUI + Web UI + 托管桥（GitHub/GitLab/Jira/Launchpad） | **MCP server**：[git-bug-broker](https://github.com/JovianIce/git-bug-broker)（多 agent 并发 file/label/comment/close，规则校验） | 与 kiln 最像：数据全在 git 里，无托管服务 |
+| ditz | `bugs.yaml` 等文件进版本库 | Ruby CLI（init/add/close） | 未发现 DSH 封装，只能 CLI 直调 | 文档时代的设计，靠人遵守 |
+| git-issue | issue 存 `issues/xx/` 文本文件，评论存 commit（`gi comment mark`），可独立 issues 仓库 | shell CLI | 未发现 DSH 封装 | 提交信息与 issue 关联弱 |
+| Linear | 托管服务 | Web/API | **MCP server**：[dsh-linear-mcp](https://glama.ai/mcp/servers/arucil/dsh-linear-mcp)（为 DSH 写的 stdio server，覆盖 issue/子 issue/关系/评论） | 托管形态的标准答案 |
+| GitHub | 托管服务 | Web/API | MCP（`@modelcontextprotocol/server-github`）+ 插件市场的 issue 类插件（`dsh-issue-tracker`、`dsh-project-j4agent`，写操作需人工审批） | 插件形态把 issue 工具做进 DSH 原生工具表 |
+| 通用工作流 | — | — | **技能**：`dsh-skill-pack` 的 `to-tickets`（对话 → spec → issue tracker） | 技能形态解决"怎么产出 issue" |
+| kiln（本仓） | commit trailer | CLI v0.1.1 | 无公开封装；本仓只有 AGENTS.md 约定 | 差距：无工具、无视图、无拦截 |
+
+参考：
+- [git-bug README](https://raw.githubusercontent.com/git-bug/git-bug/master/README.md)
+- [ditz（RubyGems）](https://rubygems.org/gems/ditz)
+- [git-issue README](https://github.com/dspinellis/git-issue/blob/67aacad35888b4c51e2d7be35c86fef137874f12/README.md)
+- [DSH 插件目录（issue-tracker 检索）](https://deepseekharnessai.com/zh/?q=issue-tracker)
+
+### 3. 可借鉴的设计
+
+- **词汇表校验前移**：git-bug-broker 在写入层强制"必须是 `area/` 与 `kind/` 各一个标签、defect/chore 必须带
+  What / Done when 段落"，拒绝时一次列出所有问题。kiln 的 `check` 是**事后**检查（start/terminal/关系/
+  未知 trailer），没有写入层拦截——这是封装层最值得补的缺口。
+- **提交时补 trailer**：`dsh-co-authored-by` 在 agent 直接 `git commit` 时懒安装 `prepare-commit-msg`
+  并追加署名 trailer，说明 DSH 插件确实能介入提交流程。kiln 的 `issue:`/`action:` 同样可以在钩子里补
+  （例如插件记住"当前 issue 与动作"），或在缺失时拒绝。
+- **读写分离**：托管 tracker 的 MCP 普遍把写操作标成需人工审批。kiln 的 `commit` 是"改工作区 + 造提交"，
+  更不适合交给 MCP 自动执行。
+
+### 4. 初步判断（待 hypothesize 验证，不是结论）
+
+- **查询面最适合 MCP**：kiln 的 `status/list/check/graph/path/show --json` 是纯读，包成 `mcp__kiln__*`
+  只读工具成本最低，收益是跨 agent/跨客户端共享 issue 图；
+- **写面不宜走 MCP**：kiln 的写等于创建提交，必须与工作区改动同源；MCP 代跑 `git commit` 会与 agent
+  的 shell 改动脱节，更可能落在"插件钩子补/验 trailer + agent 继续用 shell 跑 `kiln commit`"；
+- **技能是低保真起点**：解决"记得用"，不解决"强制执行"；作为过渡可以，不能当机制；
+- **GUI 视图成本最高**：需要 DSH Web 插件与 HMR，收益（看 issue 图）是否值得要看实际需求。
+
+### 5. 未决问题
+
+- DSH 侧是否真的需要可视化（`kiln path --shortstat` 的输出已足够人读？）；
+- 是否需要给 kiln 本身补"提交信息校验入口"（例如 `--validate-file <path>` 供钩子复用）；
+- `worktree: on` 下多 agent 并发提交，trailer 状态是否仍线性可解析；
+- dsh-kiln 的定位：只做接入仓，还是最终发布成 DSH 插件 / MCP server（发布物形态决定目录结构）。
