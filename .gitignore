@@ -1,0 +1,10 @@
+# OS / 编辑器
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+
+# 本地临时产物（探针、截图、构建输出）
+.tmp/
+*.exe
+dist/

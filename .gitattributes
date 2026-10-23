@@ -1,0 +1,10 @@
+# 检出恒为 LF（与 ~/kiln 一致）：避免跨平台工具把整棵树误报成改动。
+* text=auto eol=lf
+
+# Windows 专用脚本保留 CRLF：.bat/.cmd 的 label、goto 在纯 LF 下会出错；
+# .ps1 等虽能被 PowerShell 解析，但 Windows 编辑器与工具链普遍只认 CRLF。
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf
