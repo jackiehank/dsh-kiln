@@ -8,3 +8,8 @@ Thumbs.db
 .tmp/
 *.exe
 dist/
+
+# 本地安装备份（profile manifest 快照）
+.profile-backup-package.json
+.dsh-backup/
+

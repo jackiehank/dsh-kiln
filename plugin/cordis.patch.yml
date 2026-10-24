@@ -1,0 +1,3 @@
+- insert:
+    - id: dsh-kiln
+      name: '@local/dsh-kiln'

@@ -462,3 +462,23 @@ B 展开“线程之间如何互相牵动”。三种阅读模式 = 在这两个
 - 等 kiln 落地 `relations` 配置段后，把“容错读取”升级为“显式 schema 校验 + 词表热更新”；
 - 跨槽排序（`ordering` vs `lineage`）在引擎层没有定义强弱，插件当前约定“ordering 先于 lineage”，
   是否允许用户调这个槽序（不落盘）待定。
+
+## 实现草稿（in progress）
+
+形态：**profile bundle**（Host 半 + Client 半），代码在仓库内 `plugin/`，可直接装进 DSH desktop profile 做本地迭代。
+
+- **Host 半** `plugin/lib/index.js`：注册 `webServer` 精确路由 `GET /kiln/flow?cwd=<仓库根>`；
+  每次请求同步执行 `kiln graph --json` + 逐 issue `kiln path <id> --json`（宿主进程内 `spawn`），
+  把 graph 与各 issue 动作历史压成 Flow 视图数据（焦点、行、动作条、关系行、强弱、缩进层级）返回 JSON。
+  连接信任校验失败返回 401；`cwd` 缺 `.kilnconfig.jsonc` 时返回明确提示而非空图。
+- **Client 半** `plugin/lib/client.js`：`inject: ["slots","sessions"]`，在 `conversation.view` 插槽注册
+  `{ id: "kiln", order: 30, label: () => "kiln", inject: (sessionId) => ({ cwd }) }`，与内建
+  `chat`(order 0) / `trajectory`(order 10) 同排；组件从会话 cwd 拉 `/kiln/flow`，渲染焦点行（最近提交 issue）、
+  迷你动作条、关系行（ordering 槽先、再 lineage 槽按 rank 降序）、`part-of` 缩进/面包屑、弱关联折叠。
+- **安装方式**（不通过 pnpm）：profile 的 `node_modules/@local/dsh-kiln` 是指向本仓库 `plugin/` 的
+  junction，并在 profile `package.json` 的 `dsh.profile.bundles` 追加 `@local/dsh-kiln`；
+  DSH 的 profile 监听与客户端模块扫描会按 bundle 加载两半。
+- **已验证**：刷新后标签出现在“对话 / 轨迹 / 上下文”末尾；非 kiln 工作区里显示
+  “Flow 暂不可用（缺 .kilnconfig.jsonc）”；`/kiln/flow` 未认证探测为 401（未知路径 404），宿主路由已注册。
+- **待验证**：在 dsh-kiln 工作区内的数据正确性（焦点选取、排序、缩进、折叠）、Triage/Genealogy 两种模式、
+  `worktree on` 下的聚合、i18n 与错误路径呈现。
