@@ -237,3 +237,77 @@ RPC、设置命名空间；浏览器半是一个 client module（React 或纯 DO
 - 数据通路选 Host RPC 还是自带 HTTP 路由；
 - 要不要像 skill-mcp-panel 那样附带 `dsh-panel` 式伴生命令（kiln 已有 CLI，价值不大）；
 - peer 版本策略：只支持当前 DSH 版本，还是兼容多版本。
+
+## 假设（hypothesize 2）：插件形态＝Git 历史的只读镜头，核心视图是“思维线程工作台”
+
+来源：2026-10-23 晚与 DeepSeek 网页版的讨论（<https://chat.deepseek.com/share/dzfn71rutrtqw6ee9l>）。
+本节提炼其中与插件形态直接相关的内容，作为对上一条假设（e6e35f0“插件优先、GUI 为中心”）的收敛。
+
+### 继承 kiln 的三条“放弃”
+
+1. **不维护独立状态**：视图是 Git 历史的纯投影，不引入 SQLite / KV / 缓存库；
+2. **不发明新工作流**：不内置“待办 / 进行中 / 完成”列——列 = 对 trailer 组合的实时查询；
+3. **不增加认知负担**：不提供表单、不做按钮改 issue，写路径始终是 `git commit`。
+
+自检标准：拔掉插件后，kiln 的提交历史与约定完全不受影响，没有任何数据需要迁移。
+
+### 架构定位（其中的 DSH 说法待验证）
+
+讨论把 DSH 扩展面分为 **Session / Agent / Capability** 三层，主张插件只落在 Capability 层：
+
+- 只读观察者：不挂 `agent/pre-step`、`agent/request` 这类决策插桩（那是给“接管决策”的插件用的）；
+- 通过 `ctx.tools` 注册只读工具（如 `kiln_issues`），返回结构化 canonical JSON；
+- UI 从同一份 canonical value 派生（讨论提到 `output.render`），UI 不解析散文、不重算状态。
+
+（“Session / Agent / Capability 三层”与 `output.render` 来自外部讨论，本仓尚未核实；进 apply 前
+要用官方文档验证。）
+
+### 可视化形态
+
+- **三种阅读模式共享同一份 trailer 数据**：
+  - 工单模式（Triage）：一行摘要——issue ID、最近动作、执行者、时间、commit 短哈希；不推断优先级；
+  - 项目模式（Flow）：时间轴 / 依赖链，`depends-on` 渲染为链接；
+  - 知识模式（Genealogy）：单个 issue 的动作序列展开为可折叠的论证链。
+- **信息密度分层**：默认一行，Enter 展开动作链，再展开 diff 摘要；展开内容实时读 Git，不做“刷新按钮”；
+- **并行视图 = 时间轴多轨**（类似 `git log --graph`），不是看板多列；轨道之间显示交叉（一个 issue
+  的结论成为另一个的假设输入）；
+- **最小核心**：先做“单 issue 轨迹视图”（动作类型、作者、时间、commit 摘要），三重身份自然叠加，
+  再考虑多 issue 分组；
+- 格式不合约定的提交：**诚实降级**显示原始 trailer，不静默修正。
+
+### 关注与关系
+
+- 关注集合**不落盘**：默认“最近提交的 issue”，也允许用户临时手动指定；
+- 相关 issue 按 relation 的强度并列展示，呈现“思维如何在 issue 之间跳跃”：
+  `part-of`（最强有向）> `block` 阻塞 > `causes` 影响 > `related`（无向）。
+
+### 主动拒绝的诱惑
+
+- 拒绝“快速操作”（标记完成、拖拽改状态）——状态只在 commit trailer 里变；
+- 拒绝常驻侧栏 / 看板——按需召唤、用完即走，不争夺注意力；
+- 拒绝配置中心——用户要改的只是 trailer 词表文件，插件读取即可；
+- 拒绝任务管理器化：不做逾期、停滞警告、完成率；issue 长期悬置不是失败。
+
+### 对上一条假设的修正
+
+上一版（e6e35f0）说“插件优先、GUI 为中心、人看全景与全过程”；这一版把形态收紧为：
+
+- 主视图从“issue 列表”改为“**线程工作台**”：最后动作 + 时间距离是第一信息，回答“我上次想到哪了”；
+- 明确**只读、无状态、无迁移**；
+- 从“看板式全景”改为“时间轴多轨 + 单 issue 论证链”；**看板形态被明确排除**（卡片暗示实体，
+  而 kiln 的 issue 是“历史中被反复标注的线索”）。
+
+### 验收（apply 阶段）
+
+- 拔掉插件，仓库无任何残留状态；
+- 单 issue 视图能按时间完整重放动作链（类型 / 作者 / 时间 / commit）；
+- 多 issue 视图能并置展示关系，并区分关系强度；
+- 无 kiln / 无 issue / 格式不合约定时诚实降级。
+
+### 风险与待验证
+
+- “Session / Agent / Capability 三层”与 `output.render` 是否为 DSH 真实契约；
+- canonical JSON 是否等于工具的 canonical output（与 dsh-mcp-client 的 canonical value 是否同源）；
+- `git log --trailers` 在大仓库的性能，是否需要按 issue 增量读取；
+- `worktree: on` 时多 worktree 的提交如何聚合到同一视图；
+- 中文 i18n 与 slot 注册方式（见 collect 2）。
