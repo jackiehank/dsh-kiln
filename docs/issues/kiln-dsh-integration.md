@@ -406,3 +406,59 @@ B 展开“线程之间如何互相牵动”。三种阅读模式 = 在这两个
   `causes`/`related` = 弱，lens 可临时调整阈值（不落盘）；
 - 同心分层 vs 力导引布局的取舍（同心更可解释，力导引更省空间）；
 - 焦点切换后的返回栈是否算“状态”（倾向：内存内导航栈，不持久化）。
+
+## 假设（hypothesize 5）：强弱由 kiln 的槽/rank 定义；Flow 改为行式布局
+
+### 1. 强弱不是硬编码，是 `RelationSet` 的 slot + rank（读源码）
+
+- 关系词表 = `model.RelationSet`：**槽（slot）是结构层**，引擎只认 `blocking` 一个布尔；
+  **名字是名字层**，每个名字挂在某个槽下，带槽内 `rank`（1 最弱，越大越强）；
+- 同一 `(target, slot)` 只保留**rank 最大**的一条（平手取后写），这是 `foldRelations` 的语义；
+- 有向名字自动注册反名（同槽同 rank），`blocks`/`part-of` 在 `ordering` 槽（blocking=true，
+  必须无环），`relates-to`/`caused-by`/`supersedes` 在 `lineage` 槽（非阻塞）；
+- 默认词表的强度序：
+  - `ordering`：`blocks`(1) < `part-of`(2)——`part-of` 蕴含 `blocks`（母等全部子）；
+  - `lineage`：`relates-to`(1) < `caused-by`(2) < `supersedes`(3)，`causes` 是 `caused-by` 的反名；
+  - 别名：`derived-from` → `caused-by`，`spawns` → `causes`；
+- **口述校正**：此前说“最弱是 causes、还有一般无向的 related”——源码里无向名是 `relates-to`，
+  且 `relates-to`(1) 比 `caused-by`(2) 更弱；`causes` 是 `caused-by` 的反名，不是独立名字。
+
+### 2. 配置能写强弱吗——设计已定，当前版本还没解析
+
+- `relation-revision` 定过配置草图：`relations` 段下 `slots`（blocking）+ `names`（slot/rank/directed）
+  + `aliases`，即“名字自由、角色映射可配”；
+- 但 `internal/config/config.go` 的 `file` 结构体目前只有 `actions` / `vcs` / `worktree`，且
+  `dec.DisallowUnknownFields()` ——**在 `.kilnconfig.jsonc` 里写 `relations` 会报
+  `配置错误: unknown field "relations"`**（docs/config-compat.md 记为“未实现的段”，plumbing 待
+  relations-impl）。所以 **0.x 当前版本配置写不了强弱**；
+- 插件对策：
+  - 内置一份与源码一致的默认词表（slot/rank/blocking/directed/别名）；
+  - 启动时**容错读取** `.kilnconfig.jsonc`：有 `relations` 段就按它建词表（前向兼容），没有/解析失败
+    就回退默认，并在界面上标注“词表=默认”；
+  - 不把任何关系名硬编码进 UI 逻辑——排序、着色、缩进都从词表推导。
+
+### 3. Flow 布局改为行式（不是同心圆/力导引）
+
+- **第一行 = 焦点 issue**（含迷你 action 条）；
+- 其后**按关系强度从强到弱往下排**：先 `ordering` 槽（`part-of` 优先于 `blocks`），再 `lineage` 槽
+  （槽内按 rank 降序：`supersedes` → `caused-by` → `relates-to`），同 rank 按时间；
+- **`part-of` 用缩进 + 折叠**：
+  - 焦点是母（`has-part`）→ 子行缩进在焦点下，可折叠；
+  - 焦点是子（`part-of`）→ 焦点行不能下移，行首用“↑ part-of: 母”面包屑表示，点击切成新焦点；
+  - 更深一层的 `has-part` 继续缩进，整支可折叠；
+- 关系行内容：issue ID、最近动作、时间距离、边名与方向（声明名 `→` / 入边反名 `←`）、子项计数；
+- **弱关联默认折叠**成一行“+N 弱关联”，点开展开为独立行；
+- 未知关系名或坏 trailer：原样降级显示，不猜；
+- **焦点切换临时、不落盘**（确认）：返回栈只在内存里，刷新即回默认焦点（最近提交的 issue）。
+
+### 验收补充
+
+- 词表从源码默认值构建时，排序与 `kiln path --json` 的边方向一致；
+- 焦点行固定第一行；`part-of` 缩进/折叠正确（母→子缩进、子→母面包屑）；
+- 在 `.kilnconfig.jsonc` 写入 `relations` 的仓库里，插件不崩溃：能读则用，读不了回退默认并标注。
+
+### 遗留
+
+- 等 kiln 落地 `relations` 配置段后，把“容错读取”升级为“显式 schema 校验 + 词表热更新”；
+- 跨槽排序（`ordering` vs `lineage`）在引擎层没有定义强弱，插件当前约定“ordering 先于 lineage”，
+  是否允许用户调这个槽序（不落盘）待定。
