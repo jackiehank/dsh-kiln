@@ -37,7 +37,11 @@ kiln 能否以 **CLI 之外**的形态接入 DSH？具体是哪些载体、各�
 
 ## 范围
 
-本 issue 只做**形态调研与对照**（collect），不做实现。实现另开 issue。
+形态调研 → 定稿（插件 + 只读 GUI）→ 初稿落地，全部在本 issue 内：先 `collect` 摸清 DSH 的接入载体，
+再用五轮 `hypothesize` 把形态收窄到“只读的 Flow 镜头”，最后以 `5f2310c` 落地 `plugin/` 骨架。
+
+初稿只到“能挂上标签、能出焦点子图”；焦点交互、另两种阅读模式、词表容错等细化内容
+移交 `kiln-flow-focus-ui`（`caused-by` 本 issue）。
 
 ## 验收标准
 
@@ -463,22 +467,49 @@ B 展开“线程之间如何互相牵动”。三种阅读模式 = 在这两个
 - 跨槽排序（`ordering` vs `lineage`）在引擎层没有定义强弱，插件当前约定“ordering 先于 lineage”，
   是否允许用户调这个槽序（不落盘）待定。
 
-## 实现草稿（in progress）
+## 落地（apply）
 
 形态：**profile bundle**（Host 半 + Client 半），代码在仓库内 `plugin/`，可直接装进 DSH desktop profile 做本地迭代。
 
-- **Host 半** `plugin/lib/index.js`：注册 `webServer` 精确路由 `GET /kiln/flow?cwd=<仓库根>`；
+- **Host 半** `plugin/lib/index.js:49`：注册 `webServer` 精确路由 `GET /kiln/flow?cwd=<仓库根>&focus=<issue>`；
   每次请求同步执行 `kiln graph --json` + 逐 issue `kiln path <id> --json`（宿主进程内 `spawn`），
-  把 graph 与各 issue 动作历史压成 Flow 视图数据（焦点、行、动作条、关系行、强弱、缩进层级）返回 JSON。
-  连接信任校验失败返回 401；`cwd` 缺 `.kilnconfig.jsonc` 时返回明确提示而非空图。
-- **Client 半** `plugin/lib/client.js`：`inject: ["slots","sessions"]`，在 `conversation.view` 插槽注册
+  但**只返回原始投影**：`issues`（各自的动作序列与最近一步）、折叠后的 `edges`、默认 `focus`、
+  `total` / `truncated`（`buildFlow`，`plugin/lib/flow.js:129`）。行、分组、缩进、强弱排序全部由浏览器半
+  从同一份快照派生——宿主不判断“什么算重要”。连接信任校验失败返回 401；`cwd` 缺
+  `.kilnconfig.jsonc` 时返回明确提示而非空图。
+- **Client 半** `plugin/lib/client.js:432`：`inject: ["slots","sessions"]`，在 `conversation.view` 插槽注册
   `{ id: "kiln", order: 30, label: () => "kiln", inject: (sessionId) => ({ cwd }) }`，与内建
   `chat`(order 0) / `trajectory`(order 10) 同排；组件从会话 cwd 拉 `/kiln/flow`，渲染焦点行（最近提交 issue）、
-  迷你动作条、关系行（ordering 槽先、再 lineage 槽按 rank 降序）、`part-of` 缩进/面包屑、弱关联折叠。
+  迷你动作条（最近 12 个动作）、关系行（`GROUPS`，`client.js:25`：ordering 槽先、再 lineage 槽按 rank 降序）、
+  `part-of` 缩进/面包屑、弱关联折叠。
 - **安装方式**（不通过 pnpm）：profile 的 `node_modules/@local/dsh-kiln` 是指向本仓库 `plugin/` 的
   junction，并在 profile `package.json` 的 `dsh.profile.bundles` 追加 `@local/dsh-kiln`；
   DSH 的 profile 监听与客户端模块扫描会按 bundle 加载两半。
-- **已验证**：刷新后标签出现在“对话 / 轨迹 / 上下文”末尾；非 kiln 工作区里显示
+- **当次实测（`5f2310c`）**：刷新后标签出现在“对话 / 轨迹 / 上下文”末尾；非 kiln 工作区里显示
   “Flow 暂不可用（缺 .kilnconfig.jsonc）”；`/kiln/flow` 未认证探测为 401（未知路径 404），宿主路由已注册。
-- **待验证**：在 dsh-kiln 工作区内的数据正确性（焦点选取、排序、缩进、折叠）、Triage/Genealogy 两种模式、
-  `worktree on` 下的聚合、i18n 与错误路径呈现。
+- **收尾复验（本次 apply）**：`node --check` 三个文件全过；`plugin/lib/flow.js` 可被 `import`，导出
+  `KilnError / buildFlow / forgetKiln / isKilnRepo / readFlow / resolveKiln`；用本仓真实
+  `kiln graph --json` 与 `kiln path --json` 喂 `buildFlow`，得到 `ok:true`、
+  `focus: kiln-dsh-integration`（本仓唯一 issue）、`total:1`、`truncated:false`、`edges:[]`——
+  焦点选取与动作序列符合预期。
+- **未交付（移交 `kiln-flow-focus-ui`）**：Triage / Genealogy 两种阅读模式；焦点搜索、返回栈、焦点可视标记；
+  `relations` 配置段容错读取（`GROUPS` 仍是硬编码词表）；`worktree on` 下的多 worktree 聚合。
+  另：i18n 与错误路径呈现尚未处理；`刷新` 按钮与 hypothesize 2 “不做刷新按钮、展开即实时读 Git”
+  的设想相反，取舍理由未留痕。
+
+## 结论
+
+- **形态定了**：DSH profile bundle（Host Cordis 插件 + 浏览器 client module），一个只读的
+  “Git 历史的镜头”——不写 trailer、不造提交、不装钩子、不落盘，拔掉插件仓库零残留。
+- **落位与设想不同**：实现选了 `conversation.view` 的 `kiln` 标签（`client.js:434`，order 30），
+  不是 collect 2 论证的整页面板（`sidebar.panellist` 入口 + `main` 页）。这是代码事实；
+  为什么不迁就面板，没有留痕，记为遗留待判。
+- **数据面**：宿主精确路由 `/kiln/flow`（`index.js:15`）+ 2 秒按仓库缓存（`index.js:16`），
+  spawn `kiln graph/path --json`；没走 typert remote methods，省掉“宿主与浏览器各维护一份方法清单”
+  这类同步错误。
+- **视图面**：焦点 issue 固定第一行 → `part-of` 子项缩进（>4 折叠）→ 阻塞 / 取代 / 因果分组 →
+  `relates-to` 折成一行；切换焦点只重跑 `relate()`（`client.js:129`），不重新取数
+  （`client.js:250` 的 effect 依赖只有 `cwd` 与 `nonce`）——hypothesize 4 的“子图重根不重取数”
+  在初稿里成立。
+- **边界守住了**：能显示“缺 `.kilnconfig.jsonc`”“找不到 kiln”“kiln 执行失败”四种降级，不猜、不修数据。
+- **下一步**：焦点“选谁、怎么换、怎么看见”单独成 issue——`kiln-flow-focus-ui`（`caused-by` 本 issue）。

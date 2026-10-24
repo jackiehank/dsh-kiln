@@ -11,12 +11,16 @@
 
 ## 1. 项目定位
 
-dsh-kiln 是 **DSH（DeepSeek Harness）× kiln** 的接入仓。仓库刚建立，**具体形态由第一个 issue
-决定**（可能是 DSH 插件 / skill / 命令，或其他）。因此：
+dsh-kiln 是 **DSH（DeepSeek Harness）× kiln** 的接入仓。**形态已定**：一个 DSH profile bundle
+（Host 半 + 浏览器半），只读地把 kiln 的 trailer 投影成会话内的 Flow 视图；代码在 `plugin/`，
+形态结论见 [`docs/issues/kiln-dsh-integration.md`](docs/issues/kiln-dsh-integration.md)。由此：
 
-- 不预置技术栈，不为填目录写空实现；
-- 第一个 issue 的 `ask` 先写清“DSH 侧缺什么、现状如何、验收标准”；
-- 目录、语言、构建方式在 `hypothesize` 里比较后再定，由 `apply` 落地。
+- **插件只读**：不写 trailer、不造提交、不装 git 钩子、不落盘（拔掉插件，仓库零残留）；
+- **数据只走** `kiln <cmd> --json` 子进程；不在插件里复刻 kiln 的状态解析，也不自建第二份状态；
+- 视图语义（强弱、层级、方向）从词表推导，不把关系名硬编码进业务判断。
+
+建仓时的规矩留作历史：不预置技术栈、不为填目录写空实现；第一个 issue 的 `ask` 先写清
+“DSH 侧缺什么、现状如何、验收标准”；目录与构建方式在 `hypothesize` 里比过再 `apply`。
 
 仓库的初始提交是普通 `chore:`（不带 trailer），因为它先于所有 issue——这是唯一的常规例外。
 

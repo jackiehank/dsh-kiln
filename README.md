@@ -2,8 +2,9 @@
 
 DSH（DeepSeek Harness）与 [kiln](https://github.com/jackiehank/kiln) 的接入仓。
 
-**状态：刚建立。** 具体形态（DSH 插件 / skill / 命令 / 其他）由第一个 issue 决定，见
-[`AGENTS.md`](AGENTS.md) §1。
+**形态：DSH profile bundle（插件）。** 一个只读的 kiln 镜头：把 Git 里 `issue:` / `action:` trailer
+投影成会话内的 Flow 视图——焦点 issue 的关系子图与动作条。不写 trailer、不造提交、不装 git 钩子。
+代码在 `plugin/`，形态结论见[第一份 issue 文档](docs/issues/kiln-dsh-integration.md)。
 
 ## 这个仓库怎么管 issue
 
@@ -30,4 +31,5 @@ kiln check           # 语义完整性
 AGENTS.md            agent 工作约定（先读这个）
 .kilnconfig.jsonc    kiln 配置：动作词表 / VCS / worktree 模式
 docs/issues/         一条 issue 一个 Markdown：问题、证据、结论、落地位置
+plugin/              DSH 插件本体：Host 半 lib/index.js + 浏览器半 lib/client.js
 ```
