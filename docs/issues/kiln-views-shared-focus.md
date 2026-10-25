@@ -228,6 +228,57 @@
 
 - 无（timeline 形态已定）。
 
+## 假设（hypothesize 2）：两级缓存——HEAD 做令牌，增量只重取受影响的 issue
+
+### 令牌（四元组）
+
+```text
+key = repo + HEAD + configToken(.kilnconfig.jsonc 的 mtime+size) + binToken(kiln 路径+mtime)
+```
+
+少一个都不行：
+
+- **HEAD**：提交历史是 kiln 状态的唯一来源，HEAD 不动则数据必然不动；
+- **config**：动作词表可改，而且**未提交**的改动不进 HEAD，却会改变解析结果；
+- **bin**：`go install` 升级会换语义，路径变化也说明环境变了；
+- **repo**：同一个宿主可能开着多个仓。
+
+### 命中与重建
+
+1. 读 HEAD：直读 `.git/HEAD` → `refs/heads/<branch>`（2 ms）；packed-refs 或 `.git` 是文件
+   （worktree）时回退 `git rev-parse`；都失败就退化成今天的 2 s TTL；
+2. key 相同 → 直接返回快照，**0 次子进程**；
+3. HEAD 变了但 `git merge-base --is-ancestor cached HEAD` 为假（rebase / 切分支 / force push）
+   → **全量重建**；
+4. 否则 `git log cached..HEAD --format='%H %(trailers:key=issue,valueonly)'` 得到受影响 issue 集，
+   重跑 `kiln graph --json`（节点与边可能变）+ **只对这些 issue（以及缓存里没有的新 issue）**
+   跑 `kiln path`，合并进快照；
+5. 增量结果可疑（range 非空却解析不出 issue、或 range 为空而 HEAD 确实变了）→ 保守全量。
+
+### 成本（按实测外推）
+
+| 场景 | 子进程 | 耗时 |
+| --- | --- | --- |
+| 命中 | 0 | ~2 ms（对比今天每 2 秒一次 405 ms） |
+| 一条新提交 | 1 次 git range + 1 次 graph + 1 次 path | ~270 ms |
+| 一批新提交（多 issue） | 同上但 path 多条 | 最坏退化到全量，不比今天差 |
+
+### 边界与风险
+
+- **git 的结果只用来决定“重取谁”，不进任何视图字段**：kiln 仍是状态的唯一权威，
+  我们没有复刻它的语义；
+- 缓存只在内存：进程重启后的首个请求走全量；不写任何磁盘文件（不落盘）；
+- `.git` 是文件（worktree / submodule）时要先解析 `gitdir:`；packed-refs 时不能直读 ref 文件；
+- 已知不完美：`kiln graph` 每次仍重跑（~102 ms），没有按边做增量——先不做，等真的慢了再说。
+
+### 验收
+
+- 无新提交时，连续多次 `/kiln/flow` 的 kiln 子进程数 = 0；
+- 单条新提交后，只重取该 issue 的 `path`（宿主计数或日志可验证）；
+- rebase / 切分支 / amend 之后不出现旧数据；
+- 未提交地修改 `.kilnconfig.jsonc` 会触发重建；
+- 缓存不可用时自动退回全量，功能不降级。
+
 ## 边界（不做）
 
 - **不做搜索框**（用户明确：先不做；焦点入口只有点行 / 点边 / 默认值）；
