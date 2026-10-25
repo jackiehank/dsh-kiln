@@ -73,10 +73,11 @@ window.__ModuleLoader__.load({
       { id: 'LR', label: '横向' },
       { id: 'TB', label: '纵向' },
     ]
-    /** 取景范围：结构 = 只画有向关系；全部 = 连 `relates-to` 一起画（默认结构）。 */
+    /** 取景范围：结构 = 只画有向关系；全部 = 连 `relates-to` 一起画；焦点 = 以焦点为中心重画（默认结构）。 */
     const GRAPH_SCOPES = [
       { id: 'structure', label: '结构' },
       { id: 'all', label: '全部' },
+      { id: 'focus', label: '焦点' },
     ]
 
     /**
@@ -423,21 +424,30 @@ window.__ModuleLoader__.load({
      * 换来三件事：对称边带关系名、强弱靠线型、节点 id 与 issue 一一对应（`byNode`）。
      *
      * **文本与焦点无关**：聚焦只改渲染出来的 class，不重排（见 GraphPanel）。
-     * 会让文本变的只有两件显式操作：方向（`LR`/`TB`）与范围（结构/全部）。
+     * 会让文本变的只有显式操作：方向（`LR`/`TB`）与范围（结构 / 全部 / 焦点）。
      *
      * `scope === 'structure'` 只画有向关系（`caused-by` / `blocks` / `part-of` / `supersedes`），
      * 把无向的 `relates-to` 连同“只挂在它上面”的节点一起收起来——实测 58 节点里 53 条边是
      * `relates-to`，去掉后交叉从 112 降到 0（见 docs/issues/kiln-graph-readability.md）。
+     *
+     * `scope === 'focus'` 换一种聚焦表现：不淡化，而是**以焦点为中心重画**，只留焦点与它的一跳
+     * 邻居（任意关系类型）。这样屏幕上没有“亮线连着暗节点”的错位，代价是整张图重排。
      */
-    function buildMermaid(issues, relations, direction = 'LR', scope = 'structure') {
-      const structureOnly = scope !== 'all'
-      const kept = structureOnly ? relations.filter((relation) => relation.directed !== false) : relations
+    function buildMermaid(issues, relations, direction = 'LR', scope = 'structure', focusId = null) {
+      const focusOnly = scope === 'focus' && focusId !== null
+      const structureOnly = scope === 'structure'
+      const kept = focusOnly
+        ? relations.filter((relation) => relation.a === focusId || relation.b === focusId)
+        : structureOnly
+          ? relations.filter((relation) => relation.directed !== false)
+          : relations
       const touched = new Set()
       for (const relation of kept) {
         touched.add(relation.a)
         touched.add(relation.b)
       }
-      const visible = structureOnly ? issues.filter((issue) => touched.has(issue.id)) : issues
+      if (focusOnly) touched.add(focusId)
+      const visible = structureOnly || focusOnly ? issues.filter((issue) => touched.has(issue.id)) : issues
 
       const nodeOf = new Map()
       const byNode = new Map()
@@ -830,18 +840,22 @@ window.__ModuleLoader__.load({
      */
     function GraphPanel(props) {
       const direction = props.direction === 'TB' ? 'TB' : 'LR'
-      const scope = props.scope === 'all' ? 'all' : 'structure'
+      const scope = props.scope === 'all' || props.scope === 'focus' ? props.scope : 'structure'
+      const focusMode = scope === 'focus' && props.focusId !== null
       // 焦点优先：结构取景里被筛掉的节点可能是焦点自己（`~/kiln` 有 32 个只挂弱关联的），
       // 那种情况下临时按“全部”画，否则会出现“点了 c、图上找不到 c”。
       // 注意这**不是**让文本普遍依赖焦点：只有焦点落在结构之外时才会变，切焦点仍然不重排。
-      const widened = scope === 'structure' && props.focusId !== null && !touchesDirected(props.focusId, props.relations)
+      const widened =
+        scope === 'structure' && props.focusId !== null && !touchesDirected(props.focusId, props.relations)
+      // 选了「焦点」但还没聚焦：退回结构取景，别用“全部”糊人
+      const effective = scope === 'focus' && props.focusId === null ? 'structure' : widened ? 'all' : scope
       const built = React.useMemo(
-        () => buildMermaid(props.issues, props.relations, direction, widened ? 'all' : scope),
-        [props.issues, props.relations, direction, scope, widened],
+        () => buildMermaid(props.issues, props.relations, direction, effective, props.focusId),
+        [props.issues, props.relations, direction, effective, props.focusId],
       )
       const tiers = React.useMemo(
-        () => (props.focusId === null ? null : graphTiers(props.focusId, props.relations)),
-        [props.focusId, props.relations],
+        () => (props.focusId === null || focusMode ? null : graphTiers(props.focusId, props.relations)),
+        [props.focusId, props.relations, focusMode],
       )
       const hostRef = React.useRef(null)
       const [phase, setPhase] = React.useState('idle')
@@ -915,6 +929,16 @@ window.__ModuleLoader__.load({
           onClick,
         }),
         phase === 'ready' ? null : h('pre', { className: 'dkf-mermaid' }, built.source),
+        scope === 'focus' && props.focusId === null
+          ? h('p', { className: 'dkf-note' }, '「焦点」取景要先选一个 issue：点节点、或到列表里点一行。')
+          : null,
+        focusMode
+          ? h(
+              'p',
+              { className: 'dkf-note' },
+              `焦点取景：只画 ${props.focusId} 与它的 ${Math.max(0, built.byNode.size - 1)} 个邻居。`,
+            )
+          : null,
         widened
           ? h(
               'p',
@@ -922,7 +946,7 @@ window.__ModuleLoader__.load({
               `焦点 ${props.focusId} 只挂在弱关联上，已临时按「全部」画——结构里没有它。`,
             )
           : null,
-        built.hidden.edges > 0
+        effective === 'structure' && built.hidden.edges > 0
           ? h(
               'p',
               { className: 'dkf-note' },
@@ -991,7 +1015,7 @@ window.__ModuleLoader__.load({
             h(Segmented, {
               label: '图的取景范围',
               options: GRAPH_SCOPES,
-              active: props.scope === 'all' ? 'all' : 'structure',
+              active: props.scope === 'all' || props.scope === 'focus' ? props.scope : 'structure',
               onSelect: props.onScope,
             }),
           ),
@@ -1157,7 +1181,9 @@ window.__ModuleLoader__.load({
       const [expandedChildren, setExpandedChildren] = React.useState(false)
       const [relationMode, setRelationMode] = React.useState(memory.relationMode ?? 'graph')
       const [graphDirection, setGraphDirection] = React.useState(memory.graphDirection === 'TB' ? 'TB' : 'LR')
-      const [graphScope, setGraphScope] = React.useState(memory.graphScope === 'all' ? 'all' : 'structure')
+      const [graphScope, setGraphScope] = React.useState(
+        memory.graphScope === 'all' || memory.graphScope === 'focus' ? memory.graphScope : 'structure',
+      )
 
       const selectTab = (id) => {
         setTabId(id)
@@ -1181,9 +1207,9 @@ window.__ModuleLoader__.load({
         setGraphDirection(value)
         writeViewState(cwd, { graphDirection: value })
       }
-      /** 取景范围同理：结构 / 全部，也是一次显式的重排。 */
+      /** 取景范围同理：结构 / 全部 / 焦点，也是一次显式的重排。 */
       const selectScope = (id) => {
-        const value = id === 'all' ? 'all' : 'structure'
+        const value = id === 'all' || id === 'focus' ? id : 'structure'
         setGraphScope(value)
         writeViewState(cwd, { graphScope: value })
       }

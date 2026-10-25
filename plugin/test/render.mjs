@@ -321,11 +321,39 @@ check('图与焦点：聚焦只落在容器的 data-focus 上（文本不变）'
 
 check('关系取景可切换：列表不画图，图有三组控件', () => {
   const graph = render({ tabId: 'relation' })
-  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), ['图', '列表', '横向', '纵向', '结构', '全部'])
+  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), ['图', '列表', '横向', '纵向', '结构', '全部', '焦点'])
   assert.equal(byClass(graph, 'dkf-modebtn-active').length, 3, '取景 / 方向 / 范围各选中一个')
   const list = render({ tabId: 'relation', mode: 'list' })
   assert.equal(byClass(list, 'dkf-graph').length, 0)
   assert.deepEqual(byClass(list, 'dkf-modebtn').map(textOf), ['图', '列表'], '列表取景没有方向与范围')
+})
+
+check('焦点取景：以焦点为中心重画，只留它的一跳', () => {
+  const tree = render({ tabId: 'relation', focusId: 'b', scope: 'focus' })
+  const source = mermaidOf(tree)
+  const nodes = source.split('\n').filter((line) => /^ {2}n_\w+\["/.test(line))
+  assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b'], 'c 与 b 不相邻，不进来')
+  assert.ok(source.includes('n_b -.->|caused-by| n_a'), source)
+  const notes = byClass(tree, 'dkf-note').map(textOf).join('\n')
+  assert.match(notes, /焦点取景：只画 b 与它的 1 个邻居/)
+  // 重画之后不需要淡化：整张图都是焦点的一圈
+  assert.equal(byClass(tree, 'dkf-modebtn-active').map(textOf).includes('焦点'), true)
+})
+
+check('焦点取景但还没聚焦：退回结构取景并提示', () => {
+  const tree = render({ tabId: 'relation', scope: 'focus' })
+  const source = mermaidOf(tree)
+  assert.equal(source, mermaidOf(render({ tabId: 'relation' })), '无焦点时与结构取景一致')
+  assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /选定.*issue|先选一个 issue/)
+})
+
+check('切焦点：结构取景不变文本，焦点取景重画', () => {
+  const structural = render({ tabId: 'relation', focusId: 'a' })
+  const structuralOther = render({ tabId: 'relation', focusId: 'b' })
+  assert.equal(mermaidOf(structural), mermaidOf(structuralOther), '结构取景下切焦点不重排')
+  const focusA = render({ tabId: 'relation', focusId: 'a', scope: 'focus' })
+  const focusC = render({ tabId: 'relation', focusId: 'c', scope: 'focus' })
+  assert.notEqual(mermaidOf(focusA), mermaidOf(focusC), '焦点取景下换焦点就是要重画')
 })
 
 check('图方向：默认横向，切纵向只换 flowchart 的方向词', () => {
