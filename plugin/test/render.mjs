@@ -115,7 +115,7 @@ await import('../lib/client.js?render=1')
 assert.equal(loaded?.id, '@local/dsh-kiln')
 
 /** 渲染一次：presets 依次喂给 KilnView 的 useState。 */
-function render({ focusId = null, tabId = 'timeline', expanded = null, mode = 'graph' }) {
+function render({ focusId = null, tabId = 'timeline', expanded = null, mode = 'graph', direction = 'LR' }) {
   const React = makeReact([
     { phase: 'ready', payload, error: null }, // state：直接给成 ready
     0, //                        nonce
@@ -125,6 +125,7 @@ function render({ focusId = null, tabId = 'timeline', expanded = null, mode = 'g
     false, //                    expandedWeak
     false, //                    expandedChildren
     mode, //                     relationMode（关系页取景）
+    direction, //                graphDirection（图方向）
   ])
   const requireOf = (name) => {
     if (name === 'react') return React
@@ -293,11 +294,22 @@ check('图与焦点：聚焦只落在容器的 data-focus 上（文本不变）'
 
 check('关系取景可切换：两个按钮，列表取景不再画图', () => {
   const graph = render({ tabId: 'relation' })
-  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), ['图', '列表'])
-  assert.equal(byClass(graph, 'dkf-modebtn-active').length, 1)
+  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), ['图', '列表', '横向', '纵向'])
+  assert.equal(byClass(graph, 'dkf-modebtn-active').length, 2, '取景与方向各选中一个')
   const list = render({ tabId: 'relation', mode: 'list' })
   assert.equal(byClass(list, 'dkf-graph').length, 0)
-  assert.equal(byClass(list, 'dkf-modebtn').length, 2)
+  assert.deepEqual(byClass(list, 'dkf-modebtn').map(textOf), ['图', '列表'], '列表取景没有方向控制')
+})
+
+check('图方向：默认横向，切纵向只换 flowchart 的方向词', () => {
+  const lr = render({ tabId: 'relation' })
+  const tb = render({ tabId: 'relation', direction: 'TB' })
+  assert.match(mermaidOf(lr), /^flowchart LR/)
+  assert.match(mermaidOf(tb), /^flowchart TB/)
+  // 除了方向词，节点与边必须逐字相同——否则“换方向”会连带改掉别的东西
+  assert.equal(mermaidOf(lr).replace(/^flowchart LR/, ''), mermaidOf(tb).replace(/^flowchart TB/, ''))
+  const active = byClass(tb, 'dkf-modebtn-active').map(textOf)
+  assert.ok(active.includes('纵向'), active.join(','))
 })
 
 // ---------------------------------------------------------------- 展开与聚焦控件

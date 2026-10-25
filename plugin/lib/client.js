@@ -68,6 +68,11 @@ window.__ModuleLoader__.load({
       'caused-by': 'dashed',
       'relates-to': 'plain',
     }
+    /** 布局方向：侧栏是竖的，`TB` 常常比 `LR` 更省横向空间。 */
+    const GRAPH_DIRECTIONS = [
+      { id: 'LR', label: '横向' },
+      { id: 'TB', label: '纵向' },
+    ]
 
     /**
      * 每个仓库的视图内存：当前页、焦点、展开项。
@@ -75,7 +80,13 @@ window.__ModuleLoader__.load({
      */
     const VIEW_STATE_LIMIT = 4
     const viewStates = new Map()
-    const EMPTY_VIEW_STATE = { tabId: 'timeline', focusId: null, expanded: null, relationMode: 'graph' }
+    const EMPTY_VIEW_STATE = {
+      tabId: 'timeline',
+      focusId: null,
+      expanded: null,
+      relationMode: 'graph',
+      graphDirection: 'LR',
+    }
 
     function readViewState(cwd) {
       return viewStates.get(cwd) ?? EMPTY_VIEW_STATE
@@ -220,6 +231,8 @@ window.__ModuleLoader__.load({
 .dkf-detail code{font:12px/18px var(--dsw-font-family-code,monospace);word-break:break-all;color:var(--dsw-alias-label-primary,#111)}
 .dkf-panel{display:flex;flex-direction:column;min-height:0}
 .dkf-mode{display:inline-flex;gap:2px;align-self:flex-start;margin:0 0 8px;padding:2px;border:.5px solid var(--dsw-alias-border-l2,#e3e3e3);border-radius:6px}
+.dkf-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dkf-toolbar .dkf-mode{margin:0 0 8px}
 .dkf-modebtn{all:unset;cursor:pointer;padding:2px 10px;border-radius:4px;color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family,inherit)}
 .dkf-modebtn:hover{color:var(--dsw-alias-label-primary,#111)}
 .dkf-modebtn-active{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.06));color:var(--dsw-alias-label-primary,#111)}
@@ -395,13 +408,14 @@ window.__ModuleLoader__.load({
      * 换来三件事：对称边带关系名、强弱靠线型、节点 id 与 issue 一一对应（`byNode`）。
      *
      * **文本与焦点无关**：聚焦只改渲染出来的 class，不重排（见 GraphPanel）。
+     * 方向是唯一会让文本变的东西（`LR` / `TB`），那是显式的用户操作，允许重排。
      */
-    function buildMermaid(issues, relations) {
+    function buildMermaid(issues, relations, direction = 'LR') {
       const nodeOf = new Map()
       const byNode = new Map()
       const used = new Set()
       const sorted = issues.slice().sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
-      const lines = ['flowchart LR']
+      const lines = [`flowchart ${direction === 'TB' ? 'TB' : 'LR'}`]
       const byAction = new Map()
 
       for (const issue of sorted) {
@@ -781,7 +795,11 @@ window.__ModuleLoader__.load({
      * 图不重排、不重解析——这是“全局关系与聚焦状态同框”的前提。
      */
     function GraphPanel(props) {
-      const built = React.useMemo(() => buildMermaid(props.issues, props.relations), [props.issues, props.relations])
+      const direction = props.direction === 'TB' ? 'TB' : 'LR'
+      const built = React.useMemo(
+        () => buildMermaid(props.issues, props.relations, direction),
+        [props.issues, props.relations, direction],
+      )
       const tiers = React.useMemo(
         () => (props.focusId === null ? null : graphTiers(props.focusId, props.relations)),
         [props.focusId, props.relations],
@@ -869,34 +887,55 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** 关系页：图上/列表两种取景，共用同一个焦点。 */
-    function RelationPanel(props) {
-      const modes = h(
+    /** 一排互斥按钮（取景 / 方向共用），roving 交给浏览器，够用。 */
+    function Segmented(props) {
+      return h(
         'div',
-        { className: 'dkf-mode', role: 'group', 'aria-label': '关系取景' },
-        RELATION_MODES.map((mode) =>
+        { className: 'dkf-mode', role: 'group', 'aria-label': props.label },
+        props.options.map((option) =>
           h(
             'button',
             {
-              key: mode.id,
+              key: option.id,
               type: 'button',
-              className: `dkf-modebtn${props.mode === mode.id ? ' dkf-modebtn-active' : ''}`,
-              'aria-pressed': props.mode === mode.id,
-              onClick: () => props.onMode(mode.id),
+              className: `dkf-modebtn${props.active === option.id ? ' dkf-modebtn-active' : ''}`,
+              'aria-pressed': props.active === option.id,
+              onClick: () => props.onSelect(option.id),
             },
-            mode.label,
+            option.label,
           ),
         ),
       )
+    }
+
+    /** 关系页：图上/列表两种取景，共用同一个焦点。 */
+    function RelationPanel(props) {
+      const modes = h(Segmented, {
+        label: '关系取景',
+        options: RELATION_MODES,
+        active: props.mode,
+        onSelect: props.onMode,
+      })
       if (props.mode === 'graph') {
         return h(
           'div',
           { className: 'dkf-panel' },
-          modes,
+          h(
+            'div',
+            { className: 'dkf-toolbar' },
+            modes,
+            h(Segmented, {
+              label: '图的布局方向',
+              options: GRAPH_DIRECTIONS,
+              active: props.direction === 'TB' ? 'TB' : 'LR',
+              onSelect: props.onDirection,
+            }),
+          ),
           h(GraphPanel, {
             issues: props.issues,
             relations: props.relations,
             focusId: props.focusId,
+            direction: props.direction,
             onFocus: props.onFocus,
           }),
         )
@@ -1051,6 +1090,7 @@ window.__ModuleLoader__.load({
       const [expandedWeak, setExpandedWeak] = React.useState(false)
       const [expandedChildren, setExpandedChildren] = React.useState(false)
       const [relationMode, setRelationMode] = React.useState(memory.relationMode ?? 'graph')
+      const [graphDirection, setGraphDirection] = React.useState(memory.graphDirection === 'TB' ? 'TB' : 'LR')
 
       const selectTab = (id) => {
         setTabId(id)
@@ -1067,6 +1107,12 @@ window.__ModuleLoader__.load({
       const selectMode = (id) => {
         setRelationMode(id)
         writeViewState(cwd, { relationMode: id })
+      }
+      /** 方向会换掉 mermaid 文本，是唯一允许重排的显式操作。 */
+      const selectDirection = (id) => {
+        const value = id === 'TB' ? 'TB' : 'LR'
+        setGraphDirection(value)
+        writeViewState(cwd, { graphDirection: value })
       }
       /** 点同一行再点一次收起；同时只保留一个展开项。 */
       const toggleExpand = (next) => {
@@ -1232,6 +1278,7 @@ window.__ModuleLoader__.load({
             byId,
             groups: globalGroups,
             mode: relationMode,
+            direction: graphDirection,
             issues,
             relations,
             focusId: focus === null ? null : focus.id,
@@ -1241,6 +1288,7 @@ window.__ModuleLoader__.load({
             onToggle: toggleExpand,
             onFocus: focusIssue,
             onMode: selectMode,
+            onDirection: selectDirection,
             onToggleWeak: () => setExpandedWeak((value) => !value),
             onToggleChildren: () => setExpandedChildren((value) => !value),
           })
