@@ -266,3 +266,61 @@ kiln graph --json   # nodes 58 / edges 73；逐边累计度数
 
 
 
+
+## collect：别的工具怎么做“聚焦一个节点”
+
+用户提的线索：「有向」其实只是**把无向关系藏起来**，所以名字是假名；另外「全部 + 重画」这一格不兼容。
+先看别人怎么解决同一类问题（多节点关系图里聚焦某点）。
+
+### 四种做法（不是一个旋钮，而是四种不同的机制）
+
+| 家族 | 代表 | 机制 |
+| --- | --- | --- |
+| **换视图** | Obsidian 的 **Local graph**（独立命令 + depth 滑块）、[Graph+ 的 local pane](https://github.com/woodamsclark/graph-plus) | 不是在同一张图上淡化，而是**另开一个只画邻域的视图**；焦点自动跟随活动笔记，相机/过滤器/选择各自独立 |
+| **过滤成 ego network** | Gephi 的 **Ego Network** 过滤器（depth k + include self） | 按“从焦点出发 k 跳”裁剪图，其余**根本不画** |
+| **高亮 + 淡化** | XState 可视化器（只亮当前 state 与被触发的迁移）、[VHDL FSM 图](https://marketplace.visualstudio.com/items?itemName=Bastocus.vhdl-fsm-diagram)（点 state 亮它所有进出边、其余变暗）、Obsidian 的 hover 高亮 | 图不重构，只改不透明度/颜色 |
+| **focus+context 变形** | Furnas 的 fisheye、Sarkar & Brown 的双曲视图 | 不删不改，靠几何变形把焦点放大、远处压缩；工程上少见 |
+
+对照我们的两档：**重画 = 换视图 + ego network（depth 1）**，**淡化 = 高亮+淡化**。两者都是成熟做法，
+坏的不是机制，是**把两套机制的自由组合当成了两个正交旋钮**。
+
+### 值得直接借鉴的四点
+
+1. **depth 滑块**：Obsidian 的 local graph 有 depth（每加一层显示上一层节点的邻居），
+   而[实践建议是“打开 local graph、depth 设 2”](https://github.com/undefined-ui/second-brain-os/blob/main/docs/05-graphs/obsidian-graph-view.md)。
+   我们的「一圈」现在固定 1 跳，`~/kiln` 上有向邻居中位是 0——1 跳看不到“来龙去脉”，2 跳才有链。
+2. **语义缩放 / 标签门槛**：Obsidian 的 “Text fade threshold”、某规范的
+   [zoom-responsive labels](https://github.com/chipi/podcast_scraper/blob/main/docs/architecture/VIEWER_GRAPH_SPEC.md)
+   （缩放 < 0.5 不显示标签、0.5–1.0 短标签、> 1.0 全标签），以及某个真实 PR 里的策略：
+   “除 hover / 焦点 / 焦点邻域 / 高度数节点外不显示标签”。
+   我们的标签是**永远全显示**，这在小比例下就是满屏噪点。
+3. **hover 预览**：Obsidian 悬停即高亮该节点的连接，不用点。我们现在点才聚焦，悬停无反馈——
+   而 `data-id` 已经在 DOM 上，成本很低。
+4. **方向是显示开关，不是筛选**：Obsidian 面板里 “Arrows” 是 Display 里的开关，Tags/Orphans 在 Filters 里。
+   这印证了用户的判断：我们那个「有向」开关本质是**隐藏无向边**，属于“显示”，不该叫“筛边”。
+
+### 命名：说清楚“藏的是什么”
+
+既然藏的就是无向的 `relates-to`，名字应该点它：
+
+| 候选 | 说明 |
+| --- | --- |
+| `无向关联：隐藏 / 显示` | 最准；与 kiln 词表 `relates-to` 对得上 |
+| `只画有向 / 含无向` | 也准，但仍是“维度的名字”而不是“藏了什么” |
+| `箭头`（Obsidian 用词） | 简短，但那是“是否显示箭头”，与“是否隐藏无向边”不完全等价 |
+
+### 一个更省事的收敛：把旋钮换成视图
+
+上面四种工具**没有一个是让用户自由组合两个维度的**：Obsidian 是“全局 / 局部”两个视图 + 一个过滤器面板；
+Gephi 是“视图 + 过滤链”。据此可以把我们的两排按钮收敛成：
+
+| 视图（三选一） | 内容 |
+| --- | --- |
+| **全局** | 整张图，不淡化（对应现在的“有向 + 无焦点”） |
+| **全局 + 焦点** | 整张图 + 淡化圈外（用户觉得最好用的那格） |
+| **焦点一圈** | 只画焦点邻域（depth 可选 1/2） |
+
+外加一个独立的**显示开关**：`无向关联 开/关`（任何视图下都可用），
+它不再是“取景”的一部分，而是“图里要不要出现无向边”。
+
+这样「全部 + 重画」这样的格子**根本不出现**——不是禁用，而是没有这个组合。
