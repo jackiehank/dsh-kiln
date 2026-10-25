@@ -50,8 +50,7 @@
 ## 数据面：不新增通路
 
 - `kiln path <issue> --json` 每条 action 带完整 sha（`id`）、`date`、`title`、`refs`、`ordinal`、`action`；
-- 宿主现在把它们折进 `issues[].actions`，但 `actionList` 丢掉了 `id`（`plugin/lib/flow.js:111-119`）——
-  **要补回来**，timeline 需要 commit 短哈希；
+- 宿主已把完整 sha 与 7 位短哈希一起保留（`mapActions`，`plugin/lib/flow.js:112`），timeline 直接用；
 - 于是三页全是同一份快照的投影：`timeline` = `issues[].actions` 拍平按 `date` 倒序；
   `issue` = `issues` 行；`relation` = `edges` 的全局/焦点布局。**零新增子进程**；
 - 已知缺口：`kiln path --json` **没有 author 字段**。要显示“执行者”就得回 `git log`，本条暂不展示作者。
@@ -278,6 +277,28 @@ key = repo + HEAD + configToken(.kilnconfig.jsonc 的 mtime+size) + binToken(kil
 - rebase / 切分支 / amend 之后不出现旧数据；
 - 未提交地修改 `.kilnconfig.jsonc` 会触发重建；
 - 缓存不可用时自动退回全量，功能不降级。
+
+## 落地（第 1 步）：宿主缓存与 action sha
+
+已交付：
+
+- `plugin/lib/git.js`：HEAD 直读（`.git` 是文件 / packed-refs 时回退 `git rev-parse`）、
+  `configToken`、`binaryToken`、`isAncestor`、`newIssueIds`——后者用 **git 原生 trailer 解析**，
+  纯函数 `parseTrailerRange` 可单测；
+- `plugin/lib/snapshot.js`：`evaluateCache`（纯决策）+ `createSnapshotCache`（HEAD 四元组、增量合并、
+  失败不写缓存、返回值带 `cache.action` 供观测）；
+- `plugin/lib/flow.js`：`mapActions` 保留完整 sha 与短哈希；`readFlow` 拆出 `readGraph` / `readHistories`；
+- `plugin/lib/index.js`：删掉 2 秒 TTL，改走快照缓存；响应头 `x-kiln-cache: hit|incremental|build`；
+- `plugin/test/run.mjs`：23 个用例（纯逻辑 + 注入式编排），`node plugin/test/run.mjs` 全绿。
+
+验证边界（诚实记账）：
+
+- 本机沙箱**禁止 node 抓子进程管道**，`kiln` / `git` 的真实 fork 路径在这里跑不了；测试用注入的
+  fake git / flow 覆盖决策与合并逻辑，真实 HEAD 直读已与 `git rev-parse` 对照一致；
+- 仍未验证：真实仓库上“新增一条提交只重取该 issue 的 path”的端到端行为——需要桌面端实机跑一次，
+  看响应头从 `build` 变成 `incremental`。
+
+未完成：三页 UI 与共享焦点（第 2 步）。
 
 ## 边界（不做）
 

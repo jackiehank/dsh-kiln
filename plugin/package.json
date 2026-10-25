@@ -13,6 +13,9 @@
     "lib",
     "cordis.patch.yml"
   ],
+  "scripts": {
+    "test": "node test/run.mjs"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

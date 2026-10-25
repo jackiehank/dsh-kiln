@@ -108,14 +108,22 @@ async function mapLimit(tasks, limit) {
   return out
 }
 
-function actionList(document) {
+/** `kiln path --json` 的 actions → 视图需要的字段（保留完整 sha 与短哈希）。 */
+export function mapActions(document) {
   const actions = Array.isArray(document?.actions) ? document.actions : []
-  return actions.map((action) => ({
-    ordinal: action.ordinal,
-    action: action.action,
-    date: action.date,
-    title: truncate(action.title),
-  }))
+  return actions.map((action) => {
+    const sha = typeof action.id === 'string' ? action.id : ''
+    return {
+      ordinal: action.ordinal,
+      action: action.action,
+      /** 完整提交 sha：缓存增量失效与 timeline 的“跳回提交”都要它。 */
+      id: sha,
+      /** 展示用的短哈希（7 位）；空提交没有 id，保持空串而不是猜。 */
+      short: sha.slice(0, 7),
+      date: action.date,
+      title: truncate(action.title),
+    }
+  })
 }
 
 /**
@@ -180,8 +188,62 @@ export function buildFlow(input) {
   }
 }
 
+/** 找个可用的 kiln：解析不到时清缓存重试一次（用户刚装好 kiln，不必重启宿主）。 */
+function ensureKiln() {
+  const first = resolveKiln()
+  if (first !== null) return first
+  forgetKiln()
+  return resolveKiln()
+}
+
+/** 仓库形状校验：返回原因字符串，合格返回 null。 */
+function validateRepo(dir) {
+  if (dir === '' || !isAbsolute(dir) || !existsSync(dir) || !statSync(dir).isDirectory()) return 'invalid-dir'
+  if (!existsSync(join(dir, '.kilnconfig.jsonc'))) return 'not-kiln-repo'
+  return null
+}
+
 /**
- * 读取一个仓库的 Flow 快照。
+ * 取关系图（节点 + 折叠边）。
+ * 与 `readHistories` 拆开，是为了让快照缓存能“只重取受影响的 issue”而不重跑 graph 之外的东西。
+ */
+export async function readGraph(repo) {
+  const dir = typeof repo === 'string' ? repo : ''
+  const invalid = validateRepo(dir)
+  if (invalid !== null) return { ok: false, reason: invalid }
+  const bin = ensureKiln()
+  if (bin === null) return { ok: false, reason: 'kiln-missing' }
+  try {
+    const graph = JSON.parse(await runKiln(bin, ['graph', '--json'], dir))
+    return { ok: true, graph }
+  } catch (error) {
+    return { ok: false, reason: 'kiln-error', message: String(error?.message ?? error) }
+  }
+}
+
+/** 取若干 issue 的动作序列；单条失败当空序列处理，不拖垮整份快照。 */
+export async function readHistories(repo, ids) {
+  const dir = typeof repo === 'string' ? repo : ''
+  const histories = new Map()
+  if (!Array.isArray(ids) || ids.length === 0) return histories
+  const bin = ensureKiln()
+  if (bin === null) return histories
+  await mapLimit(
+    ids.map((id) => async () => {
+      try {
+        const document = JSON.parse(await runKiln(bin, ['path', id, '--json'], dir))
+        histories.set(id, mapActions(document))
+      } catch {
+        histories.set(id, [])
+      }
+    }),
+    PATH_CONCURRENCY,
+  )
+  return histories
+}
+
+/**
+ * 读取一个仓库的 Flow 快照（**不带缓存**；缓存与失效在 snapshot.js）。
  *
  * @param repo - 绝对路径，必须是 kiln 仓库根。
  * @param options - focus（可选 issue id）与 maxIssues（默认 80）。
@@ -190,44 +252,22 @@ export function buildFlow(input) {
 export async function readFlow(repo, options = {}) {
   const dir = typeof repo === 'string' ? repo : ''
   const base = { repo: dir, generatedAt: new Date().toISOString() }
-
-  if (dir === '' || !isAbsolute(dir) || !existsSync(dir) || !statSync(dir).isDirectory()) {
-    return { ...base, ok: false, reason: 'invalid-dir' }
+  const graphResult = await readGraph(dir)
+  if (graphResult.ok !== true) {
+    return {
+      ...base,
+      ok: false,
+      reason: graphResult.reason,
+      ...(graphResult.message === undefined ? {} : { message: graphResult.message }),
+    }
   }
-  if (!existsSync(join(dir, '.kilnconfig.jsonc'))) {
-    return { ...base, ok: false, reason: 'not-kiln-repo' }
-  }
-
-  let bin = resolveKiln()
-  if (bin === null) {
-    forgetKiln()
-    bin = resolveKiln()
-    if (bin === null) return { ...base, ok: false, reason: 'kiln-missing' }
-  }
-
-  let graph
-  try {
-    graph = JSON.parse(await runKiln(bin, ['graph', '--json'], dir))
-  } catch (error) {
-    return { ...base, ok: false, reason: 'kiln-error', message: String(error?.message ?? error) }
-  }
-
-  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : []
-  const maxIssues = Number.isInteger(options.maxIssues) && options.maxIssues > 0 ? options.maxIssues : DEFAULT_MAX_ISSUES
+  const nodes = Array.isArray(graphResult.graph?.nodes) ? graphResult.graph.nodes : []
+  const maxIssues =
+    Number.isInteger(options.maxIssues) && options.maxIssues > 0 ? options.maxIssues : DEFAULT_MAX_ISSUES
   const kept = nodes.slice(0, maxIssues)
-
-  const histories = new Map()
-  await mapLimit(
-    kept.map((node) => async () => {
-      try {
-        const document = JSON.parse(await runKiln(bin, ['path', node.id, '--json'], dir))
-        histories.set(node.id, actionList(document))
-      } catch {
-        histories.set(node.id, [])
-      }
-    }),
-    PATH_CONCURRENCY,
+  const histories = await readHistories(
+    dir,
+    kept.map((node) => node.id),
   )
-
-  return buildFlow({ repo: dir, graph, histories, focus: options.focus, maxIssues })
+  return buildFlow({ repo: dir, graph: graphResult.graph, histories, focus: options.focus, maxIssues })
 }

@@ -2,9 +2,11 @@
  * Host half：给浏览器半提供一条只读路由，`GET /kiln/flow?cwd=<绝对路径>&focus=<issue>`。
  *
  * 浏览器里没有 kiln，但宿主进程有；插件只在宿主侧调 CLI，把结果当成一次快照返回。
+ * 快照按 HEAD 失效（见 snapshot.js）：HEAD 没动就完全不碰子进程，动了只重取受影响的 issue。
  * 路由走与 open-in-app 相同的信任栅栏（connection.requestRejection），不额外做鉴权。
  */
-import { readFlow, resolveKiln } from './flow.js'
+import { resolveKiln } from './flow.js'
+import { createSnapshotCache } from './snapshot.js'
 
 /** Cordis function-plugin name；与包名一致，便于排查。 */
 export const name = 'kiln'
@@ -13,10 +15,9 @@ export const name = 'kiln'
 export const inject = ['webServer', 'connection']
 
 const FLOW_PATH = '/kiln/flow'
-const CACHE_TTL_MS = 2000
 
-/** 按仓库路径做短期缓存：同一个视图的重复挂载（StrictMode、切标签）不重复起进程。 */
-const cache = new Map()
+/** 进程内缓存：不落盘，重启即失效。 */
+const cache = createSnapshotCache()
 
 function sendJson(res, status, payload) {
   res.statusCode = status
@@ -27,22 +28,6 @@ function sendJson(res, status, payload) {
 
 function connectionOf(ctx) {
   return Reflect.get(ctx, 'connection')
-}
-
-async function readFlowCached(repo, focus) {
-  const key = repo.toLowerCase()
-  const hit = cache.get(key)
-  const now = Date.now()
-  const payload =
-    hit !== undefined && now - hit.at < CACHE_TTL_MS
-      ? hit.payload
-      : await readFlow(repo, { focus })
-  cache.set(key, { at: now, payload })
-  if (focus !== undefined && payload.ok === true) {
-    const known = payload.issues.some((issue) => issue.id === focus)
-    return { ...payload, focus: known ? focus : payload.focus }
-  }
-  return payload
 }
 
 /** 注册只读 Flow 路由；disposer 由 ctx.effect 持有，插件卸载即摘除。 */
@@ -72,14 +57,18 @@ export function apply(ctx) {
             sendJson(res, 400, { ok: false, reason: 'missing-cwd' })
             return
           }
-          if (resolveKiln() === null) {
+          const bin = resolveKiln()
+          if (bin === null) {
             sendJson(res, 200, { ok: false, repo: cwd, reason: 'kiln-missing', generatedAt: new Date().toISOString() })
             return
           }
 
           const focus = url.searchParams.get('focus') ?? undefined
           try {
-            const payload = await readFlowCached(cwd, focus)
+            const payload = await cache.get(cwd, { focus, bin })
+            // 便于在浏览器 / 日志里确认缓存行为：hit · incremental · build
+            const mode = typeof payload?.cache?.action === 'string' ? payload.cache.action : 'build'
+            res.setHeader('x-kiln-cache', mode)
             sendJson(res, 200, payload)
           } catch (error) {
             sendJson(res, 500, {
