@@ -4,12 +4,14 @@
  * 标签内是三个平级页面，共用同一个焦点 issue：
  *   timeline —— 一行一个 action，按时间倒序（只算带 issue: + action: 的提交）
  *   issue    —— 一行一个 issue，按最近动作排序
- *   relation —— 关系边；无焦点看全局，有焦点看以焦点为中心的一跳子图
+ *   relation —— 关系；两种取景共用同一个焦点：
+ *               图（默认，mermaid + Pele）与列表（分组边表），页内分段切换
  *
  * 交互约定（三页一致）：
  *   · 点行 = 展开（issue 展开它的 action 列表；timeline 展开这条提交的详情）
  *   · 行尾 `⌖ 聚焦` = 切焦点；头部 `焦点：x ×` / Esc = 退出
  *   · 列表内方向键走行、Enter 展开、f 聚焦
+ *   · 图上点节点 = 聚焦（节点没有“第二层”可展开，这是三页里唯一的手势差异）
  *
  * 焦点、展开项与当前页都只存在内存里（按仓库）：切页会卸载视图，靠这份内存把状态接回来；
  * 刷新页面即清空，不进 URL。数据来自宿主路由 `/kiln/flow`。
@@ -53,6 +55,19 @@ window.__ModuleLoader__.load({
       { id: 'issue', label: 'issue' },
       { id: 'relation', label: '关系' },
     ]
+    /** 关系页的两种取景：图看形状，列表读文字；共用同一份数据与焦点。 */
+    const RELATION_MODES = [
+      { id: 'graph', label: '图' },
+      { id: 'list', label: '列表' },
+    ]
+    /** 边的线型：ordering 槽实线、lineage 槽虚线、对称关系一条无箭头的线。 */
+    const EDGE_STYLE = {
+      'part-of': 'solid',
+      blocks: 'solid',
+      supersedes: 'dashed',
+      'caused-by': 'dashed',
+      'relates-to': 'plain',
+    }
 
     /**
      * 每个仓库的视图内存：当前页、焦点、展开项。
@@ -60,7 +75,7 @@ window.__ModuleLoader__.load({
      */
     const VIEW_STATE_LIMIT = 4
     const viewStates = new Map()
-    const EMPTY_VIEW_STATE = { tabId: 'timeline', focusId: null, expanded: null }
+    const EMPTY_VIEW_STATE = { tabId: 'timeline', focusId: null, expanded: null, relationMode: 'graph' }
 
     function readViewState(cwd) {
       return viewStates.get(cwd) ?? EMPTY_VIEW_STATE
@@ -91,6 +106,33 @@ window.__ModuleLoader__.load({
         const oldest = snapshotCache.keys().next().value
         snapshotCache.delete(oldest)
       }
+    }
+
+    /**
+     * Pele（mermaid → SVG 渲染器）懒加载：`pele.global.js` 是 vendored 产物，放在本文件旁边，
+     * 走与其它插件相同的 `require.async` 通道取回，不依赖 CDN、不需要宿主开静态路由。
+     * 取不到就返回 null，关系页退化成 mermaid 源码——缺一个渲染器不该让整页报错。
+     */
+    let peleLoader = null
+    function loadPele() {
+      if (peleLoader !== null) return peleLoader
+      const load = typeof require.async === 'function' ? require.async : null
+      if (load === null) return Promise.resolve(null)
+      peleLoader = Promise.resolve()
+        .then(() => load('./pele.global.js'))
+        .catch(() => null)
+        .then((module) => {
+          for (const candidate of [module, globalThis.pele]) {
+            if (typeof candidate?.mount === 'function') return candidate
+          }
+          return null
+        })
+        .then((value) => {
+          // 失败不写死：文件后补上时下次进页面还能再试
+          if (value === null) peleLoader = null
+          return value
+        })
+      return peleLoader
     }
 
     /** 展开项的键：优先用提交 sha；空提交退化成 issue#序号，避免多条空 sha 互相顶掉。 */
@@ -165,6 +207,16 @@ window.__ModuleLoader__.load({
 .dkf-detail-key{display:inline-block;min-width:48px;color:var(--dsw-alias-label-tertiary,#999)}
 .dkf-detail code{font:12px/18px var(--dsw-font-family-code,monospace);word-break:break-all;color:var(--dsw-alias-label-primary,#111)}
 .dkf-panel{display:flex;flex-direction:column;min-height:0}
+.dkf-mode{display:inline-flex;gap:2px;align-self:flex-start;margin:0 0 8px;padding:2px;border:.5px solid var(--dsw-alias-border-l2,#e3e3e3);border-radius:6px}
+.dkf-modebtn{all:unset;cursor:pointer;padding:2px 10px;border-radius:4px;color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family,inherit)}
+.dkf-modebtn:hover{color:var(--dsw-alias-label-primary,#111)}
+.dkf-modebtn-active{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.06));color:var(--dsw-alias-label-primary,#111)}
+.dkf-graphwrap{display:flex;flex-direction:column;gap:6px;min-width:0}
+.dkf-graph{border:.5px solid var(--dsw-alias-border-l2,#e3e3e3);border-radius:6px;min-height:260px;padding:6px;overflow:hidden;background:var(--dsw-alias-bg-layer-2,#fafafa)}
+.dkf-graph svg{display:block;max-width:100%;height:auto}
+.dkf-gnode-dim{opacity:.22;transition:opacity .12s ease}
+.dkf-gnode-focus{filter:drop-shadow(0 0 2px var(--dsw-alias-state-business-primary,#4176e6))}
+.dkf-mermaid{margin:0;padding:8px 10px;max-height:320px;overflow:auto;border-radius:4px;background:var(--dsw-alias-markdown-code-block,#f6f6f6);color:var(--dsw-alias-label-secondary,#666);font:11px/16px var(--dsw-font-family-code,monospace);white-space:pre}
 `
 
     /** 样式只注入一次；插件卸载不回收（无害），重载复用同一节点。 */
@@ -323,12 +375,99 @@ window.__ModuleLoader__.load({
       return rows
     }
 
+    /**
+     * 从快照生成 mermaid 文本（图模式的数据侧）。
+     *
+     * 不用 `kiln graph --mermaid` 的两个原因：对称边（`relates-to`）在那边会退化成无标签连线，
+     * 节点 id 也是 kiln 自己 sanitize + 撞名改名的，反查不回 issue id。这里自己出文本，
+     * 换来三件事：对称边带关系名、强弱靠线型、节点 id 与 issue 一一对应（`byNode`）。
+     *
+     * **文本与焦点无关**：聚焦只改渲染出来的 class，不重排（见 GraphPanel）。
+     */
+    function buildMermaid(issues, relations) {
+      const nodeOf = new Map()
+      const byNode = new Map()
+      const used = new Set()
+      const sorted = issues.slice().sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+      const lines = ['flowchart LR']
+      const byAction = new Map()
+
+      for (const issue of sorted) {
+        const base = `n_${String(issue.id).replace(/[^A-Za-z0-9_]/g, '_') || 'x'}`
+        let node = base
+        for (let index = 2; used.has(node); index += 1) node = `${base}_${index}`
+        used.add(node)
+        nodeOf.set(issue.id, node)
+        byNode.set(node, issue.id)
+        lines.push(`  ${node}["${String(issue.id).replaceAll('"', '#quot;')}"]`)
+        const action = typeof issue.action === 'string' ? issue.action : ''
+        if (ACTION_COLOR[action] !== undefined) {
+          if (!byAction.has(action)) byAction.set(action, [])
+          byAction.get(action).push(node)
+        }
+      }
+
+      // 节点描边颜色 = 最近一个动作的类型色，与另外两页同一张表
+      for (const [action, nodes] of byAction) {
+        lines.push(`  classDef act_${action} stroke:${ACTION_COLOR[action]},stroke-width:2px`)
+      }
+
+      let dropped = 0
+      for (const relation of relations) {
+        const from = nodeOf.get(relation.a)
+        const to = nodeOf.get(relation.b)
+        if (from === undefined || to === undefined) {
+          dropped += 1
+          continue
+        }
+        const label = `|${relation.rel}|`
+        if (relation.directed === false) lines.push(`  ${from} ---${label} ${to}`)
+        else if (EDGE_STYLE[relation.rel] === 'dashed') lines.push(`  ${from} -.->${label} ${to}`)
+        else lines.push(`  ${from} -->${label} ${to}`)
+      }
+
+      for (const [action, nodes] of byAction) lines.push(`  class ${nodes.join(',')} act_${action}`)
+
+      return { source: lines.join('\n'), nodeOf, byNode, dropped }
+    }
+
+    /**
+     * 聚焦的三档（焦点 / 强邻居 / 弱邻居），弱邻居与无关共用同一种淡化：
+     * 一档太粗（看不见谁是相关），三档太细（色不够分了），所以只区分“相关 / 无关”。
+     */
+    function graphTiers(focusId, relations) {
+      const related = new Set([focusId])
+      const strong = new Set()
+      const weak = new Set()
+      for (const relation of relations) {
+        if (relation.a !== focusId && relation.b !== focusId) continue
+        const other = relation.a === focusId ? relation.b : relation.a
+        related.add(other)
+        if (relation.rel === 'part-of' || relation.rel === 'blocks') strong.add(other)
+        else weak.add(other)
+      }
+      return { focus: focusId, related, strong, weak }
+    }
+
+    /**
+     * 把聚焦画到已经渲染好的 SVG 上：只动 class 与透明度，节点位置一律不碰。
+     * Pele 的节点组带 `data-id`（等于 mermaid 源里的节点 id），所以能精确命中。
+     */
+    function paintFocus(host, tiers, byNode) {
+      if (host === null || typeof host.querySelectorAll !== 'function') return
+      for (const element of host.querySelectorAll('.pele-node')) {
+        const id = byNode.get(element.getAttribute('data-id')) ?? null
+        const related = tiers !== null && id !== null && tiers.related.has(id)
+        element.classList.toggle('dkf-gnode-dim', tiers !== null && !related)
+        element.classList.toggle('dkf-gnode-focus', tiers !== null && id === tiers.focus)
+      }
+    }
+
     /** 三页共用的“相关集”：焦点 + 一跳邻居。 */
     function scopedIssues(issues, view) {
       if (view === null) return issues
       return issues.filter((issue) => view.ids.has(issue.id))
     }
-
     function flattenActions(issues) {
       const rows = []
       for (const issue of issues) {
@@ -622,8 +761,139 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** 关系页：无焦点看全局边表；有焦点看以焦点为中心的一跳子图。 */
+    /**
+     * 关系页的“图”取景。
+     *
+     * 文本在渲染期一次算好、挂到 `data-mermaid` 上（排查也方便）；真正画图放在 effect 里，
+     * 因为 render 阶段不能碰 DOM。**文本与焦点无关**，所以切焦点只跑 paintFocus 改 class，
+     * 图不重排、不重解析——这是“全局关系与聚焦状态同框”的前提。
+     */
+    function GraphPanel(props) {
+      const built = React.useMemo(() => buildMermaid(props.issues, props.relations), [props.issues, props.relations])
+      const tiers = React.useMemo(
+        () => (props.focusId === null ? null : graphTiers(props.focusId, props.relations)),
+        [props.focusId, props.relations],
+      )
+      const hostRef = React.useRef(null)
+      const [phase, setPhase] = React.useState('idle')
+
+      React.useEffect(() => {
+        const host = hostRef.current
+        if (host === null) return undefined
+        let alive = true
+        let handle = null
+        setPhase('idle')
+        loadPele().then((pele) => {
+          if (!alive) return
+          if (pele === null) {
+            setPhase('missing')
+            return
+          }
+          try {
+            handle = pele.mount(host, built.source, { zoom: 'auto' })
+            setPhase('ready')
+          } catch {
+            setPhase('failed')
+          }
+        })
+        return () => {
+          alive = false
+          if (handle !== null && typeof handle.destroy === 'function') {
+            try {
+              handle.destroy()
+            } catch {
+              // 卸载时渲染器报错不该影响视图切换
+            }
+          }
+        }
+      }, [built.source])
+
+      React.useEffect(() => {
+        if (phase !== 'ready') return
+        paintFocus(hostRef.current, tiers, built.byNode)
+      }, [phase, built, tiers])
+
+      const onClick = (event) => {
+        const target = event?.target
+        const node = typeof target?.closest === 'function' ? target.closest('[data-id]') : null
+        if (node === null) return
+        const id = built.byNode.get(node.getAttribute('data-id'))
+        if (typeof id === 'string') props.onFocus(id)
+      }
+
+      const notice =
+        phase === 'ready'
+          ? null
+          : h(
+              'p',
+              { className: 'dkf-note' },
+              phase === 'missing'
+                ? '没找到图渲染器（plugin/lib/pele.global.js），先显示 mermaid 源码。'
+                : phase === 'failed'
+                  ? '图渲染失败，先显示 mermaid 源码。'
+                  : '正在准备图渲染器…',
+            )
+
+      return h(
+        'div',
+        { className: 'dkf-graphwrap' },
+        notice,
+        h('div', {
+          className: 'dkf-graph',
+          ref: hostRef,
+          'data-mermaid': built.source,
+          'data-focus': props.focusId ?? '',
+          onClick,
+        }),
+        phase === 'ready' ? null : h('pre', { className: 'dkf-mermaid' }, built.source),
+        built.dropped > 0 ? h('p', { className: 'dkf-note' }, `${built.dropped} 条边指向快照外的 issue，未画。`) : null,
+        h(
+          'p',
+          { className: 'dkf-note' },
+          props.focusId === null
+            ? '点节点聚焦；图出来后可用滚轮/拖动缩放平移。'
+            : '点别的节点换焦点；头部「×」或 Esc 回到全局。',
+        ),
+      )
+    }
+
+    /** 关系页：图上/列表两种取景，共用同一个焦点。 */
     function RelationPanel(props) {
+      const modes = h(
+        'div',
+        { className: 'dkf-mode', role: 'group', 'aria-label': '关系取景' },
+        RELATION_MODES.map((mode) =>
+          h(
+            'button',
+            {
+              key: mode.id,
+              type: 'button',
+              className: `dkf-modebtn${props.mode === mode.id ? ' dkf-modebtn-active' : ''}`,
+              'aria-pressed': props.mode === mode.id,
+              onClick: () => props.onMode(mode.id),
+            },
+            mode.label,
+          ),
+        ),
+      )
+      if (props.mode === 'graph') {
+        return h(
+          'div',
+          { className: 'dkf-panel' },
+          modes,
+          h(GraphPanel, {
+            issues: props.issues,
+            relations: props.relations,
+            focusId: props.focusId,
+            onFocus: props.onFocus,
+          }),
+        )
+      }
+      return h('div', { className: 'dkf-panel' }, modes, h(RelationList, props))
+    }
+
+    /** 关系页：无焦点看全局边表；有焦点看以焦点为中心的一跳子图。 */
+    function RelationList(props) {
       if (props.focus === null) {
         if (props.groups.length === 0) return h('p', { className: 'dkf-empty' }, '还没有声明任何关系。')
         return h(
@@ -768,6 +1038,7 @@ window.__ModuleLoader__.load({
       const [expanded, setExpanded] = React.useState(memory.expanded)
       const [expandedWeak, setExpandedWeak] = React.useState(false)
       const [expandedChildren, setExpandedChildren] = React.useState(false)
+      const [relationMode, setRelationMode] = React.useState(memory.relationMode ?? 'graph')
 
       const selectTab = (id) => {
         setTabId(id)
@@ -780,6 +1051,10 @@ window.__ModuleLoader__.load({
       const clearFocus = () => {
         setFocusId(null)
         writeViewState(cwd, { focusId: null })
+      }
+      const selectMode = (id) => {
+        setRelationMode(id)
+        writeViewState(cwd, { relationMode: id })
       }
       /** 点同一行再点一次收起；同时只保留一个展开项。 */
       const toggleExpand = (next) => {
@@ -944,11 +1219,16 @@ window.__ModuleLoader__.load({
             view,
             byId,
             groups: globalGroups,
+            mode: relationMode,
+            issues,
+            relations,
+            focusId: focus === null ? null : focus.id,
             expanded,
             expandedWeak,
             expandedChildren,
             onToggle: toggleExpand,
             onFocus: focusIssue,
+            onMode: selectMode,
             onToggleWeak: () => setExpandedWeak((value) => !value),
             onToggleChildren: () => setExpandedChildren((value) => !value),
           })

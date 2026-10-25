@@ -235,4 +235,55 @@ flowchart LR
 3. `render()` 在 58 节点上的耗时；
 4. `dist/pele.global.js` 的真实体积。
 
+## 落地（apply）
+
+### 图怎么生成
+
+`buildMermaid(issues, relations)`（`plugin/lib/client.js:387`）从**快照**出文本，不调 `kiln graph --mermaid`：
+
+| 项 | 规则 |
+| --- | --- |
+| 节点 | `n_<slug>`（只留 `[A-Za-z0-9_]`，撞名加 `_2`），标签只有 issue id |
+| 节点色 | 每个最近动作一条 `classDef act_<action> stroke:<ACTION_COLOR>`，与另两页同一张色表 |
+| ordering 边 | `a -->\|part-of\| b`（实线，方向按词表归一后） |
+| lineage 边 | `a -.->\|caused-by\| b`（虚线） |
+| 对称边 | `a ---\|relates-to\| b`——关系名保住了（kiln 自己的 `--mermaid` 会丢） |
+| 快照外目标 | 不画，计数进 `dropped`，页面上明说 |
+
+**文本与焦点无关**：`graphTiers`（`:438`）算焦点/强弱一跳，`paintFocus`（`:456`）只 toggle
+`.pele-node` 上的 `dkf-gnode-dim` / `dkf-gnode-focus`。所以切焦点不重解析、不重排。
+
+### 组件与状态
+
+- `GraphPanel`（`:771`）：渲染期算文本并挂 `data-mermaid`（排查与测试都用得到），
+  effect 里 `loadPele()` → `pele.mount(host, source, {zoom:'auto'})`；点击走事件委托，
+  `.pele-node[data-id]` → `byNode` 反查 issue → 聚焦；
+- `RelationPanel`（`:861`）/ `RelationList`（`:896`）：页内“图 / 列表”分段；
+- `relationMode` 进 `viewStates`，与 tab / 焦点 / 展开项一起按仓库记忆；
+- `loadPele`（`:117`）：`require.async('./pele.global.js')`，首次进图才取；取不到返回 `null`。
+
+### 验证
+
+- `plugin/test/render.mjs` **18 例**（新增 4：默认图取景、`data-id` 反查、mermaid 源与焦点无关、
+  取景切换）；`plugin/test/run.mjs` 24 例不变；
+- 无浏览器环境能验的都验了：源文本、节点映射、焦点不改文本、模式切换。
+
+### 已知代价
+
+1. **边不能单独淡化**：Pele 没给边任何可定位属性（collect 3 的未验点落地为“做不到”），
+   所以聚焦只淡化无关**节点**，边保持原样。要按边区分就得重绘（放弃“布局不动”），暂不做。
+2. **`pele.global.js` 还没入库**：本机沙箱没有 TLS 出口，`cdn.jsdelivr.net` / registry 全 SSL 失败。
+   补齐（一条命令，之后重启应用）：
+   ```powershell
+   curl.exe -L -o plugin/lib/pele.global.js https://cdn.jsdelivr.net/npm/pele@1.10.0/dist/pele.global.js
+   ```
+   文件到位前，关系页照常工作，只是显示 mermaid 源码 + 一行说明，不报错。
+3. **未在浏览器实测**：`data-id` 命中、缩放、点击穿透都依赖 Pele 的实际 SVG，需重启后看。
+
+### 与假设的偏差
+
+- 假设 3 的“边一并淡化”降级为“只淡节点”（原因见代价 1）；
+- 假设 6 的“vendored”未完成（原因见代价 2），代码路径已按 vendored 写好。
+
+
 

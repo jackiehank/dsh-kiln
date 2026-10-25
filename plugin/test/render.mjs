@@ -115,7 +115,7 @@ await import('../lib/client.js?render=1')
 assert.equal(loaded?.id, '@local/dsh-kiln')
 
 /** 渲染一次：presets 依次喂给 KilnView 的 useState。 */
-function render({ focusId = null, tabId = 'timeline', expanded = null }) {
+function render({ focusId = null, tabId = 'timeline', expanded = null, mode = 'graph' }) {
   const React = makeReact([
     { phase: 'ready', payload, error: null }, // state：直接给成 ready
     0, //                        nonce
@@ -124,11 +124,17 @@ function render({ focusId = null, tabId = 'timeline', expanded = null }) {
     expanded, //                 expanded（展开项）
     false, //                    expandedWeak
     false, //                    expandedChildren
+    mode, //                     relationMode（关系页取景）
   ])
-  const mod = loaded.factory((name) => {
+  const requireOf = (name) => {
     if (name === 'react') return React
     throw new Error(`意外的 require: ${name}`)
-  })
+  }
+  // 图渲染器不在测试里加载：effect 本来就不执行，这里只是让 loadPele 走“取不到”的分支
+  requireOf.async = async (name) => {
+    throw new Error(`测试里没有 chunk: ${name}`)
+  }
+  const mod = loaded.factory(requireOf)
   const KilnView = captureComponent(mod)
   return expand(KilnView({ cwd: '/repo' }))
 }
@@ -234,21 +240,64 @@ check('issue 页聚焦：只留焦点与相关 issue，且焦点钉在第一条'
 
 // ---------------------------------------------------------------- relation 页
 
-check('relation 页全局：按关系分组列出边', () => {
-  const focused = render({ tabId: 'relation' })
+check('relation 页全局（列表取景）：按关系分组列出边', () => {
+  const focused = render({ tabId: 'relation', mode: 'list' })
   const groups = byClass(focused, 'dkf-group-head')
   assert.equal(groups.length, 1)
   assert.match(textOf(groups[0]), /caused-by 1/)
   assert.equal(byClass(focused, 'dkf-grow').length, 1)
 })
 
-check('relation 页聚焦：焦点行 + 一跳邻居行', () => {
-  const focused = render({ tabId: 'relation', focusId: 'b' })
+check('relation 页聚焦（列表取景）：焦点行 + 一跳邻居行', () => {
+  const focused = render({ tabId: 'relation', focusId: 'b', mode: 'list' })
   const rows = byClass(focused, 'dkf-row')
   assert.ok(rows.length >= 2, `期望至少 2 行，实际 ${rows.length}`)
   assert.equal(textOf(byClass(rows[0], 'dkf-id')[0]), 'b')
   const edges = byClass(focused, 'dkf-edge').map(textOf).join(' ')
   assert.match(edges, /caused-by/)
+})
+
+// ---------------------------------------------------------------- relation 页（图）
+
+/** 图模式：容器上挂着 mermaid 源，便于在无浏览器环境里断言。 */
+function mermaidOf(tree) {
+  const hosts = byClass(tree, 'dkf-graph')
+  assert.equal(hosts.length, 1, '图模式应有一个图容器')
+  return String(hosts[0].props['data-mermaid'] ?? '')
+}
+
+check('relation 页默认是图：mermaid 源含全部节点与带名边', () => {
+  const tree = render({ tabId: 'relation' })
+  const source = mermaidOf(tree)
+  assert.match(source, /^flowchart LR/)
+  const nodes = source.split('\n').filter((line) => /^ {2}n_\w+\["/.test(line))
+  assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b', 'n_c'])
+  // 对称边与弱边都要带关系名（kiln 自己的 --mermaid 会把 relates-to 退化成无标签线）
+  assert.ok(source.includes('n_b -.->|caused-by| n_a'), source)
+  assert.equal(byClass(tree, 'dkf-mermaid').length, 1, '渲染器就位前先显示源码')
+})
+
+check('节点 id 能反查回 issue：data-id = n_<issue>', () => {
+  const tree = render({ tabId: 'relation' })
+  const source = mermaidOf(tree)
+  for (const id of ['a', 'b', 'c']) assert.ok(source.includes(`  n_${id}["${id}"]`), source)
+})
+
+check('图与焦点：聚焦只落在容器的 data-focus 上（文本不变）', () => {
+  const plain = render({ tabId: 'relation' })
+  const focused = render({ tabId: 'relation', focusId: 'b' })
+  assert.equal(mermaidOf(plain), mermaidOf(focused), 'mermaid 源必须与焦点无关，否则会重排')
+  const host = byClass(focused, 'dkf-graph')[0]
+  assert.equal(host.props['data-focus'], 'b')
+})
+
+check('关系取景可切换：两个按钮，列表取景不再画图', () => {
+  const graph = render({ tabId: 'relation' })
+  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), ['图', '列表'])
+  assert.equal(byClass(graph, 'dkf-modebtn-active').length, 1)
+  const list = render({ tabId: 'relation', mode: 'list' })
+  assert.equal(byClass(list, 'dkf-graph').length, 0)
+  assert.equal(byClass(list, 'dkf-modebtn').length, 2)
 })
 
 // ---------------------------------------------------------------- 展开与聚焦控件
