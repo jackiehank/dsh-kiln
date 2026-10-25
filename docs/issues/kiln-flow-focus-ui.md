@@ -140,7 +140,7 @@ release 的包在此目录，下列路径与行号可复现）。运行中的 GU
 
 | # | 原来 | 现在 |
 | --- | --- | --- |
-| 1 输入框 | 待验证 | 机制可行；热键走 `ctx.shortcuts`；**需手验**一次 |
+| 1 输入框 | 待验证 | 机制可行；默认不被抢键（见测试 2）；热键走 `ctx.shortcuts` |
 | 2 搜索组件 | 待验证 | 用 primitives 自建小过滤框；不借 `commandUi`；**已证实可 require**（见测试 1） |
 | 3 URL query | 待验证 | 不做；理由见上（宿主不听 `popstate`） |
 | 4 worktree 焦点 | 待验证 | 未收集，仍未验证 |
@@ -173,6 +173,42 @@ this.modules = r.create({
 
 **未覆盖**：没有在浏览器里真的调一次 `require(...)` 并断言导出形状；primitives 具体导出哪些组件
 仍未核对，写代码时要先看一次实际导出。
+
+## 测试 2：视图内输入框会被宿主抢键吗
+
+**问题**：在 `conversation.view` 里放 `<input>`，宿主的全局键盘监听会不会把按键吃掉
+（尤其 Enter / Escape / 方向键 / 普通字符）。
+
+**办法**：全量客户端 `client.js` 里找 `window` / `document` 级 `keydown` 监听，逐个确认是否
+无条件执行。
+
+**证据**：非第三方客户端包里的 window/document 级监听共 9 个位置（shortcuts 服务在同一处挂了
+capture 与 bubble 两个）：
+
+| 位置 | 作用域 | 生效条件 |
+| --- | --- | --- |
+| `dsh-client-shortcuts/lib/client.js:1446-1447` | window（capture + bubble） | 常驻，只拦已注册组合 |
+| `dsh-client-ui-conversation/lib/client.js:18553` | document | `open` 才挂（`:18549`），只处理 Escape |
+| `dsh-client-ui-chat/lib/client.js:6781` | document | `open` 才挂（`:6774`），只处理 Escape |
+| `dsh-client-ui-shortcuts/lib/client.js:348` | document（capture） | 速查弹窗开着 |
+| `dsh-client-ui-plugin-manager/lib/client.js:3219` | document（capture） | 安装对话框开着 |
+| `dsh-client-ui-schedule/lib/client.js:3934` | document | 月历/时钟弹层开着 |
+| `dsh-experimental-client-ui-agent-team/lib/client.js:294` | document | 面板开着 |
+| `dsh-experimental-client-ui-voice-input/lib/client.js:1882` | document | 引导弹窗开着 |
+| `dsh-experimental-session-inspector/lib/client.js:3982` | window（capture） | 面板展开 |
+
+**结论**：
+
+1. **没有「无条件抢键」的监听**：普通字符、Enter、方向键都不会被宿主截走——除 shortcuts 外，
+   其余全都随各自的弹层开关挂卸，且只认 Escape；
+2. 唯一全局拦截者是 `ctx.shortcuts`，只拦**已注册**的组合；默认全是 `Mod+…`，常规输入安全；
+3. 但 shortcuts **允许把命令绑到单个非修饰键**（`README.zh.md:36`「接受一至两个不同的受支持非修饰键」），
+   用户一旦这么改，那个键在我们的输入框里也会被抢。所以不要假设任何键专属于我们，也别在
+   `keydown` 里依赖某个字符「一定没被占用」；
+4. **Escape 不独占**：宿主的弹层用 document 级监听且不 `stopPropagation`。我们的输入若用 Escape
+   关闭，要显式 `stopPropagation()` 且只改自己的状态，否则会连带关掉别的浮层。
+
+**未覆盖**：没在浏览器里实际敲一遍；输入法组合态只从文档读到「继续传递」，未实测。
 
 ## 边界（不做）
 
