@@ -303,8 +303,12 @@ check('节点 id 能反查回 issue：data-id = n_<issue>', () => {
 })
 
 check('聚焦一个只挂弱关联的节点：它自己也必须在图上', () => {
-  const source = mermaidOf(render({ tabId: 'relation', focusId: 'c' }))
+  const tree = render({ tabId: 'relation', focusId: 'c' })
+  const source = mermaidOf(tree)
   assert.ok(source.includes('n_c["c"]'), `焦点 c 被结构取景藏掉了：\n${source}`)
+  // 临时放宽必须说出来，不能让人以为结构里本来就有 k_c 的弱边
+  const notes = byClass(tree, 'dkf-note').map(textOf).join('\n')
+  assert.match(notes, /只挂在弱关联上，已临时按「全部」画/)
 })
 
 check('图与焦点：聚焦只落在容器的 data-focus 上（文本不变）', () => {

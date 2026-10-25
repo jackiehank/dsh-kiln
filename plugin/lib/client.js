@@ -406,6 +406,15 @@ window.__ModuleLoader__.load({
       return rows
     }
 
+    /** 结构取景的可见性口径：这个 issue 被任何有向关系碰到过吗。 */
+    function touchesDirected(id, relations) {
+      for (const relation of relations) {
+        if (relation.directed === false) continue
+        if (relation.a === id || relation.b === id) return true
+      }
+      return false
+    }
+
     /**
      * 从快照生成 mermaid 文本（图模式的数据侧）。
      *
@@ -822,9 +831,13 @@ window.__ModuleLoader__.load({
     function GraphPanel(props) {
       const direction = props.direction === 'TB' ? 'TB' : 'LR'
       const scope = props.scope === 'all' ? 'all' : 'structure'
+      // 焦点优先：结构取景里被筛掉的节点可能是焦点自己（`~/kiln` 有 32 个只挂弱关联的），
+      // 那种情况下临时按“全部”画，否则会出现“点了 c、图上找不到 c”。
+      // 注意这**不是**让文本普遍依赖焦点：只有焦点落在结构之外时才会变，切焦点仍然不重排。
+      const widened = scope === 'structure' && props.focusId !== null && !touchesDirected(props.focusId, props.relations)
       const built = React.useMemo(
-        () => buildMermaid(props.issues, props.relations, direction, scope),
-        [props.issues, props.relations, direction, scope],
+        () => buildMermaid(props.issues, props.relations, direction, widened ? 'all' : scope),
+        [props.issues, props.relations, direction, scope, widened],
       )
       const tiers = React.useMemo(
         () => (props.focusId === null ? null : graphTiers(props.focusId, props.relations)),
@@ -902,6 +915,13 @@ window.__ModuleLoader__.load({
           onClick,
         }),
         phase === 'ready' ? null : h('pre', { className: 'dkf-mermaid' }, built.source),
+        widened
+          ? h(
+              'p',
+              { className: 'dkf-note' },
+              `焦点 ${props.focusId} 只挂在弱关联上，已临时按「全部」画——结构里没有它。`,
+            )
+          : null,
         built.hidden.edges > 0
           ? h(
               'p',
