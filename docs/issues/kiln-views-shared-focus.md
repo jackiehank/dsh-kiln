@@ -150,6 +150,45 @@
 5. **页签切换不放全局快捷键**：官方约定是 tablist 内方向键；`ctx.shortcuts` 只用于“打开表面”
    （如 `workspace.files`、`browser.new`），不用于页间切换。
 
+## 调研记录（collect 2）：缓存拿什么当失效令牌
+
+### 实测（本仓 3 条 issue，Windows，取多次均值）
+
+| 操作 | 耗时 |
+| --- | --- |
+| 直读 `.git/HEAD` + `.git/refs/heads/main` | **~2 ms** |
+| `git rev-parse HEAD` | ~65 ms（进程启动占大头） |
+| `kiln graph --json` | ~102 ms |
+| `kiln path <id> --json`（单条） | ~100 ms |
+| 当前一次全量重建（graph + 3 条 path） | ~405 ms |
+
+**推论**：成本几乎全在“每条 issue 起一个 `kiln path`”。按快照上限 80 条外推，
+一次全量 ≈ 102 + 80×100 ≈ **8.1 s**。现有 2 秒 TTL 只能挡住“同一窗口内的重复挂载”，
+每 2 秒就要重付一次，而且新提交后最多陈旧 2 秒——粒度既不省也不准。
+
+### git 侧可用的事实
+
+- **`.git/HEAD` 直读只要 2 ms**，是 `git rev-parse` 的 1/30；后者只在 ref 被 pack 或
+  `.git` 是文件（worktree）时才需要；
+- `git merge-base --is-ancestor A B` 用退出码回答“A 是不是 B 的祖先”（实测 0/1 可用）；
+- **git 自带 trailer 解析器**，不用我们自己拆提交信息：
+
+  ```text
+  $ git log --format='%h issue=[%(trailers:key=issue,valueonly)] action=[%(trailers:key=action,valueonly)]' 8b905ad..HEAD
+  8d46047  issue=[kiln-views-shared-focus] action=[hypothesize]  timeline 定 A…
+  437270d  issue=[kiln-views-shared-focus] action=[hypothesize]  页签不换页…
+  ef52e74  issue=[kiln-views-shared-focus] action=[collect]      平级页面三种现成做法…
+  ```
+
+  普通 `chore:` 提交的 `issue=[]` 为空，天然被排除——与 kiln 的“识别规则只有一条”一致。
+
+### 结论（交给 hypothesize）
+
+1. **HEAD 是精确的全局失效令牌**：HEAD 没动，快照必然没变（kiln 的状态只来自提交历史）；
+2. **快照里已存的 action sha 让我们能只算增量**：`cached..HEAD` 范围内用 git 的 trailer
+   解析器拿到“哪些 issue 有新提交”，只重取这些 issue 的 `kiln path`；
+3. 两条都不需要我们解析 kiln 的**状态语义**——git 的结果只用来决定“重取谁”，不用于推导状态。
+
 ## 假设（hypothesize 1）：页签不换页、键盘照官方、timeline 走 action 行
 
 ### 已定
