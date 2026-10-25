@@ -215,3 +215,25 @@ capture 与 bubble 两个）：
 - 不做 Triage / Genealogy 两种阅读模式（另开 issue）；
 - 不做看板、拖拽、状态编辑——写路径只有 `git commit`；
 - 不做全仓 issue 索引页：焦点入口服务“从关系里跳”这条主线，最多加一个最小搜索。
+
+## 结论（conclude）
+
+**前提被取代。** 本条的 `ask` 假设“只有一个焦点子图、没有全量列表”，在此前提下研究焦点怎么表达。
+2026-10-25 的设计讨论把视图改成**三个页面**（timeline / issue / relation）+ 一个**跨页共享的焦点**，
+前提不再成立：焦点不再是“单视图里的一个视觉标记”，而是三页共用的导航状态。实现移交
+`kiln-views-shared-focus`（`caused-by` 本条）。
+
+### 移交下去（已验证，可直接用）
+
+- 输入框可放；热键走 `ctx.shortcuts`（参与冲突校验、可在设置里改），不要自己 `window.addEventListener`；
+- 宿主不抢键：无条件的全局 `keydown` 只有 shortcuts，其余 8 处随弹层挂卸且只认 Escape；
+- `@deepseek-ai/dsh-client-ui-primitives` 可从 bundle `require`（loader 的 `staticModules` 同一张表），
+  复用不会引第二份 React；
+- 焦点**不进 URL query**：宿主不读 URL、也不听 `popstate`；
+- 旧验收里仍然有效的三条：切焦点不重取数、返回栈、焦点失效要有提示。
+
+### 被推翻 / 作废
+
+- **“最小搜索入口”作废**——用户明确“先不做搜索框”，焦点入口收窄为点行、点边、默认值；
+- **“焦点只是视图内的标记”作废**——升级为三页共享的导航状态；
+- 单视图的 `FlowView` 组件保留，作为 relation 页的起点，但不再是唯一形态。
