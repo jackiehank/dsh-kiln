@@ -77,11 +77,76 @@
 
 ## 待验证 / 待 hypothesize
 
-- 三段导航的具体形态（分段控件 vs 侧边小导航）与键盘可达性——用 `ctx.shortcuts` 还是纯 Tab 序；
+- 三段导航的具体形态（分段控件 vs 侧边小导航）与键盘可达性——**调研见下节**；倾向照抄页面内
+  tablist 的三件套（`role`/`aria`/roving tabindex），不用 `ctx.shortcuts`；
 - timeline 的成本：当前快照上限 80 条 issue、每条一次 `kiln path`（4 并发、2s 缓存）够不够；
 - “相关 issue”的判定留在浏览器半（现在的 `relate()`）还是下推到宿主；
 - 聚焦态下 timeline 是按“issue 分行”呈现，还是仍一条提交一行；
 - `worktree: on` 时多个 worktree 的提交如何聚合到同一 timeline。
+
+## 调研记录（collect）：DSH 里的“几个平级页面”怎么做
+
+证据来源同前：`.dsh-src/.../@deepseek-ai/*`（0.2.1-rc.2），路径行号可复现。共有四种做法，
+按“谁拥有切换状态”分。
+
+### 1. 壳级 View 标签（`conversation.view`）——壳拥有、会持久化
+
+`dsh-client-ui-conversation/lib/client.js:18043-18057`：`role="tablist"` 容器 + 每个 View 一个
+`role="tab"` + `aria-selected`，`onClick` 调 `selectView(id)`。**没有** roving tabindex、
+没有方向键、没有 `aria-controls`——就是排在一起的普通按钮。
+
+- 可见性：可用 View 少于两个时整条隐藏（`README.zh.md:73`）；
+- 选中：写进持久化的 View 偏好，刷新后恢复（`README.zh.md:89-91`）；
+- 判断：这是“彼此独立的工具”的容器，不是“同一份数据的几种取景”。我们只该占一个 tab。
+
+### 2. 页面内 tablist——组件自己拥有（最接近我们的形态）
+
+三个官方实现：会话轨迹的详情页签（`dsh-client-ui-trajectory/lib/client.js:5633-5654`）、
+计划任务详情的“规则 / 任务运行记录”（`dsh-client-ui-schedule/lib/client.js:4517-4557`）、
+设置里的插件页签（`dsh-client-ui-settings-plugins/lib/client.js:66-99`）。三者的公共做法：
+
+| 约定 | 实现 |
+| --- | --- |
+| 语义 | `role="tablist"`（带 `aria-label`）→ `role="tab"`（`aria-controls`）→ `role="tabpanel"`（`aria-labelledby`） |
+| 焦点 | **roving tabindex**：选中项 `tabIndex: 0`，其余 `-1`（schedule `:4531`、settings-plugins `:86`） |
+| 键盘 | `ArrowLeft/Right` 循环、`Home/End` 首尾、`preventDefault()`、切换后 `focus()` 新页签（schedule `:4536-4555`）；带修饰键时直接放行 |
+| 单页不显示 | 只有一个页时不渲染 tablist（settings-plugins `:66-69`），与壳对 View 的处理一致 |
+| 状态归属 | 放在**页面根组件**的 `useState`，以 prop 下传（schedule `:4150`、`:4173`）；换对象时重置（`:4155`） |
+| 记住上次 | trajectory 用 `tabHistory`（recency Set，`:4923`、`:5051-5055`），对象变化时挑“最近用过且仍可用”的页（`:5074`） |
+
+**最关键的一条先例**：trajectory 的选中态（`selectedRecordId` / `selectedRequest`，`:4915-4923`）
+在 tablist **之上**，页签只是同一选中的不同切面（`:5656` 起按 `activeTab` 渲染）。也就是说
+“一个共享状态 + 多页取景”在官方代码里就是这么写的——不需要 store，也不需要额外 slot。
+
+### 3. 全局页面：`sidebar.panellist` + `main` 键控槽——布局服务拥有
+
+计划任务页（`dsh-client-ui-schedule/lib/client.js:7473-7490`）与插件管理页
+（`dsh-client-ui-plugin-manager/lib/client.js:4418`、`:4477`）同构：`main` 注册一个 `key`，
+`sidebar.panellist` 注册同一 `id` 的入口，点侧栏图标就把主区切到那一页（`ctx.layout.selectPanel`，
+`dsh-client-ui-layout/README.zh.md:59`；同一 id 寻址同一面板，`dsh-client-ui-sidebar/README.zh.md:38`）。
+设置弹窗的 `settings.section` 是同一思路的模态版。
+
+判断：适合“工作区级一等页面”，代价是占一个侧栏入口；会话内看 issue 不需要升到这层。
+
+### 4. 右栏 tabs（`ctx.sidebarRight.openTab`）——最重的一档
+
+`ctx.sidebarRight.openTab(kind, { params })`（schedule `:7501-7504`；`dsh-client-ui-sidebar-browser/README.zh.md:43`），
+每种 kind 一个页面、params 决定内容，页签自带 actions/命令、按 occurrence 解析关闭与刷新
+（`dsh-client-ui-sidebar-right/README.zh.md:110`）。要布局、命令、标签页生命周期三套东西，还要求
+用户先把右栏打开。
+
+### 对我们的判断（进 hypothesize 用，不是结论）
+
+1. **承载**：沿用“一个 tab 内三段 tablist”，与 schedule / settings-plugins 同构——语义、roving、
+   方向键三件套照抄即可，不需要发明控件；
+2. **焦点状态**：放在 tab 根组件的 `useState`，三页作为 prop 消费（trajectory 的“选中在页签之上”
+   就是先例）；不引入 store，也不新增 slot；
+3. **页签记忆**：可照抄 trajectory 的 `tabHistory`（最近可用优先），解决“焦点被清空 / 切焦点后
+   落到哪一页”；
+4. **不做**：三个壳级 View（会被 <2 隐藏规则误伤，且壳不给我们方向键）、`sidebar.panellist` 全局页
+   （要占侧栏入口）、右栏 tab（生命周期与命令面都太重）；
+5. **页签切换不放全局快捷键**：官方约定是 tablist 内方向键；`ctx.shortcuts` 只用于“打开表面”
+   （如 `workspace.files`、`browser.new`），不用于页间切换。
 
 ## 边界（不做）
 
