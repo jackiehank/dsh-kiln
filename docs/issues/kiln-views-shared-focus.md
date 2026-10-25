@@ -77,11 +77,11 @@
 
 ## 待验证 / 待 hypothesize
 
-- 三段导航的具体形态（分段控件 vs 侧边小导航）与键盘可达性——**调研见下节**；倾向照抄页面内
-  tablist 的三件套（`role`/`aria`/roving tabindex），不用 `ctx.shortcuts`；
+- 三段导航的形态与键盘——**已定**：页面内 tablist 三件套 + roving tabindex + 方向键，
+  不绑全局快捷键（见假设 1）；
+- “相关 issue”的归属——**已定**：留在浏览器半，但收口成一个 `related(focus, edges)`（见假设 1）；
+- timeline 的形态——**两案待定**（一行一 action / 一行一 issue + 动作条，见假设 1 的表）；
 - timeline 的成本：当前快照上限 80 条 issue、每条一次 `kiln path`（4 并发、2s 缓存）够不够；
-- “相关 issue”的判定留在浏览器半（现在的 `relate()`）还是下推到宿主；
-- 聚焦态下 timeline 是按“issue 分行”呈现，还是仍一条提交一行；
 - `worktree: on` 时多个 worktree 的提交如何聚合到同一 timeline。
 
 ## 调研记录（collect）：DSH 里的“几个平级页面”怎么做
@@ -147,6 +147,42 @@
    （要占侧栏入口）、右栏 tab（生命周期与命令面都太重）；
 5. **页签切换不放全局快捷键**：官方约定是 tablist 内方向键；`ctx.shortcuts` 只用于“打开表面”
    （如 `workspace.files`、`browser.new`），不用于页间切换。
+
+## 假设（hypothesize 1）：页签不换页、键盘照官方、timeline 走 action 行
+
+### 已定
+
+1. **切焦点不换页**：焦点变化只换数据，不换取景。页签记忆照抄 trajectory 的 `tabHistory`
+   （最近用过且仍可用的那一页，`dsh-client-ui-trajectory/lib/client.js:4923`、`:5074`），
+   而不是 schedule 的“换对象就重置”（`dsh-client-ui-schedule/lib/client.js:4153-4157`）。
+   理由：三页是同一份数据的三种取景，换焦点时用户“在看什么页”并没有变；
+2. **键盘照官方约定**：roving tabindex + `←/→` 循环 + `Home/End`，切完把焦点移到新页签；
+   页间切换**不绑全局快捷键**（`ctx.shortcuts` 只用于“打开表面”）。
+
+### “相关 issue”留在浏览器半
+
+- **判定是什么**：给定焦点与全部关系边，算出“哪些 issue 在本次取景里、按什么强度排”。现在是
+  `relate()`（`plugin/lib/client.js:129`）在浏览器里算，宿主只给原始 `issues` + `edges`；
+- **两个硬理由**：① 切焦点必须零请求（已有验收，也是 `effect` 依赖只有 `[cwd, nonce]` 的前提）；
+  ② “宿主不判断什么算重要”是既有设计（`plugin/lib/flow.js:1-7` 的头注释就是这么写的）；
+- **但必须收口成一个函数**（`related(focus, edges)`），三页共用。若三页各自过滤，规则一定会漂；
+- **会改判的条件**：仓库大到必须由宿主裁剪 payload，或将来要让 MCP / CLI 复用同一套判定。
+
+### timeline 的两案
+
+| 案 | 形态 | 优 | 劣 |
+| --- | --- | --- | --- |
+| A 一行一 action | 每条 kiln 提交一行：时间、issue id、action 徽标、完整 title、短 sha | 标题可读；与“一个 action 一条提交”一致；全局时间轴语义干净 | 同一 issue 的动作被时间打散，线程感弱 |
+| B 一行一 issue + 横向动作条 | 仿轨迹：一行一个 issue，右侧一排动作格按时间倒序 | 线程感强、密度高 | title 放不下（只能 hover）；横轴跨 issue 时时间不对齐会失真；**与 issue 页高度重复——三页粒度退化成两页** |
+
+倾向 **A**，并补一条保线程的视觉规则：连续属于同一 issue 的 action 用同色左边条 + 首行带 issue id
+成组，粒度不变。理由是 B 会让 timeline 与 issue 页说同一件事，而“三种粒度”是这条 issue 的立身之本；
+title 可读也是用户点明的 A 的优点。
+
+### 待定
+
+- A 还是 B（用户确认后写进验收标准）；
+- 成组的阈值（相邻 2 条以上？）。
 
 ## 边界（不做）
 
