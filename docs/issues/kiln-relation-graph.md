@@ -148,6 +148,9 @@ flowchart LR
 **未验**：`pele.global.js` 是 IIFE（挂 `globalThis.pele`），不是 ESM；`require.async` 对非模块脚本
 如何处理没实测过。退路：同一机制取 `dist/pele.js`（ESM）再 `import()`。
 
+> 这条的后半段判断是错的：文件名与自注册两个细节只有读加载器源码才看得见，
+> 见文末 **collect 7**。结论「不用宿主开路由」仍然成立。
+
 ## hypothesize：取景、表达、加载
 
 前提：`--json` 本来就是给数据的（用户确认），`--mermaid` 只是给人看的副产品。所以**数据走 `edges`，
@@ -260,7 +263,7 @@ flowchart LR
   `.pele-node[data-id]` → `byNode` 反查 issue → 聚焦；
 - `RelationPanel`（`:861`）/ `RelationList`（`:896`）：页内“图 / 列表”分段；
 - `relationMode` 进 `viewStates`，与 tab / 焦点 / 展开项一起按仓库记忆；
-- `loadPele`（`:117`）：`require.async('./pele.global.js')`，首次进图才取；取不到返回 `null`。
+- `loadPele`（`:117`）：`require.async('./client.pele.js')`，首次进图才取；取不到返回 `null` 并记住原因。
 
 ### 验证
 
@@ -272,18 +275,37 @@ flowchart LR
 
 1. **边不能单独淡化**：Pele 没给边任何可定位属性（collect 3 的未验点落地为“做不到”），
    所以聚焦只淡化无关**节点**，边保持原样。要按边区分就得重绘（放弃“布局不动”），暂不做。
-2. **`pele.global.js` 还没入库**：本机沙箱没有 TLS 出口，`cdn.jsdelivr.net` / registry 全 SSL 失败。
-   补齐（一条命令，之后重启应用）：
-   ```powershell
-   curl.exe -L -o plugin/lib/pele.global.js https://cdn.jsdelivr.net/npm/pele@1.10.0/dist/pele.global.js
-   ```
-   文件到位前，关系页照常工作，只是显示 mermaid 源码 + 一行说明，不报错。
+2. **chunk 体积 693 KB**：`lib/client.pele.js` 是整包（33 种图全在内），首次进关系页才取。
+   要瘦得改 vendoring 方式（只留 flowchart），暂不做。
 3. **未在浏览器实测**：`data-id` 命中、缩放、点击穿透都依赖 Pele 的实际 SVG，需重启后看。
 
 ### 与假设的偏差
 
 - 假设 3 的“边一并淡化”降级为“只淡节点”（原因见代价 1）；
-- 假设 6 的“vendored”未完成（原因见代价 2），代码路径已按 vendored 写好。
+- 假设 6 的“`pele.global.js`” 实际落成 `client.pele.js`（原因见 collect 7：加载器只认这个文件名）。
+
+## collect：客户端 chunk 的真实契约
+
+第一次把 `pele.global.js` 放进去，浏览器报“没找到图渲染器”。把 `@deepseek-ai/dsh-client-modules`
+从 `app.asar` 里抽出来读了源码（`lib/client.js:600-877`、宿主 `lib/index.js:933-958`），契约是：
+
+| 规则 | 出处 |
+| --- | --- |
+| chunk 文件名必须匹配 `^client\.[A-Za-z0-9][A-Za-z0-9._-]*\.js$` | `CLIENT_CHUNK`（`:600`） |
+| 相对路径只认 `./` 开头，否则当成包名走 `import()` | `require.async`（`:842-847`） |
+| 文件从 **`client.js` 所在目录**取（`join(dirname(clientPath), fileName)`） | 宿主 `:957` |
+| URL 形如 `/plugins/<包名>/<文件名>?rev=<入口 rev>`，只按精确 URL 供 | 宿主 `:934-943` |
+| **chunk 必须自己注册**：`__ModuleLoader__.load({id: '<包名>/<文件名>'})`，否则报 `bundle … loaded without registering` | `:874` |
+
+所以 `pele.global.js` 这个名字**根本走不通**：它既不是 `client.*.js`，`var pele=(()=>{…})()` 这种
+顶层 `var` 在 ESM/chunk 作用域里也不会变成 `globalThis.pele`。正确形态是
+`lib/client.pele.js`：vendored 原文一字不改，**只在末尾追加一次注册**，`factory: () => pele`
+用闭包把上游那个 `var pele` 交出去。`plugin/test/run.mjs` 有一条用例专门验这个
+（名字、注册 id、`mount`/`render` 可调用）。
+
+副产物：宿主按需读 chunk（首次请求才读文件、不预扫描），所以改 chunk 不用重启宿主，刷新页面即可；
+但**入口 `client.js` 的 mtime/size 变了才会换 `rev`**，所以第一次加 chunk 建议连应用一起重启一次。
+
 
 
 
