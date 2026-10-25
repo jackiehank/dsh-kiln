@@ -130,3 +130,21 @@ flowchart LR
 都是 SSL 失败），registry 元数据只说整包 2.3 MB。这条在上线前必须实测——它决定是“直接 vendor”
 还是“用 `pele/lazy` 只装 flowchart”。
 
+### 6. 插件怎么带第二个客户端 chunk（这条决定 Pele 怎么进包）
+
+本机 profile 里已经装了一个这么干的插件：`@xbzbing/dsh-git-panel@1.9.1`。
+
+- `lib/client.js`（377 KB）里写着 `var Wc = require.async; … Wc("./client.mermaid.js")`，
+  同目录躺着 `lib/client.mermaid.js`（**5.25 MB**，mermaid 12.2.0 整包）；
+- 它的宿主半边（`lib/host/*`）搜不到 `register` / `content-type`——**没有自建静态路由**；
+- `package.json` 的 `exports` 里也没有第二个 chunk 的条目，只在 `files` 发布清单里列了文件名。
+
+**结论**：DSH 的客户端模块加载器支持插件**按相对路径异步取自带 chunk**（`require.async`），
+不需要宿主供文件、不需要 `exports` 声明。由此：
+
+- `pele.global.js` 直接放 `plugin/lib/` 旁边、`require.async('./pele.global.js')` 取回即可；
+- **不需要**新增 `GET /kiln/vendor/*` 路由，也就绕开了 `requestRejection` 栅栏那个未验点（collect 3）。
+
+**未验**：`pele.global.js` 是 IIFE（挂 `globalThis.pele`），不是 ESM；`require.async` 对非模块脚本
+如何处理没实测过。退路：同一机制取 `dist/pele.js`（ESM）再 `import()`。
+
