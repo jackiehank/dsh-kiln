@@ -141,9 +141,38 @@ release 的包在此目录，下列路径与行号可复现）。运行中的 GU
 | # | 原来 | 现在 |
 | --- | --- | --- |
 | 1 输入框 | 待验证 | 机制可行；热键走 `ctx.shortcuts`；**需手验**一次 |
-| 2 搜索组件 | 待验证 | 用 primitives 自建小过滤框；不借 `commandUi`；**需证实 require 可解析** |
+| 2 搜索组件 | 待验证 | 用 primitives 自建小过滤框；不借 `commandUi`；**已证实可 require**（见测试 1） |
 | 3 URL query | 待验证 | 不做；理由见上（宿主不听 `popstate`） |
 | 4 worktree 焦点 | 待验证 | 未收集，仍未验证 |
+
+## 测试 1：插件 bundle 能不能 `require` 到 primitives
+
+**问题**：collect 里标「未实测」的那条——`window.__ModuleLoader__` 的 `require` 能否解析
+`@deepseek-ai/dsh-client-ui-primitives`。
+
+**办法**（源码级，无浏览器）：在 Web 前端 bundle 里定位 `__ModuleLoader__` 的构造点。
+
+**证据**：`dsh-web-frontend/dist/assets/index-CN7NIWNw.js`（字符偏移约 918559）：
+
+```js
+const i = globalThis.__DSH_TRANSPORT__
+this.modules = r.create({
+  boot: t.__DSH_BOOT__,
+  staticModules: SZ(),
+  ...(i?.loadBundle === void 0 ? {} : { loadBundle: i.loadBundle }),
+})
+```
+
+`r` 就是 `window.__ModuleLoader__`；`SZ()` 正是含 `@deepseek-ai/dsh-client-ui-primitives`（连同
+`react`、`dsh-client-ui-slots`、`dsh-client-ui-dockkit`、`dsh-client-store`、`zod`、
+`@tanstack/react-virtual`、`@deepseek-ai/cordis`）的那张表。
+
+**结论**：**能解析**。所有客户端 bundle（含本插件）的 `require` 都从同一张 `staticModules` 表取；
+`react` 已经用这条路径跑通了我们的标签页，primitives 与它同表同源，不存在「同名不同实例」。
+副产物：复用 `MenuSurface` / `MenuGroup` 不会引入第二份 React 或二次样式注入。
+
+**未覆盖**：没有在浏览器里真的调一次 `require(...)` 并断言导出形状；primitives 具体导出哪些组件
+仍未核对，写代码时要先看一次实际导出。
 
 ## 边界（不做）
 
