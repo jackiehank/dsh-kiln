@@ -120,7 +120,15 @@ await import('../lib/client.js?render=1')
 assert.equal(loaded?.id, '@local/dsh-kiln')
 
 /** 渲染一次：presets 依次喂给 KilnView 的 useState。 */
-function render({ focusId = null, tabId = 'timeline', expanded = null, mode = 'graph', direction = 'LR', scope = 'auto' }) {
+function render({
+  focusId = null,
+  tabId = 'timeline',
+  expanded = null,
+  mode = 'graph',
+  direction = 'LR',
+  edges = 'directed',
+  focusMode = 'redraw',
+}) {
   const React = makeReact([
     { phase: 'ready', payload, error: null }, // state：直接给成 ready
     0, //                        nonce
@@ -131,7 +139,8 @@ function render({ focusId = null, tabId = 'timeline', expanded = null, mode = 'g
     false, //                    expandedChildren
     mode, //                     relationMode（关系页取景）
     direction, //                graphDirection（图方向）
-    scope, //                    graphScope（结构 / 全部）
+    edges, //                    graphEdges（有向 / 全部）
+    focusMode, //                graphFocusMode（重画 / 淡化）
   ])
   const requireOf = (name) => {
     if (name === 'react') return React
@@ -273,95 +282,91 @@ function mermaidOf(tree) {
   return String(hosts[0].props['data-mermaid'] ?? '')
 }
 
-check('relation 页默认是图：结构取景只画有向关系', () => {
+check('relation 页默认是图：边筛「有向」，只画带方向的声明', () => {
   const tree = render({ tabId: 'relation' })
   const source = mermaidOf(tree)
   assert.match(source, /^flowchart LR/)
   const nodes = source.split('\n').filter((line) => /^ {2}n_\w+\["/.test(line))
-  assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b'], 'c 只挂在弱关联上，默认不画')
+  assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b'], 'c 只挂在无向关联上，默认不画')
   assert.ok(source.includes('n_b -.->|caused-by| n_a'), source)
-  assert.ok(!source.includes('---'), '结构取景不含无向边')
+  assert.ok(!source.includes('---'), '有向筛选不含无向边')
   assert.equal(byClass(tree, 'dkf-mermaid').length, 1, '渲染器就位前先显示源码')
   // 隐藏的东西必须说出来，不能悄悄消失
   const notes = byClass(tree, 'dkf-note').map(textOf).join('\n')
-  assert.match(notes, /隐藏 1 条弱关联/)
-  assert.match(notes, /1 个只挂在弱关联上的 issue/)
+  assert.match(notes, /隐藏 1 条无向关联/)
+  assert.match(notes, /1 个只挂在它们上面的 issue/)
 })
 
-check('全部取景：弱关联与只挂弱关联的节点都回来', () => {
-  const source = mermaidOf(render({ tabId: 'relation', scope: 'all' }))
+check('边筛「全部」：无向关联与只挂它的节点都回来', () => {
+  const tree = render({ tabId: 'relation', edges: 'all' })
+  const source = mermaidOf(tree)
   const nodes = source.split('\n').filter((line) => /^ {2}n_\w+\["/.test(line))
   assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b', 'n_c'])
   assert.ok(source.includes('n_c ---|relates-to| n_a'), source)
-  const notes = byClass(render({ tabId: 'relation', scope: 'all' }), 'dkf-note').map(textOf).join('\n')
-  assert.ok(!/已隐藏/.test(notes), '全部取景不该再提示隐藏')
+  assert.ok(!/已隐藏/.test(byClass(tree, 'dkf-note').map(textOf).join('\n')), '全部不该再提示隐藏')
 })
 
 check('节点 id 能反查回 issue：data-id = n_<issue>', () => {
-  const source = mermaidOf(render({ tabId: 'relation', scope: 'all' }))
+  const source = mermaidOf(render({ tabId: 'relation', edges: 'all' }))
   for (const id of ['a', 'b', 'c']) assert.ok(source.includes(`  n_${id}["${id}"]`), source)
 })
 
-check('聚焦一个只挂弱关联的节点：结构取景下它也必须被带上', () => {
-  const tree = render({ tabId: 'relation', focusId: 'c', scope: 'structure' })
+check('焦点只挂无向关联时，重画这张会临时放开「有向」筛选并说明', () => {
+  const tree = render({ tabId: 'relation', focusId: 'c' })
   const source = mermaidOf(tree)
-  assert.ok(source.includes('n_c["c"]'), `焦点 c 被结构取景藏掉了：\n${source}`)
-  // 临时放宽必须说出来，不能让人以为结构里本来就有 k_c 的弱边
-  const notes = byClass(tree, 'dkf-note').map(textOf).join('\n')
-  assert.match(notes, /只挂在弱关联上，已临时按「全部」画/)
+  assert.ok(source.includes('n_c["c"]'), `焦点 c 被筛掉了：\n${source}`)
+  assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /只挂在无向的 relates-to 上/)
 })
 
-check('自动取景：无焦点用结构，有焦点用焦点（用户定的两条默认）', () => {
-  const idle = mermaidOf(render({ tabId: 'relation' }))
-  assert.equal(idle, mermaidOf(render({ tabId: 'relation', scope: 'structure' })), '无焦点 → 结构')
-  const focused = mermaidOf(render({ tabId: 'relation', focusId: 'b' }))
-  assert.equal(focused, mermaidOf(render({ tabId: 'relation', focusId: 'b', scope: 'focus' })), '有焦点 → 焦点')
-  assert.match(byClass(render({ tabId: 'relation' }), 'dkf-modebtn-active').map(textOf).join(','), /自动/)
-})
-
-check('图与焦点：聚焦只落在容器的 data-focus 上（文本不变）', () => {
-  const plain = render({ tabId: 'relation' })
+check('默认组合：无焦点看有向全图，有焦点重画一圈', () => {
+  const idle = render({ tabId: 'relation' })
+  assert.equal(mermaidOf(idle), mermaidOf(render({ tabId: 'relation', edges: 'directed', focusMode: 'redraw' })))
   const focused = render({ tabId: 'relation', focusId: 'b' })
-  assert.equal(mermaidOf(plain), mermaidOf(focused), 'mermaid 源必须与焦点无关，否则会重排')
-  const host = byClass(focused, 'dkf-graph')[0]
-  assert.equal(host.props['data-focus'], 'b')
+  const nodes = mermaidOf(focused).split('\n').filter((line) => /^ {2}n_\w+\["/.test(line))
+  assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b'], '重画只留焦点的一跳')
+  const active = byClass(focused, 'dkf-modebtn-active').map(textOf)
+  assert.ok(active.includes('有向') && active.includes('重画'), active.join(','))
 })
 
-check('关系取景可切换：列表不画图，图有三组控件', () => {
+check('关系取景可切换：列表不画图，图有四组控件', () => {
   const graph = render({ tabId: 'relation' })
-  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), ['图', '列表', '横向', '纵向', '自动', '结构', '全部', '焦点'])
-  assert.equal(byClass(graph, 'dkf-modebtn-active').length, 3, '取景 / 方向 / 范围各选中一个')
+  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), [
+    '图',
+    '列表',
+    '横向',
+    '纵向',
+    '有向',
+    '全部',
+    '重画',
+    '淡化',
+  ])
+  assert.equal(byClass(graph, 'dkf-modebtn-active').length, 4, '四组各选中一个')
   const list = render({ tabId: 'relation', mode: 'list' })
   assert.equal(byClass(list, 'dkf-graph').length, 0)
-  assert.deepEqual(byClass(list, 'dkf-modebtn').map(textOf), ['图', '列表'], '列表取景没有方向与范围')
+  assert.deepEqual(byClass(list, 'dkf-modebtn').map(textOf), ['图', '列表'], '列表取景没有图的三组')
 })
 
-check('焦点取景：以焦点为中心重画，只留它的一跳', () => {
-  const tree = render({ tabId: 'relation', focusId: 'b', scope: 'focus' })
+check('聚焦时「重画」：以焦点为中心，只留它的一跳', () => {
+  const tree = render({ tabId: 'relation', focusId: 'b', focusMode: 'redraw' })
   const source = mermaidOf(tree)
   const nodes = source.split('\n').filter((line) => /^ {2}n_\w+\["/.test(line))
   assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b'], 'c 与 b 不相邻，不进来')
-  assert.ok(source.includes('n_b -.->|caused-by| n_a'), source)
-  const notes = byClass(tree, 'dkf-note').map(textOf).join('\n')
-  assert.match(notes, /焦点取景：只画 b 与它的 1 个邻居/)
-  // 重画之后不需要淡化：整张图都是焦点的一圈
-  assert.equal(byClass(tree, 'dkf-modebtn-active').map(textOf).includes('焦点'), true)
+  assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /焦点取景：只画 b 与它的 1 个邻居/)
 })
 
-check('焦点取景但还没聚焦：退回结构取景并提示', () => {
-  const tree = render({ tabId: 'relation', scope: 'focus' })
-  const source = mermaidOf(tree)
-  assert.equal(source, mermaidOf(render({ tabId: 'relation' })), '无焦点时与结构取景一致')
-  assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /选定.*issue|先选一个 issue/)
+check('聚焦时「淡化」：文本保持全图，只挂 data-focus', () => {
+  const tree = render({ tabId: 'relation', focusId: 'b', focusMode: 'dim' })
+  assert.equal(mermaidOf(tree), mermaidOf(render({ tabId: 'relation' })), '淡化不重排：与无焦点逐字相同')
+  assert.equal(byClass(tree, 'dkf-graph')[0].props['data-focus'], 'b')
 })
 
-check('切焦点：结构取景不变文本，焦点取景重画', () => {
-  const structural = render({ tabId: 'relation', focusId: 'a', scope: 'structure' })
-  const structuralOther = render({ tabId: 'relation', focusId: 'b', scope: 'structure' })
-  assert.equal(mermaidOf(structural), mermaidOf(structuralOther), '结构取景下切焦点不重排')
-  const focusA = render({ tabId: 'relation', focusId: 'a', scope: 'focus' })
-  const focusC = render({ tabId: 'relation', focusId: 'c', scope: 'focus' })
-  assert.notEqual(mermaidOf(focusA), mermaidOf(focusC), '焦点取景下换焦点就是要重画')
+check('切焦点：淡化档不变文本，重画档必须重画', () => {
+  const dimA = render({ tabId: 'relation', focusId: 'a', focusMode: 'dim' })
+  const dimB = render({ tabId: 'relation', focusId: 'b', focusMode: 'dim' })
+  assert.equal(mermaidOf(dimA), mermaidOf(dimB), '淡化档切焦点不重排')
+  const redrawA = render({ tabId: 'relation', focusId: 'a', focusMode: 'redraw' })
+  const redrawC = render({ tabId: 'relation', focusId: 'c', focusMode: 'redraw' })
+  assert.notEqual(mermaidOf(redrawA), mermaidOf(redrawC), '重画档换焦点就是要重画')
 })
 
 check('图方向：默认横向，切纵向只换 flowchart 的方向词', () => {

@@ -74,15 +74,18 @@ window.__ModuleLoader__.load({
       { id: 'TB', label: '纵向' },
     ]
     /**
-     * 取景范围。`auto` 是默认：**没焦点看结构，有焦点看焦点**——两者各自是那两种状态下的
-     * 最佳取景（结构解决“全局太乱”，焦点解决“聚焦后看不清一圈”）；
-     * 另外三档是手动覆盖，用来对比或临时切换。
+     * 两个独立的筛选维度（各一组按钮，不再混在同一排里）：
+     *   · 边：`directed` 只画有方向的声明，`all` 连无向的 `relates-to` 一起画；
+     *   · 聚焦时：`redraw` 以焦点为中心重画一圈，`dim` 保持原图、只淡化圈外。
+     * 默认「有向 + 重画」：没焦点时看图看骨架，有焦点时看清一圈。
      */
-    const GRAPH_SCOPES = [
-      { id: 'auto', label: '自动' },
-      { id: 'structure', label: '结构' },
+    const GRAPH_EDGES = [
+      { id: 'directed', label: '有向' },
       { id: 'all', label: '全部' },
-      { id: 'focus', label: '焦点' },
+    ]
+    const GRAPH_FOCUS = [
+      { id: 'redraw', label: '重画' },
+      { id: 'dim', label: '淡化' },
     ]
 
     /**
@@ -97,7 +100,8 @@ window.__ModuleLoader__.load({
       expanded: null,
       relationMode: 'graph',
       graphDirection: 'LR',
-      graphScope: 'auto',
+      graphEdges: 'directed',
+      graphFocusMode: 'redraw',
     }
 
     function readViewState(cwd) {
@@ -429,30 +433,43 @@ window.__ModuleLoader__.load({
      * 换来三件事：对称边带关系名、强弱靠线型、节点 id 与 issue 一一对应（`byNode`）。
      *
      * **文本与焦点无关**：聚焦只改渲染出来的 class，不重排（见 GraphPanel）。
-     * 会让文本变的只有显式操作：方向（`LR`/`TB`）与范围（结构 / 全部 / 焦点）。
+     * 会让文本变的只有显式操作：方向（`LR`/`TB`）、边筛（有向 / 全部）、聚焦呈现（重画 / 淡化）。
      *
-     * `scope === 'structure'` 只画有向关系（`caused-by` / `blocks` / `part-of` / `supersedes`），
+     * `edges === 'directed'` 只画有明确方向的声明（`caused-by` / `blocks` / `part-of` / `supersedes`），
      * 把无向的 `relates-to` 连同“只挂在它上面”的节点一起收起来——实测 58 节点里 53 条边是
      * `relates-to`，去掉后交叉从 112 降到 0（见 docs/issues/kiln-graph-readability.md）。
      *
-     * `scope === 'focus'` 换一种聚焦表现：不淡化，而是**以焦点为中心重画**，只留焦点与它的一跳
-     * 邻居（任意关系类型）。这样屏幕上没有“亮线连着暗节点”的错位，代价是整张图重排。
+     * `focusMode === 'redraw'` 换一种聚焦表现：不淡化，而是**以焦点为中心重画**，只留焦点与它的一跳
+     * 邻居。这样屏幕上没有“亮线连着暗节点”的错位，代价是整张图重排。
      */
-    function buildMermaid(issues, relations, direction = 'LR', scope = 'structure', focusId = null) {
-      const focusOnly = scope === 'focus' && focusId !== null
-      const structureOnly = scope === 'structure'
-      const kept = focusOnly
-        ? relations.filter((relation) => relation.a === focusId || relation.b === focusId)
-        : structureOnly
-          ? relations.filter((relation) => relation.directed !== false)
-          : relations
+    function buildMermaid(issues, relations, direction = 'LR', edges = 'directed', focusId = null, focusMode = 'dim') {
+      const filtered = edges === 'all' ? relations : relations.filter((relation) => relation.directed !== false)
+      let kept = filtered
+      let widened = false
+      let focusRedraw = false
+
+      if (focusMode === 'redraw' && focusId !== null) {
+        const near = filtered.filter((relation) => relation.a === focusId || relation.b === focusId)
+        if (near.length > 0) {
+          kept = near
+          focusRedraw = true
+        } else if (filtered.length < relations.length) {
+          // 焦点只挂在被筛掉的弱关联上：临时放开筛选，否则画出来是个空图
+          kept = relations.filter((relation) => relation.a === focusId || relation.b === focusId)
+          widened = true
+          focusRedraw = true
+        } else {
+          focusRedraw = true // 焦点确实没有任何关系：留它自己一个点
+        }
+      }
+
       const touched = new Set()
       for (const relation of kept) {
         touched.add(relation.a)
         touched.add(relation.b)
       }
-      if (focusOnly) touched.add(focusId)
-      const visible = structureOnly || focusOnly ? issues.filter((issue) => touched.has(issue.id)) : issues
+      if (focusRedraw) touched.add(focusId)
+      const visible = edges === 'all' ? issues : issues.filter((issue) => touched.has(issue.id))
 
       const nodeOf = new Map()
       const byNode = new Map()
@@ -502,6 +519,8 @@ window.__ModuleLoader__.load({
         nodeOf,
         byNode,
         dropped,
+        widened,
+        focusRedraw,
         hidden: { edges: relations.length - kept.length, nodes: issues.length - visible.length },
       }
     }
@@ -845,23 +864,16 @@ window.__ModuleLoader__.load({
      */
     function GraphPanel(props) {
       const direction = props.direction === 'TB' ? 'TB' : 'LR'
-      const requested = props.scope
-      // 自动：无焦点用结构、有焦点用焦点取景（用户定的两条默认）
-      const scope = requested === 'auto' || requested === undefined ? (props.focusId === null ? 'structure' : 'focus') : requested
-      const focusMode = scope === 'focus' && props.focusId !== null
-      // 焦点优先：结构取景里被筛掉的节点可能是焦点自己（`~/kiln` 有 32 个只挂弱关联的），
-      // 那种情况下临时按“全部”画，否则会出现“点了 c、图上找不到 c”。
-      const widened =
-        scope === 'structure' && props.focusId !== null && !touchesDirected(props.focusId, props.relations)
-      // 选了「焦点」但还没聚焦：退回结构取景，别用“全部”糊人
-      const effective = scope === 'focus' && props.focusId === null ? 'structure' : widened ? 'all' : scope
+      const edges = props.edges === 'all' ? 'all' : 'directed'
+      const focusMode = props.focusMode === 'dim' ? 'dim' : 'redraw'
       const built = React.useMemo(
-        () => buildMermaid(props.issues, props.relations, direction, effective, props.focusId),
-        [props.issues, props.relations, direction, effective, props.focusId],
+        () => buildMermaid(props.issues, props.relations, direction, edges, props.focusId, focusMode),
+        [props.issues, props.relations, direction, edges, props.focusId, focusMode],
       )
+      // 重画时整张图就是焦点的一圈，不必再分档；只有“淡化”才需要 tier
       const tiers = React.useMemo(
-        () => (props.focusId === null || focusMode ? null : graphTiers(props.focusId, props.relations)),
-        [props.focusId, props.relations, focusMode],
+        () => (props.focusId === null || built.focusRedraw ? null : graphTiers(props.focusId, props.relations)),
+        [props.focusId, props.relations, built.focusRedraw],
       )
       const hostRef = React.useRef(null)
       const [phase, setPhase] = React.useState('idle')
@@ -935,31 +947,28 @@ window.__ModuleLoader__.load({
           onClick,
         }),
         phase === 'ready' ? null : h('pre', { className: 'dkf-mermaid' }, built.source),
-        scope === 'focus' && props.focusId === null
-          ? h('p', { className: 'dkf-note' }, '「焦点」取景要先选一个 issue：点节点、或到列表里点一行。')
-          : null,
-        focusMode
+        built.focusRedraw && props.focusId !== null
           ? h(
               'p',
               { className: 'dkf-note' },
               `焦点取景：只画 ${props.focusId} 与它的 ${Math.max(0, built.byNode.size - 1)} 个邻居。`,
             )
           : null,
-        widened
+        built.widened
           ? h(
               'p',
               { className: 'dkf-note' },
-              `焦点 ${props.focusId} 只挂在弱关联上，已临时按「全部」画——结构里没有它。`,
+              `焦点 ${props.focusId} 只挂在无向的 relates-to 上，这一张临时放开「有向」筛选。`,
             )
           : null,
-        effective === 'structure' && built.hidden.edges > 0
+        edges === 'directed' && !built.focusRedraw && built.hidden.edges > 0
           ? h(
               'p',
               { className: 'dkf-note' },
-              `已隐藏 ${built.hidden.edges} 条弱关联（无向）、${built.hidden.nodes} 个只挂在弱关联上的 issue。`,
+              `已隐藏 ${built.hidden.edges} 条无向关联、${built.hidden.nodes} 个只挂在它们上面的 issue。`,
               h(
                 'button',
-                { type: 'button', className: 'dkf-toggle', onClick: () => props.onScope('all') },
+                { type: 'button', className: 'dkf-toggle', onClick: () => props.onEdges('all') },
                 ' 显示全部',
               ),
             )
@@ -1019,10 +1028,16 @@ window.__ModuleLoader__.load({
               onSelect: props.onDirection,
             }),
             h(Segmented, {
-              label: '图的取景范围',
-              options: GRAPH_SCOPES,
-              active: props.scope === 'all' || props.scope === 'focus' || props.scope === 'structure' ? props.scope : 'auto',
-              onSelect: props.onScope,
+              label: '边',
+              options: GRAPH_EDGES,
+              active: props.edges === 'all' ? 'all' : 'directed',
+              onSelect: props.onEdges,
+            }),
+            h(Segmented, {
+              label: '聚焦时',
+              options: GRAPH_FOCUS,
+              active: props.focusMode === 'dim' ? 'dim' : 'redraw',
+              onSelect: props.onFocusMode,
             }),
           ),
           h(GraphPanel, {
@@ -1030,8 +1045,9 @@ window.__ModuleLoader__.load({
             relations: props.relations,
             focusId: props.focusId,
             direction: props.direction,
-            scope: props.scope,
-            onScope: props.onScope,
+            edges: props.edges,
+            focusMode: props.focusMode,
+            onEdges: props.onEdges,
             onFocus: props.onFocus,
           }),
         )
@@ -1187,7 +1203,8 @@ window.__ModuleLoader__.load({
       const [expandedChildren, setExpandedChildren] = React.useState(false)
       const [relationMode, setRelationMode] = React.useState(memory.relationMode ?? 'graph')
       const [graphDirection, setGraphDirection] = React.useState(memory.graphDirection === 'TB' ? 'TB' : 'LR')
-      const [graphScope, setGraphScope] = React.useState(['structure', 'all', 'focus'].includes(memory.graphScope) ? memory.graphScope : 'auto')
+      const [graphEdges, setGraphEdges] = React.useState(memory.graphEdges === 'all' ? 'all' : 'directed')
+      const [graphFocusMode, setGraphFocusMode] = React.useState(memory.graphFocusMode === 'dim' ? 'dim' : 'redraw')
 
       const selectTab = (id) => {
         setTabId(id)
@@ -1211,11 +1228,16 @@ window.__ModuleLoader__.load({
         setGraphDirection(value)
         writeViewState(cwd, { graphDirection: value })
       }
-      /** 取景范围：自动 / 结构 / 全部 / 焦点；后三档是显式重排，自动则跟着焦点走。 */
-      const selectScope = (id) => {
-        const value = ['structure', 'all', 'focus'].includes(id) ? id : 'auto'
-        setGraphScope(value)
-        writeViewState(cwd, { graphScope: value })
+      /** 边筛 / 聚焦呈现：两个独立维度，都按仓库记忆。 */
+      const selectEdges = (id) => {
+        const value = id === 'all' ? 'all' : 'directed'
+        setGraphEdges(value)
+        writeViewState(cwd, { graphEdges: value })
+      }
+      const selectFocusMode = (id) => {
+        const value = id === 'dim' ? 'dim' : 'redraw'
+        setGraphFocusMode(value)
+        writeViewState(cwd, { graphFocusMode: value })
       }
       /** 点同一行再点一次收起；同时只保留一个展开项。 */
       const toggleExpand = (next) => {
@@ -1382,7 +1404,8 @@ window.__ModuleLoader__.load({
             groups: globalGroups,
             mode: relationMode,
             direction: graphDirection,
-            scope: graphScope,
+            edges: graphEdges,
+            focusMode: graphFocusMode,
             issues,
             relations,
             focusId: focus === null ? null : focus.id,
@@ -1393,7 +1416,8 @@ window.__ModuleLoader__.load({
             onFocus: focusIssue,
             onMode: selectMode,
             onDirection: selectDirection,
-            onScope: selectScope,
+            onEdges: selectEdges,
+            onFocusMode: selectFocusMode,
             onToggleWeak: () => setExpandedWeak((value) => !value),
             onToggleChildren: () => setExpandedChildren((value) => !value),
           })
