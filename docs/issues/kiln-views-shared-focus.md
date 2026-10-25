@@ -25,7 +25,8 @@
 
 ### 焦点语义
 
-- **来源**：任意页点行、点边；无焦点时默认“最近一次动作的 issue”；
+- **来源**：任意页点行、点边；**默认不聚焦（全局面）**——旧设计里“默认最近提交的 issue”
+  会让全景一进来就被藏起来，见假设 3；
 - **共享**：切页不丢，三页同时收窄；
 - **清除**：必须有“退出聚焦 / 全局面”，否则进去出不来；
 - **返回**：内存返回栈至少一级（`kiln-flow-focus-ui` 的旧验收，继续有效）；
@@ -299,6 +300,43 @@ key = repo + HEAD + configToken(.kilnconfig.jsonc 的 mtime+size) + binToken(kil
   看响应头从 `build` 变成 `incremental`。
 
 未完成：三页 UI 与共享焦点（第 2 步）。
+
+## 假设（hypothesize 3）：默认不聚焦，也不做页签记忆
+
+- **进入视图不自动聚焦**。三页的主场景是“看全景”：timeline 看全部动作、issue 看全部行、relation 看全部边。
+  旧 `kiln-flow-focus-ui` 的“默认焦点 = 最近动作的 issue”只在单视图时代成立（那时视图本身就是焦点子图）；
+  现在自动聚焦会把全景一进来就缩成子集，用户每次都得先退出。所以默认 `focusId = null`，
+  聚焦只能由用户点出来。
+- **不做 `tabHistory`（页签记忆）**。上一轮已定“切焦点不换页”，页签不会因为焦点变化被切换，
+  recency 记忆没有用处；只保留一个 `tabId` 的 `useState`。
+- **风险**：可能有人希望“打开就是上次看的 issue”，但那需要落盘，与“不落盘”直接冲突，故不做。
+
+## 落地（第 2 步）：三页与共享焦点
+
+`plugin/lib/client.js` 重写为一个 tab 内的三段 tablist + 共享焦点：
+
+- **tablist**：`role="tablist"` / `role="tab"`（`aria-controls`）/ `role="tabpanel"`（`aria-labelledby`），
+  roving `tabIndex`、`←/→` 循环、`Home/End`、切完把焦点移到新页签（照 `dsh-client-ui-schedule` 的约定）；
+- **timeline**：`issues[].actions` 拍平 → 时间倒序 → 一行一条；行内是动作色条、所属 issue（可点聚焦）、
+  action 徽标、完整标题、7 位短 sha、相对时间；同刻按 issue id + ordinal 稳定排序；
+- **issue**：一行一条，按最近动作排序；聚焦时把焦点钉在第一行，只留焦点与相关 issue；
+- **relation**：无焦点时按关系分组的全局边表（`from rel to`，两端都可点聚焦）；有焦点时是
+  焦点行 + `part-of` 面包屑/子项（>4 折叠）+ 强关联分组 + 弱关联折叠；
+- **焦点**：`focusId` 一个 `useState`，三页共用；头部有 `焦点：<id> ×` 可退出；切焦点时收起展开态；
+  焦点不在快照里（截断/消失）时给 `dkf-warn` 提示并能回全局；
+- 取数只依赖 `[cwd, nonce]`：切页、切焦点都不发请求（浏览器不传 `focus` 参数）。
+
+验证：
+
+- `plugin/test/render.mjs`：用极简 React 替身真实渲染三页共 10 个用例（tablist 结构、timeline 行数与
+  聚焦收窄、issue 行、relation 全局与聚焦、焦点失效提示）——全绿；
+- `plugin/test/run.mjs`：24 个用例（失效决策、增量合并、trailer 解析、client 模块装配）——全绿；
+- **仍未验证**：真实 CSS 布局、键盘事件、异步取数（渲染替身不执行 effect）。这三项需要你在浏览器里看一眼。
+
+遗留：
+
+- relation 的全局态目前是**分组边表**，不是空间布局图；要不要做图形布局（含 SCC 收缩）另议；
+- 无作者展示（`kiln path --json` 没有该字段）。
 
 ## 边界（不做）
 

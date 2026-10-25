@@ -1,9 +1,13 @@
 /**
  * Client half：在会话顶部标签排（对话 / 轨迹 / 上下文）末尾加一个 `kiln` 标签。
  *
- * 视图是只读的 Flow 初稿：第一行是焦点 issue（默认最近一次动作的那条），下面按关系
- * 强弱依次排开——part-of 缩进/面包屑、blocks、supersedes、caused-by，relates-to 折叠。
- * 数据来自宿主路由 `/kiln/flow`，本文件不直接碰文件系统。
+ * 标签内是三个平级页面，共用同一个焦点 issue：
+ *   timeline —— 一行一个 action，按时间倒序（只算带 issue: + action: 的提交）
+ *   issue    —— 一行一个 issue，按最近动作排序
+ *   relation —— 关系边；无焦点看全局，有焦点看以焦点为中心的一跳子图
+ *
+ * 焦点只存在内存里：切页不丢、刷新回全局；不进 URL。数据来自宿主路由 `/kiln/flow`，
+ * 本文件不直接碰文件系统。
  */
 window.__ModuleLoader__.load({
   id: '@local/dsh-kiln',
@@ -14,14 +18,14 @@ window.__ModuleLoader__.load({
     const STYLE_ID = 'dsh-kiln-flow-style'
     const FLOW_URL = '/kiln/flow'
 
-    /** kanonical 关系：a 与 b 之间是谁对谁，只认词表里的五种。 */
+    /** 关系词表：宿主只回原始边，方向与强弱在这里推导（不在宿主判断“什么算重要”）。 */
     const INVERSE = {
       'has-part': 'part-of',
       'blocked-by': 'blocks',
       'superseded-by': 'supersedes',
       causes: 'caused-by',
     }
-    /** 关系强弱：ordering 槽整体强于 lineage 槽；组内 rank 越大越强。 */
+    /** 强弱：ordering 槽整体强于 lineage 槽；组内 rank 越大越强。 */
     const GROUPS = [
       { rel: 'part-of', slot: 'ordering', rank: 2, label: '母 issue', edge: 'part-of' },
       { rel: 'blocks', slot: 'ordering', rank: 1, label: '阻塞', edge: 'blocks' },
@@ -29,6 +33,7 @@ window.__ModuleLoader__.load({
       { rel: 'caused-by', slot: 'lineage', rank: 2, label: '因果', edge: 'caused-by' },
       { rel: 'relates-to', slot: 'lineage', rank: 1, label: '弱关联', edge: 'relates-to' },
     ]
+    /** 颜色只由 action 类型决定；三页共用同一张表。词表外的动作给中性色，不猜。 */
     const ACTION_COLOR = {
       ask: '#5b8def',
       hypothesize: '#9a6bff',
@@ -37,6 +42,12 @@ window.__ModuleLoader__.load({
       conclude: '#35a35f',
       apply: '#35a35f',
     }
+    const NEUTRAL = 'var(--dsw-alias-border-l3,#bbb)'
+    const PAGES = [
+      { id: 'timeline', label: '时间线' },
+      { id: 'issue', label: 'issue' },
+      { id: 'relation', label: '关系' },
+    ]
 
     const CSS = `
 .dkf-root{display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#111)}
@@ -46,16 +57,19 @@ window.__ModuleLoader__.load({
 .dkf-spacer{flex:1}
 .dkf-refresh{border:.5px solid var(--dsw-alias-border-l2,#ddd);background:0 0;color:var(--dsw-alias-label-secondary,#666);border-radius:4px;font:12px/18px var(--dsw-font-family,inherit);padding:1px 8px;cursor:pointer}
 .dkf-refresh:hover{color:var(--dsw-alias-label-primary,#111);background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
+.dkf-focuschip{all:unset;cursor:pointer;color:var(--dsw-alias-label-primary,#111);font:12px/18px var(--dsw-font-family-code,monospace);border:.5px solid var(--dsw-alias-border-l3,#ccc);border-radius:10px;padding:1px 8px;white-space:nowrap;max-width:320px;overflow:hidden;text-overflow:ellipsis}
+.dkf-focuschip:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
+.dkf-tabs{display:flex;gap:2px;padding:0 14px;border-bottom:.5px solid var(--dsw-alias-border-l2,#e3e3e3);flex:none}
+.dkf-tab{all:unset;cursor:pointer;padding:5px 10px;border-radius:4px 4px 0 0;color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family,inherit)}
+.dkf-tab:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
+.dkf-tab-active{color:var(--dsw-alias-label-primary,#111);box-shadow:inset 0 -2px 0 var(--dsw-alias-label-primary,#111)}
 .dkf-scroll{flex:1;min-height:0;overflow:auto;padding:10px 14px 32px}
 .dkf-note{color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family,inherit);margin:0 0 6px}
-.dkf-error{margin:18px 0;padding:12px 14px;border:.5px solid var(--dsw-alias-border-l2,#e3e3e3);border-radius:6px;background:var(--dsw-alias-bg-layer-2,#fafafa)}
-.dkf-error-title{font:600 13px/20px var(--dsw-font-family,inherit);margin:0 0 4px}
-.dkf-error-detail{color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family-code,monospace);word-break:break-all;margin:0}
-.dkf-group{margin:14px 0 0}
-.dkf-group-head{display:flex;align-items:center;gap:6px;color:var(--dsw-alias-label-tertiary,#999);font:11px/16px var(--dsw-font-family,inherit);text-transform:uppercase;letter-spacing:.04em;margin:0 0 4px 2px}
-.dkf-group-count{color:var(--dsw-alias-label-tertiary,#999)}
-.dkf-toggle{all:unset;cursor:pointer;color:var(--dsw-alias-label-secondary,#666);font:11px/16px var(--dsw-font-family,inherit)}
-.dkf-toggle:hover{color:var(--dsw-alias-label-primary,#111)}
+.dkf-warn{color:#b4690e;font:12px/18px var(--dsw-font-family,inherit);margin:0 0 6px}
+.dkf-error{margin:8px 0;padding:10px 12px;border:.5px solid var(--dsw-alias-border-l2,#e3e3e3);border-radius:6px}
+.dkf-error-title{margin:0 0 4px;font:500 13px/20px var(--dsw-font-family,inherit)}
+.dkf-error-detail{margin:0;color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family-code,monospace);word-break:break-all}
+.dkf-list{display:flex;flex-direction:column}
 .dkf-row{display:grid;grid-template-columns:auto auto auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:5px 6px;border-radius:4px;min-width:0}
 .dkf-row:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
 .dkf-focus{border:.5px solid var(--dsw-alias-border-l3,#ccc);background:var(--dsw-alias-bg-layer-2,#fafafa);margin-bottom:2px}
@@ -74,6 +88,21 @@ window.__ModuleLoader__.load({
 .dkf-title{color:var(--dsw-alias-label-primary,#111);font:12px/18px var(--dsw-font-family,inherit);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .dkf-ago{color:var(--dsw-alias-label-tertiary,#999);font:11px/16px var(--dsw-font-family,inherit);white-space:nowrap}
 .dkf-empty{color:var(--dsw-alias-label-tertiary,#999);font:12px/18px var(--dsw-font-family,inherit);margin:6px 2px}
+.dkf-group{margin:10px 0 0}
+.dkf-group-head{display:flex;align-items:center;gap:6px;color:var(--dsw-alias-label-tertiary,#999);font:11px/16px var(--dsw-font-family,inherit);text-transform:uppercase;letter-spacing:.04em;margin:0 0 4px 2px}
+.dkf-toggle{all:unset;cursor:pointer;color:var(--dsw-alias-label-secondary,#666);font:11px/16px var(--dsw-font-family,inherit)}
+.dkf-toggle:hover{color:var(--dsw-alias-label-primary,#111)}
+.dkf-arow{display:grid;grid-template-columns:3px auto auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:4px 6px;border-radius:4px;min-width:0}
+.dkf-arow:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
+.dkf-abar{width:3px;height:16px;border-radius:2px;background:${NEUTRAL}}
+.dkf-aissue{all:unset;cursor:pointer;color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family-code,monospace);white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.dkf-aissue:hover{color:var(--dsw-alias-label-primary,#111);text-decoration:underline}
+.dkf-achip{font:10px/16px var(--dsw-font-family,inherit);padding:0 5px;border-radius:3px;border:.5px solid currentColor;white-space:nowrap}
+.dkf-atitle{color:var(--dsw-alias-label-primary,#111);font:12px/18px var(--dsw-font-family,inherit);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.dkf-ashort{font:10px/16px var(--dsw-font-family-code,monospace);color:var(--dsw-alias-label-tertiary,#999)}
+.dkf-grow{display:flex;align-items:center;gap:2px;padding:3px 6px;border-radius:4px;flex-wrap:wrap}
+.dkf-grow:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
+.dkf-panel{display:flex;flex-direction:column;min-height:0}
 `
 
     /** 样式只注入一次；插件卸载不回收（无害），重载复用同一节点。 */
@@ -110,7 +139,11 @@ window.__ModuleLoader__.load({
       return `${Math.floor(delta / (365 * day))} 年前`
     }
 
-    /** 把一条 graph 边归一成 (a 关系 b)；反向名翻转端点。 */
+    function colorOf(action) {
+      return ACTION_COLOR[action] ?? NEUTRAL
+    }
+
+    /** 把一条 graph 边归一成 (a 关系 b)；反向名翻转端点，词表外的名字丢弃。 */
     function canonical(edge) {
       const name = String(edge?.name ?? '')
       if (name === 'relates-to') return { a: edge.from, b: edge.to, rel: 'relates-to', directed: false }
@@ -122,24 +155,30 @@ window.__ModuleLoader__.load({
       return null
     }
 
-    /**
-     * 以 focus 为根，把关系边折成“面包屑 + 分组邻居”。
-     * part-of 蕴含的 blocks 边在这里被 part-of 覆盖掉，不重复显示。
-     */
-    function relate(focus, edges) {
-      const parent = []
-      const children = []
-      const groups = new Map(GROUPS.map((group) => [group.rel, []]))
-      const pairs = new Map()
-
+    /** 归一 + 去重（同一 (a, rel, b) 只留一条）。 */
+    function canonicalEdges(edges) {
+      const seen = new Set()
+      const out = []
       for (const edge of edges) {
         const relation = canonical(edge)
         if (relation === null) continue
-        const pairKey = `${relation.rel}|${relation.a}|${relation.b}`
-        if (pairs.has(pairKey)) continue
-        pairs.set(pairKey, relation)
+        const key = `${relation.rel}|${relation.a}|${relation.b}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push(relation)
       }
-      const relations = [...pairs.values()]
+      return out
+    }
+
+    /**
+     * 以 focus 为根折成“面包屑 + 分组邻居”，并给出本次取景的 issue 集合。
+     * part-of 蕴含的 blocks 边被 part-of 覆盖，不重复显示。
+     */
+    function relatedOf(focus, relations) {
+      const parent = []
+      const children = []
+      const groups = new Map(GROUPS.map((group) => [group.rel, []]))
+      const ids = new Set([focus])
 
       const partOfPairs = new Set()
       for (const relation of relations) {
@@ -166,22 +205,88 @@ window.__ModuleLoader__.load({
           groups.get('relates-to').push({ id: relation.a === focus ? relation.b : relation.a, arrow: '⇄' })
           continue
         }
-        if (relation.rel === 'supersedes') {
+        if (relation.rel === 'supersedes' || relation.rel === 'caused-by') {
           const other = relation.a === focus ? relation.b : relation.b === focus ? relation.a : null
           if (other === null) continue
-          groups.get('supersedes').push({ id: other, arrow: relation.a === focus ? '→' : '←' })
-          continue
-        }
-        if (relation.rel === 'caused-by') {
-          const other = relation.a === focus ? relation.b : relation.b === focus ? relation.a : null
-          if (other === null) continue
-          groups.get('caused-by').push({ id: other, arrow: relation.a === focus ? '→' : '←' })
+          groups.get(relation.rel).push({ id: other, arrow: relation.a === focus ? '→' : '←' })
         }
       }
 
-      return { parent, children, groups }
+      for (const id of parent) ids.add(id)
+      for (const id of children) ids.add(id)
+      for (const list of groups.values()) for (const entry of list) ids.add(entry.id)
+      return { parent, children, groups, ids }
     }
 
+    /** 全局关系视图：按词表顺序分组，词表外的名字原样归到“未登记”。 */
+    function globalRelationRows(relations) {
+      const known = new Set(GROUPS.map((group) => group.rel))
+      const rows = []
+      for (const group of GROUPS) {
+        const matched = relations.filter((relation) => relation.rel === group.rel)
+        if (matched.length > 0) {
+          rows.push({ rel: group.rel, label: group.label, edge: group.edge, rows: matched })
+        }
+      }
+      const unknown = relations.filter((relation) => !known.has(relation.rel))
+      if (unknown.length > 0) rows.push({ rel: 'unknown', label: '未登记', edge: '?', rows: unknown })
+      return rows
+    }
+
+    /** 三页共用的“相关集”：焦点 + 一跳邻居。 */
+    function scopedIssues(issues, view) {
+      if (view === null) return issues
+      return issues.filter((issue) => view.ids.has(issue.id))
+    }
+
+    function flattenActions(issues) {
+      const rows = []
+      for (const issue of issues) {
+        const actions = Array.isArray(issue.actions) ? issue.actions : []
+        for (const action of actions) {
+          rows.push({
+            issueId: issue.id,
+            action: action.action,
+            title: action.title,
+            date: action.date,
+            short: action.short,
+            ordinal: action.ordinal,
+          })
+        }
+      }
+      return rows
+    }
+
+    /** 时间倒序；同刻按 issue id、再按 ordinal 稳定排序，刷新不乱跳。 */
+    function sortActions(rows) {
+      return rows.slice().sort((left, right) => {
+        const leftDate = left.date ?? ''
+        const rightDate = right.date ?? ''
+        if (leftDate !== rightDate) return leftDate < rightDate ? 1 : -1
+        if (left.issueId !== right.issueId) return left.issueId < right.issueId ? -1 : 1
+        return (left.ordinal ?? 0) - (right.ordinal ?? 0)
+      })
+    }
+
+    /** 按最近动作排序；有焦点时把焦点的行钉在第一条。 */
+    function sortIssues(issues, pinId) {
+      const sorted = issues.slice().sort(byRecency)
+      if (pinId === null) return sorted
+      const index = sorted.findIndex((issue) => issue.id === pinId)
+      if (index <= 0) return sorted
+      const pinned = sorted.splice(index, 1)[0]
+      return [pinned, ...sorted]
+    }
+
+    /** 组内按最近动作时间排序；没有日期的排最后。 */
+    function byRecency(left, right) {
+      const leftDate = left.last?.date ?? ''
+      const rightDate = right.last?.date ?? ''
+      if (leftDate === rightDate) return left.id.localeCompare(right.id)
+      return leftDate < rightDate ? 1 : -1
+    }
+
+    /** 焦点行下方的迷你动作条：最近 12 个，更早的折成 +k。 */
     function strip(actions) {
       if (!Array.isArray(actions) || actions.length === 0) return null
       const visible = actions.slice(-12)
@@ -194,7 +299,7 @@ window.__ModuleLoader__.load({
           h('span', {
             key: `${action.ordinal}-${index}`,
             className: cls('dkf-block', index === visible.length - 1 && 'dkf-block-current'),
-            style: { background: ACTION_COLOR[action.action] ?? undefined },
+            style: { background: colorOf(action.action) },
             title: `${action.ordinal}. ${action.action} · ${action.date} · ${action.title ?? ''}`,
           }),
         ),
@@ -223,7 +328,7 @@ window.__ModuleLoader__.load({
           'span',
           { className: 'dkf-badges' },
           issue.domain ? h('span', { className: 'dkf-chip' }, issue.domain) : null,
-          h('span', { className: 'dkf-chip', style: { color: ACTION_COLOR[issue.action] ?? undefined } }, issue.action || '?'),
+          h('span', { className: 'dkf-chip', style: { color: colorOf(issue.action) } }, issue.action || '?'),
           issue.done ? h('span', { className: 'dkf-chip dkf-chip-done' }, 'done') : null,
         ),
         h('span', { className: 'dkf-title' }, last?.title || issue.title || '（无标题）'),
@@ -231,21 +336,233 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** 组内按最近动作时间排序；没有日期的排最后。 */
-    function byRecency(left, right) {
-      const leftDate = left.last?.date ?? ''
-      const rightDate = right.last?.date ?? ''
-      if (leftDate === rightDate) return left.id.localeCompare(right.id)
-      return leftDate < rightDate ? 1 : -1
+    /** timeline 的一行：动作色条 + 所属 issue + action + 完整标题 + 短 sha + 相对时间。 */
+    function ActionRow(props) {
+      const row = props.row
+      return h(
+        'div',
+        { className: 'dkf-arow' },
+        h('span', { className: 'dkf-abar', style: { background: colorOf(row.action) } }),
+        h(
+          'button',
+          { type: 'button', className: 'dkf-aissue', title: `聚焦 ${row.issueId}`, onClick: () => props.onFocus(row.issueId) },
+          row.issueId,
+        ),
+        h('span', { className: 'dkf-achip', style: { color: colorOf(row.action) } }, row.action || '?'),
+        h('span', { className: 'dkf-atitle', title: row.title }, row.title || '（无标题）'),
+        h('span', { className: 'dkf-ashort' }, row.short || ''),
+        h('span', { className: 'dkf-ago' }, ago(row.date)),
+      )
     }
 
-    function FlowView(props) {
+    /** 三页切换：官方 tablist 约定——roving tabindex + 方向键 + Home/End，切完焦点跟到新页签。 */
+    function PageTabs(props) {
+      const refs = React.useRef([])
+      const pages = props.pages
+      const idBase = props.idBase
+
+      function onKeyDown(event, index) {
+        if (event.altKey || event.ctrlKey || event.metaKey) return
+        let next = -1
+        if (event.key === 'ArrowRight') next = (index + 1) % pages.length
+        else if (event.key === 'ArrowLeft') next = (index - 1 + pages.length) % pages.length
+        else if (event.key === 'Home') next = 0
+        else if (event.key === 'End') next = pages.length - 1
+        if (next < 0) return
+        event.preventDefault()
+        props.onSelect(pages[next].id)
+        const node = refs.current[next]
+        if (node !== null && node !== undefined && typeof node.focus === 'function') node.focus()
+      }
+
+      return h(
+        'div',
+        { className: 'dkf-tabs', role: 'tablist', 'aria-label': 'kiln 视图' },
+        pages.map((page, index) => {
+          const selected = page.id === props.active
+          return h(
+            'button',
+            {
+              key: page.id,
+              type: 'button',
+              ref: (node) => {
+                refs.current[index] = node
+              },
+              role: 'tab',
+              id: `${idBase}-tab-${page.id}`,
+              'aria-controls': `${idBase}-panel`,
+              'aria-selected': selected,
+              tabIndex: selected ? 0 : -1,
+              className: cls('dkf-tab', selected && 'dkf-tab-active'),
+              onClick: () => props.onSelect(page.id),
+              onKeyDown: (event) => onKeyDown(event, index),
+            },
+            page.label,
+          )
+        }),
+      )
+    }
+
+    function TimelinePanel(props) {
+      if (props.rows.length === 0) return h('p', { className: 'dkf-empty' }, props.emptyText)
+      return h(
+        'div',
+        { className: 'dkf-list' },
+        props.rows.map((row, index) =>
+          h(ActionRow, { key: `${row.issueId}-${row.ordinal}-${index}`, row, onFocus: props.onFocus }),
+        ),
+      )
+    }
+
+    function IssuePanel(props) {
+      if (props.issues.length === 0) return h('p', { className: 'dkf-empty' }, props.emptyText)
+      return h(
+        'div',
+        { className: 'dkf-list' },
+        props.issues.map((issue) =>
+          h(IssueRow, {
+            key: issue.id,
+            issue,
+            focus: issue.id === props.focusId,
+            onClick: issue.id === props.focusId ? undefined : () => props.onFocus(issue.id),
+          }),
+        ),
+      )
+    }
+
+    /** 关系页：无焦点看全局边表；有焦点看以焦点为中心的一跳子图。 */
+    function RelationPanel(props) {
+      if (props.focus === null) {
+        if (props.groups.length === 0) return h('p', { className: 'dkf-empty' }, '还没有声明任何关系。')
+        return h(
+          'div',
+          null,
+          props.groups.map((group) =>
+            h(
+              'div',
+              { className: 'dkf-group', key: group.rel },
+              h('div', { className: 'dkf-group-head' }, `${group.label} · ${group.edge} ${group.rows.length}`),
+              group.rows.map((relation) =>
+                h(
+                  'div',
+                  { className: 'dkf-grow', key: `${relation.rel}-${relation.a}-${relation.b}` },
+                  h(
+                    'button',
+                    { type: 'button', className: 'dkf-aissue', onClick: () => props.onFocus(relation.a) },
+                    relation.a,
+                  ),
+                  h('span', { className: 'dkf-edge' }, ` ${relation.rel} `),
+                  h(
+                    'button',
+                    { type: 'button', className: 'dkf-aissue', onClick: () => props.onFocus(relation.b) },
+                    relation.b,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        )
+      }
+
+      const view = props.view
+      const children = view.children
+        .map((id) => props.byId.get(id))
+        .filter(Boolean)
+        .sort(byRecency)
+      const visibleChildren = props.expandedChildren || children.length <= 4 ? children : children.slice(0, 4)
+      const weak = view.groups.get('relates-to') ?? []
+      const strongGroups = GROUPS.filter((group) => group.rel !== 'part-of' && group.rel !== 'relates-to')
+
+      return h(
+        React.Fragment,
+        null,
+        h(IssueRow, { issue: props.focus, focus: true }),
+        view.parent.length > 0
+          ? h(
+              'div',
+              { className: 'dkf-crumb', onClick: () => props.onFocus(view.parent[0]), title: '切到母 issue' },
+              `↑ part-of: ${view.parent[0]}`,
+            )
+          : null,
+        children.length > 0
+          ? h(
+              'div',
+              { className: 'dkf-group' },
+              h(
+                'div',
+                { className: 'dkf-group-head' },
+                `子 issue · part-of ${children.length}`,
+                children.length > 4
+                  ? h(
+                      'button',
+                      { type: 'button', className: 'dkf-toggle', onClick: props.onToggleChildren },
+                      props.expandedChildren ? '收起' : `展开全部 ${children.length}`,
+                    )
+                  : null,
+              ),
+              visibleChildren.map((child) =>
+                h(IssueRow, { key: child.id, issue: child, indent: true, onClick: () => props.onFocus(child.id) }),
+              ),
+            )
+          : null,
+        strongGroups.map((group) => {
+          const rows = (view.groups.get(group.rel) ?? [])
+            .map((entry) => ({ entry, issue: props.byId.get(entry.id) }))
+            .filter((row) => row.issue !== undefined)
+            .sort((left, right) => byRecency(left.issue, right.issue))
+          if (rows.length === 0) return null
+          return h(
+            'div',
+            { className: 'dkf-group', key: group.rel },
+            h('div', { className: 'dkf-group-head' }, `${group.label} · ${group.edge} ${rows.length}`),
+            rows.map(({ entry, issue }) =>
+              h(IssueRow, {
+                key: `${group.rel}-${issue.id}`,
+                issue,
+                edge: `${entry.arrow} ${group.edge}`,
+                onClick: () => props.onFocus(issue.id),
+              }),
+            ),
+          )
+        }),
+        weak.length > 0
+          ? h(
+              'div',
+              { className: 'dkf-group' },
+              h(
+                'button',
+                { type: 'button', className: 'dkf-toggle', onClick: props.onToggleWeak },
+                props.expandedWeak ? '收起弱关联' : `+${weak.length} 弱关联 · relates-to`,
+              ),
+              props.expandedWeak
+                ? weak
+                    .map((entry) => props.byId.get(entry.id))
+                    .filter(Boolean)
+                    .sort(byRecency)
+                    .map((issue) =>
+                      h(IssueRow, {
+                        key: `weak-${issue.id}`,
+                        issue,
+                        edge: '⇄ relates-to',
+                        indent: true,
+                        onClick: () => props.onFocus(issue.id),
+                      }),
+                    )
+                : null,
+            )
+          : null,
+      )
+    }
+
+    function KilnView(props) {
       const cwd = typeof props.cwd === 'string' ? props.cwd : ''
+      const idBase = 'dsh-kiln-view'
       const [state, setState] = React.useState({ phase: 'loading', payload: null, error: null })
       const [nonce, setNonce] = React.useState(0)
+      const [focusId, setFocusId] = React.useState(null)
+      const [tabId, setTabId] = React.useState('timeline')
       const [expandedWeak, setExpandedWeak] = React.useState(false)
       const [expandedChildren, setExpandedChildren] = React.useState(false)
-      const [focusId, setFocusId] = React.useState(null)
 
       React.useEffect(() => {
         if (cwd === '') {
@@ -254,7 +571,7 @@ window.__ModuleLoader__.load({
         }
         const controller = new AbortController()
         setState((previous) => ({ phase: 'loading', payload: previous.payload, error: null }))
-        const url = `${FLOW_URL}?cwd=${encodeURIComponent(cwd)}${focusId !== null ? `&focus=${encodeURIComponent(focusId)}` : ''}`
+        const url = `${FLOW_URL}?cwd=${encodeURIComponent(cwd)}`
         fetch(url, { credentials: 'same-origin', signal: controller.signal })
           .then(async (response) => {
             const text = await response.text()
@@ -270,7 +587,6 @@ window.__ModuleLoader__.load({
               setState({ phase: 'unavailable', payload, error: null })
               return
             }
-            if (typeof payload.focus === 'string' && payload.focus !== '') setFocusId(payload.focus)
             setState({ phase: 'ready', payload, error: null })
           })
           .catch((error) => {
@@ -280,12 +596,25 @@ window.__ModuleLoader__.load({
         return () => controller.abort()
       }, [cwd, nonce])
 
+      // 切焦点时收起展开态：焦点换了，展开的是另一批邻居
+      React.useEffect(() => {
+        setExpandedWeak(false)
+        setExpandedChildren(false)
+      }, [focusId])
+
       const payload = state.payload
       const issues = payload?.ok === true && Array.isArray(payload.issues) ? payload.issues : []
-      const byId = React.useMemo(() => new Map(issues.map((issue) => [issue.id, issue])), [issues])
-      const focus = focusId !== null && byId.has(focusId) ? byId.get(focusId) : issues.length > 0 ? issues[0] : null
       const edges = payload?.ok === true && Array.isArray(payload.edges) ? payload.edges : []
-      const layout = React.useMemo(() => (focus === null ? null : relate(focus.id, edges)), [focus, edges])
+      const byId = React.useMemo(() => new Map(issues.map((issue) => [issue.id, issue])), [issues])
+      const missingFocus = focusId !== null && !byId.has(focusId)
+      const focus = focusId !== null && byId.has(focusId) ? byId.get(focusId) : null
+
+      const relations = React.useMemo(() => canonicalEdges(edges), [edges])
+      const view = React.useMemo(() => (focus === null ? null : relatedOf(focus.id, relations)), [focus, relations])
+      const scoped = React.useMemo(() => scopedIssues(issues, view), [issues, view])
+      const rows = React.useMemo(() => sortActions(flattenActions(scoped)), [scoped])
+      const issueList = React.useMemo(() => sortIssues(scoped, focus === null ? null : focus.id), [scoped, focus])
+      const globalGroups = React.useMemo(() => globalRelationRows(relations), [relations])
 
       const refresh = () => setNonce((value) => value + 1)
 
@@ -293,10 +622,28 @@ window.__ModuleLoader__.load({
         'div',
         { className: 'dkf-head' },
         h('span', { className: 'dkf-brand' }, 'kiln'),
-        h('span', { className: 'dkf-repo', title: cwd }, payload?.ok === true ? `${basename(cwd)} · ${issues.length} issue` : basename(cwd)),
+        h(
+          'span',
+          { className: 'dkf-repo', title: cwd },
+          payload?.ok === true ? `${basename(cwd)} · ${issues.length} issue` : basename(cwd),
+        ),
         h('span', { className: 'dkf-spacer' }),
+        focus !== null
+          ? h(
+              'button',
+              {
+                type: 'button',
+                className: 'dkf-focuschip',
+                onClick: () => setFocusId(null),
+                title: '退出聚焦，回到全局',
+              },
+              `焦点：${focus.id} ×`,
+            )
+          : null,
         h('button', { type: 'button', className: 'dkf-refresh', onClick: refresh }, '刷新'),
       )
+
+      const tabs = payload?.ok === true ? h(PageTabs, { pages: PAGES, active: tabId, onSelect: setTabId, idBase }) : null
 
       let body = null
       if (state.phase === 'loading' && payload === null) {
@@ -317,12 +664,13 @@ window.__ModuleLoader__.load({
         )
       } else if (state.phase === 'unavailable') {
         const reason = payload?.reason
-        const detail = {
-          'not-kiln-repo': '这个工作区不是 kiln 仓库（缺 .kilnconfig.jsonc）。以仓库根目录打开会话后再看。',
-          'kiln-missing': '宿主进程里找不到 kiln 可执行文件。把 kiln 放进 PATH，或设置 DSH_KILN_BIN。',
-          'kiln-error': payload?.message ?? 'kiln 命令失败。',
-          'invalid-dir': '工作区路径无效。',
-        }[reason] ?? `未知原因：${reason ?? 'unknown'}`
+        const detail =
+          {
+            'not-kiln-repo': '这个工作区不是 kiln 仓库（缺 .kilnconfig.jsonc）。以仓库根目录打开会话后再看。',
+            'kiln-missing': '宿主进程里找不到 kiln 可执行文件。把 kiln 放进 PATH，或设置 DSH_KILN_BIN。',
+            'kiln-error': payload?.message ?? 'kiln 命令失败。',
+            'invalid-dir': '工作区路径无效。',
+          }[reason] ?? `未知原因：${reason ?? 'unknown'}`
         body = h(
           'div',
           { className: 'dkf-error' },
@@ -330,101 +678,63 @@ window.__ModuleLoader__.load({
           h('p', { className: 'dkf-error-detail' }, detail),
           h('p', { className: 'dkf-error-detail' }, cwd),
         )
-      } else if (focus !== null && layout !== null) {
-        const groups = GROUPS.filter((group) => group.rel !== 'part-of' && group.rel !== 'relates-to')
-        const weak = layout.groups.get('relates-to') ?? []
-        const children = layout.children
-          .map((id) => byId.get(id))
-          .filter(Boolean)
-          .sort(byRecency)
-        const visibleChildren = expandedChildren || children.length <= 4 ? children : children.slice(0, 4)
+      } else {
+        let content = null
+        if (tabId === 'timeline') {
+          content = h(TimelinePanel, {
+            rows,
+            onFocus: setFocusId,
+            emptyText: focus === null ? '还没有任何 kiln 动作。' : '焦点与相关 issue 还没有动作。',
+          })
+        } else if (tabId === 'issue') {
+          content = h(IssuePanel, {
+            issues: issueList,
+            focusId: focus === null ? null : focus.id,
+            onFocus: setFocusId,
+            emptyText: focus === null ? '这个仓库还没有 issue。' : '焦点与相关 issue 为空。',
+          })
+        } else {
+          content = h(RelationPanel, {
+            focus,
+            view,
+            byId,
+            groups: globalGroups,
+            expandedWeak,
+            expandedChildren,
+            onFocus: setFocusId,
+            onToggleWeak: () => setExpandedWeak((value) => !value),
+            onToggleChildren: () => setExpandedChildren((value) => !value),
+          })
+        }
 
         body = h(
           React.Fragment,
           null,
-          h(IssueRow, { issue: focus, focus: true }),
-          layout.parent.length > 0
+          missingFocus
             ? h(
-                'div',
-                { className: 'dkf-crumb', onClick: () => setFocusId(layout.parent[0]), title: '切到母 issue' },
-                `↑ part-of: ${layout.parent[0]}`,
+                'p',
+                { className: 'dkf-warn' },
+                `焦点 ${focusId} 不在本次快照里（可能被截断或已消失）。`,
+                h('button', { type: 'button', className: 'dkf-toggle', onClick: () => setFocusId(null) }, ' 回到全局'),
               )
             : null,
-          payload.truncated === true
+          payload?.truncated === true
             ? h('p', { className: 'dkf-note' }, `共 ${payload.total ?? issues.length} 条 issue，只展示前 ${issues.length} 条。`)
             : null,
-          children.length > 0
-            ? h(
-                'div',
-                { className: 'dkf-group' },
-                h(
-                  'div',
-                  { className: 'dkf-group-head' },
-                  `子 issue · part-of ${children.length}`,
-                  children.length > 4
-                    ? h(
-                        'button',
-                        { type: 'button', className: 'dkf-toggle', onClick: () => setExpandedChildren((value) => !value) },
-                        expandedChildren ? '收起' : `展开全部 ${children.length}`,
-                      )
-                    : null,
-                ),
-                visibleChildren.map((child) => h(IssueRow, { key: child.id, issue: child, indent: true, onClick: () => setFocusId(child.id) })),
-              )
-            : null,
-          groups.map((group) => {
-            const rows = (layout.groups.get(group.rel) ?? [])
-              .map((entry) => ({ entry, issue: byId.get(entry.id) }))
-              .filter((row) => row.issue !== undefined)
-              .sort((left, right) => byRecency(left.issue, right.issue))
-            if (rows.length === 0) return null
-            return h(
-              'div',
-              { className: 'dkf-group', key: group.rel },
-              h('div', { className: 'dkf-group-head' }, `${group.label} · ${group.edge} ${rows.length}`),
-              rows.map(({ entry, issue }) =>
-                h(IssueRow, {
-                  key: `${group.rel}-${issue.id}`,
-                  issue,
-                  edge: `${entry.arrow} ${group.edge}`,
-                  onClick: () => setFocusId(issue.id),
-                }),
-              ),
-            )
-          }),
-          weak.length > 0
-            ? h(
-                'div',
-                { className: 'dkf-group' },
-                h(
-                  'button',
-                  { type: 'button', className: 'dkf-toggle', onClick: () => setExpandedWeak((value) => !value) },
-                  expandedWeak ? `收起弱关联` : `+${weak.length} 弱关联 · relates-to`,
-                ),
-                expandedWeak
-                  ? weak
-                      .map((entry) => byId.get(entry.id))
-                      .filter(Boolean)
-                      .sort(byRecency)
-                      .map((issue) =>
-                        h(IssueRow, {
-                          key: `weak-${issue.id}`,
-                          issue,
-                          edge: '⇄ relates-to',
-                          indent: true,
-                          onClick: () => setFocusId(issue.id),
-                        }),
-                      )
-                  : null,
-              )
-            : null,
-          layout.parent.length === 0 && children.length === 0 && groups.every((group) => (layout.groups.get(group.rel) ?? []).length === 0) && weak.length === 0
-            ? h('p', { className: 'dkf-empty' }, '还没有声明任何关系。')
-            : null,
+          h(
+            'div',
+            {
+              className: 'dkf-panel',
+              id: `${idBase}-panel`,
+              role: 'tabpanel',
+              'aria-labelledby': `${idBase}-tab-${tabId}`,
+            },
+            content,
+          ),
         )
       }
 
-      return h('div', { className: 'dkf-root' }, header, h('div', { className: 'dkf-scroll' }, body))
+      return h('div', { className: 'dkf-root' }, header, tabs, h('div', { className: 'dkf-scroll' }, body))
     }
 
     const inject = ['slots', 'sessions']
@@ -443,7 +753,7 @@ window.__ModuleLoader__.load({
               return { cwd: summary?.cwd ?? '' }
             },
           },
-          FlowView,
+          KilnView,
         ),
       )
     }
@@ -451,4 +761,3 @@ window.__ModuleLoader__.load({
     return { name: '@local/dsh-kiln', inject, apply }
   },
 })
-

@@ -14,7 +14,7 @@
     "cordis.patch.yml"
   ],
   "scripts": {
-    "test": "node test/run.mjs"
+    "test": "node test/run.mjs && node test/render.mjs"
   },
   "dsh": {
     "bundle": {

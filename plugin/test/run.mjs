@@ -306,6 +306,58 @@ await check('缓存：读不到 HEAD 时不缓存，但功能不降级', async (
   assert.ok(state.calls.includes('graph'), '无 HEAD 时每次都重建')
 })
 
+await check('client：能加载、导出形态正确、注册 id=kiln 的 conversation.view', async () => {
+  let loaded = null
+  globalThis.window = {
+    __ModuleLoader__: {
+      load: (definition) => {
+        loaded = definition
+      },
+    },
+  }
+  globalThis.document = {
+    // 返回非 null：ensureStyle 认为样式已注入，不去碰 DOM
+    getElementById: () => ({}),
+    createElement: () => ({}),
+  }
+  await import('../lib/client.js?wiring=1')
+  assert.equal(loaded?.id, '@local/dsh-kiln')
+
+  const reactStub = {
+    createElement: () => null,
+    Fragment: 'fragment',
+    useRef: (value) => ({ current: value }),
+    useState: (value) => [value, () => {}],
+    useEffect: () => {},
+    useMemo: (fn) => fn(),
+  }
+  const mod = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error(`意外的 require: ${name}`)
+  })
+  assert.equal(mod.name, '@local/dsh-kiln')
+  assert.deepEqual(mod.inject, ['slots', 'sessions'])
+
+  let registered = null
+  const ctx = {
+    slots: {
+      inject: (name, run) => {
+        assert.equal(name, 'conversation.view')
+        run()
+      },
+      register: (options, component) => {
+        registered = { options, component }
+      },
+    },
+    sessions: { list: { getSnapshot: () => ({ byId: {} }) } },
+  }
+  mod.apply(ctx)
+  assert.equal(registered?.options.id, 'kiln')
+  assert.equal(registered?.options.order, 30)
+  assert.equal(typeof registered?.component, 'function')
+  assert.deepEqual(registered?.options.inject('missing-session'), { cwd: '' })
+})
+
 // ---------------------------------------------------------------- 汇总
 
 console.log('')
