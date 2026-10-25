@@ -302,6 +302,11 @@ check('节点 id 能反查回 issue：data-id = n_<issue>', () => {
   for (const id of ['a', 'b', 'c']) assert.ok(source.includes(`  n_${id}["${id}"]`), source)
 })
 
+check('聚焦一个只挂弱关联的节点：它自己也必须在图上', () => {
+  const source = mermaidOf(render({ tabId: 'relation', focusId: 'c' }))
+  assert.ok(source.includes('n_c["c"]'), `焦点 c 被结构取景藏掉了：\n${source}`)
+})
+
 check('图与焦点：聚焦只落在容器的 data-focus 上（文本不变）', () => {
   const plain = render({ tabId: 'relation' })
   const focused = render({ tabId: 'relation', focusId: 'b' })
