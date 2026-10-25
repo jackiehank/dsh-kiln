@@ -109,6 +109,22 @@
   后者在 issue 页做，避免两页说同一件事；
 - relation 全域行是“边”、行主人不唯一，所以两端各给一个 `⌖ <id>` 端点按钮，不设行级展开。
 
+## 落地（apply）：两个动作拆开了
+
+- `plugin/lib/client.js`：
+  - **点行 = 展开**（互斥，再点收起）；issue 行的展开内容是它的动作列表（时间倒序、一行一条、带 title），
+    timeline 行的展开内容是这条提交的详情（完整 sha、第 n / m 步、refs、时间）；
+  - **行尾 `⌖ 聚焦`** 切焦点（hover / 行内聚焦时显形，`tabIndex=-1`）；头部 chip 与 `Esc` 退出；
+  - 列表 roving：容器 `tabIndex=0`、行 `data-row` + `tabIndex=-1`、`↑/↓` 走行、`Enter/Space` 展开、`f` 聚焦；
+  - issue 行前有 `▸/▾`（单独一列，保持 id 可复制）；
+  - `viewStates` 按仓库记住 **当前页 / 焦点 / 展开项**，切页回来接上；`snapshotCache` 继续负责取数；
+- `plugin/lib/flow.js`：`mapActions` 带上 `refs`（timeline 详情要显示）；
+- `plugin/test/render.mjs` 扩到 14 个用例：每行都有聚焦控件、行是 roving、issue 展开顺序（倒序）、
+  互斥（只有一个 ▾）、timeline 详情含完整 sha 与「2 / 2」。
+
+验证边界：渲染替身不执行 effect、不跑真实 CSS 与键盘事件，所以 **hover 显形、缩进对齐、
+`↑/↓`/`f`/`Esc` 手感、触屏可达性都还没实测**——需要浏览器里过一遍。
+
 ## 边界（不做）
 
 - 不做搜索框；

@@ -114,13 +114,14 @@ globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.
 await import('../lib/client.js?render=1')
 assert.equal(loaded?.id, '@local/dsh-kiln')
 
-/** 渲染一次：presets 依次喂给 KilnView 的 useState（phase/payload 等）。 */
-function render({ focusId = null, tabId = 'timeline' }) {
+/** 渲染一次：presets 依次喂给 KilnView 的 useState。 */
+function render({ focusId = null, tabId = 'timeline', expanded = null }) {
   const React = makeReact([
     { phase: 'ready', payload, error: null }, // state：直接给成 ready
     0, //                        nonce
-    focusId, //                  focusId
     tabId, //                    tabId
+    focusId, //                  focusId
+    expanded, //                 expanded（展开项）
     false, //                    expandedWeak
     false, //                    expandedChildren
   ])
@@ -248,6 +249,47 @@ check('relation 页聚焦：焦点行 + 一跳邻居行', () => {
   assert.equal(textOf(byClass(rows[0], 'dkf-id')[0]), 'b')
   const edges = byClass(focused, 'dkf-edge').map(textOf).join(' ')
   assert.match(edges, /caused-by/)
+})
+
+// ---------------------------------------------------------------- 展开与聚焦控件
+
+check('每行都有 `⌖ 聚焦` 控件，行本身是 roving（tabIndex -1）', () => {
+  const plain = render({})
+  const rows = byClass(plain, 'dkf-arow')
+  const buttons = byClass(plain, 'dkf-focusbtn')
+  assert.equal(buttons.length, rows.length)
+  assert.deepEqual(buttons.map(textOf), rows.map(() => '⌖ 聚焦'))
+  for (const row of rows) {
+    assert.equal(row.props.tabIndex, -1)
+    assert.equal(row.props['data-row'], '')
+  }
+})
+
+check('issue 页点开一行：展开它的动作，一行一条、时间倒序', () => {
+  const opened = render({ tabId: 'issue', expanded: { kind: 'issue', id: 'a' } })
+  const subRows = byClass(opened, 'dkf-subrow')
+  assert.equal(subRows.length, 2, 'a 有两个动作')
+  const titles = subRows.map((row) => textOf(byClass(row, 'dkf-atitle')[0]))
+  assert.match(titles[0], /apply/)
+  assert.match(titles[1], /ask/)
+})
+
+check('展开是互斥的：展开 a 时 b 不展开', () => {
+  const opened = render({ tabId: 'issue', expanded: { kind: 'issue', id: 'a' } })
+  const carets = byClass(opened, 'dkf-caret').map(textOf)
+  assert.equal(carets.filter((text) => text === '▾').length, 1, '只有一个展开标记')
+  assert.equal(carets.filter((text) => text === '▸').length, 2)
+})
+
+check('timeline 点开一行：展开该提交的详情（sha / 步骤 / 时间）', () => {
+  const sha = `${'a'.repeat(30)}${String(2).padStart(10, '0')}`
+  const opened = render({ expanded: { kind: 'action', id: sha } })
+  const details = byClass(opened, 'dkf-detail')
+  assert.equal(details.length, 1)
+  const text = textOf(details[0])
+  assert.match(text, /提交/)
+  assert.ok(text.includes(sha), '详情里应有完整 sha')
+  assert.match(text, /2 \/ 2/)
 })
 
 // ---------------------------------------------------------------- 汇总

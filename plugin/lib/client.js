@@ -6,8 +6,13 @@
  *   issue    —— 一行一个 issue，按最近动作排序
  *   relation —— 关系边；无焦点看全局，有焦点看以焦点为中心的一跳子图
  *
- * 焦点只存在内存里：切页不丢、刷新回全局；不进 URL。数据来自宿主路由 `/kiln/flow`，
- * 本文件不直接碰文件系统。
+ * 交互约定（三页一致）：
+ *   · 点行 = 展开（issue 展开它的 action 列表；timeline 展开这条提交的详情）
+ *   · 行尾 `⌖ 聚焦` = 切焦点；头部 `焦点：x ×` / Esc = 退出
+ *   · 列表内方向键走行、Enter 展开、f 聚焦
+ *
+ * 焦点、展开项与当前页都只存在内存里（按仓库）：切页会卸载视图，靠这份内存把状态接回来；
+ * 刷新页面即清空，不进 URL。数据来自宿主路由 `/kiln/flow`。
  */
 window.__ModuleLoader__.load({
   id: '@local/dsh-kiln',
@@ -50,8 +55,30 @@ window.__ModuleLoader__.load({
     ]
 
     /**
-     * 进程内的最近快照（按仓库路径）：切页会卸载整个视图，重挂载时先渲染这份，
-     * 再后台刷新（stale-while-revalidate）。只存在内存，刷新页面即清空。
+     * 每个仓库的视图内存：当前页、焦点、展开项。
+     * `conversation.view` 只渲染激活的那一个，切页会卸载整个视图，靠它把三样东西接回来。
+     */
+    const VIEW_STATE_LIMIT = 4
+    const viewStates = new Map()
+    const EMPTY_VIEW_STATE = { tabId: 'timeline', focusId: null, expanded: null }
+
+    function readViewState(cwd) {
+      return viewStates.get(cwd) ?? EMPTY_VIEW_STATE
+    }
+
+    function writeViewState(cwd, patch) {
+      if (cwd === '') return
+      const next = { ...readViewState(cwd), ...patch }
+      viewStates.set(cwd, next)
+      while (viewStates.size > VIEW_STATE_LIMIT) {
+        const oldest = viewStates.keys().next().value
+        viewStates.delete(oldest)
+      }
+    }
+
+    /**
+     * 最近一份成功快照（按仓库路径）：重挂载先渲染它再后台刷新（stale-while-revalidate）。
+     * 只存在内存，刷新页面即清空。
      */
     const SNAPSHOT_CACHE_LIMIT = 4
     const snapshotCache = new Map()
@@ -64,6 +91,11 @@ window.__ModuleLoader__.load({
         const oldest = snapshotCache.keys().next().value
         snapshotCache.delete(oldest)
       }
+    }
+
+    /** 展开项的键：优先用提交 sha；空提交退化成 issue#序号，避免多条空 sha 互相顶掉。 */
+    function actionKey(row) {
+      return typeof row.id === 'string' && row.id !== '' ? row.id : `${row.issueId}#${row.ordinal}`
     }
 
     const CSS = `
@@ -86,9 +118,10 @@ window.__ModuleLoader__.load({
 .dkf-error{margin:8px 0;padding:10px 12px;border:.5px solid var(--dsw-alias-border-l2,#e3e3e3);border-radius:6px}
 .dkf-error-title{margin:0 0 4px;font:500 13px/20px var(--dsw-font-family,inherit)}
 .dkf-error-detail{margin:0;color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family-code,monospace);word-break:break-all}
-.dkf-list{display:flex;flex-direction:column}
-.dkf-row{display:grid;grid-template-columns:auto auto auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:5px 6px;border-radius:4px;min-width:0}
+.dkf-list{display:flex;flex-direction:column;outline:none}
+.dkf-row{display:grid;grid-template-columns:auto auto auto auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:5px 6px;border-radius:4px;min-width:0;outline:none}
 .dkf-row:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
+.dkf-row:focus-visible{box-shadow:inset 0 0 0 1.5px var(--dsw-alias-state-business-primary,#4176e6)}
 .dkf-focus{border:.5px solid var(--dsw-alias-border-l3,#ccc);background:var(--dsw-alias-bg-layer-2,#fafafa);margin-bottom:2px}
 .dkf-clickable{cursor:pointer}
 .dkf-indent{margin-left:22px}
@@ -98,6 +131,7 @@ window.__ModuleLoader__.load({
 .dkf-block{width:7px;height:15px;border-radius:2px;background:var(--dsw-alias-label-tertiary,#999);opacity:.85}
 .dkf-block-current{outline:1.5px solid var(--dsw-alias-label-primary,#111);outline-offset:1px}
 .dkf-id{font:500 12px/18px var(--dsw-font-family-code,monospace);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+.dkf-caret{color:var(--dsw-alias-label-tertiary,#999);font:10px/16px var(--dsw-font-family,inherit);width:8px;text-align:center}
 .dkf-badges{display:inline-flex;gap:4px;align-items:center;flex:none}
 .dkf-chip{font:10px/16px var(--dsw-font-family,inherit);padding:0 5px;border-radius:3px;border:.5px solid var(--dsw-alias-border-l2,#e3e3e3);color:var(--dsw-alias-label-secondary,#666);white-space:nowrap}
 .dkf-chip-done{color:#35a35f;border-color:rgba(53,163,95,.4)}
@@ -109,16 +143,27 @@ window.__ModuleLoader__.load({
 .dkf-group-head{display:flex;align-items:center;gap:6px;color:var(--dsw-alias-label-tertiary,#999);font:11px/16px var(--dsw-font-family,inherit);text-transform:uppercase;letter-spacing:.04em;margin:0 0 4px 2px}
 .dkf-toggle{all:unset;cursor:pointer;color:var(--dsw-alias-label-secondary,#666);font:11px/16px var(--dsw-font-family,inherit)}
 .dkf-toggle:hover{color:var(--dsw-alias-label-primary,#111)}
-.dkf-arow{display:grid;grid-template-columns:3px auto auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:4px 6px;border-radius:4px;min-width:0}
+.dkf-focusbtn{all:unset;cursor:pointer;color:var(--dsw-alias-label-tertiary,#999);font:11px/16px var(--dsw-font-family,inherit);white-space:nowrap;padding:1px 5px;border-radius:4px;opacity:0}
+.dkf-row:hover .dkf-focusbtn,.dkf-row:focus-within .dkf-focusbtn,.dkf-arow:hover .dkf-focusbtn,.dkf-arow:focus-within .dkf-focusbtn{opacity:1}
+.dkf-focusbtn:hover,.dkf-focusbtn:focus-visible{opacity:1;color:var(--dsw-alias-label-primary,#111);background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
+.dkf-arow{display:grid;grid-template-columns:3px auto auto minmax(0,1fr) auto auto auto;align-items:center;gap:8px;padding:4px 6px;border-radius:4px;min-width:0;outline:none;cursor:pointer}
 .dkf-arow:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
+.dkf-arow:focus-visible{box-shadow:inset 0 0 0 1.5px var(--dsw-alias-state-business-primary,#4176e6)}
 .dkf-abar{width:3px;height:16px;border-radius:2px;background:${NEUTRAL}}
-.dkf-aissue{all:unset;cursor:pointer;color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family-code,monospace);white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis}
-.dkf-aissue:hover{color:var(--dsw-alias-label-primary,#111);text-decoration:underline}
+.dkf-aissue{color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family-code,monospace);white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis}
 .dkf-achip{font:10px/16px var(--dsw-font-family,inherit);padding:0 5px;border-radius:3px;border:.5px solid currentColor;white-space:nowrap}
 .dkf-atitle{color:var(--dsw-alias-label-primary,#111);font:12px/18px var(--dsw-font-family,inherit);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .dkf-ashort{font:10px/16px var(--dsw-font-family-code,monospace);color:var(--dsw-alias-label-tertiary,#999)}
-.dkf-grow{display:flex;align-items:center;gap:2px;padding:3px 6px;border-radius:4px;flex-wrap:wrap}
+.dkf-grow{display:flex;align-items:center;gap:4px;padding:3px 6px;border-radius:4px;flex-wrap:wrap;outline:none}
 .dkf-grow:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
+.dkf-endpoint{all:unset;cursor:pointer;color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family-code,monospace);border-radius:4px;padding:0 3px}
+.dkf-endpoint:hover{color:var(--dsw-alias-label-primary,#111);background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
+.dkf-sub{margin:2px 0 6px 30px;border-left:2px solid var(--dsw-alias-border-l2,#e3e3e3);padding:2px 0 2px 10px;display:flex;flex-direction:column;gap:2px}
+.dkf-subrow{display:grid;grid-template-columns:3px auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:2px 4px;border-radius:3px}
+.dkf-subrow:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
+.dkf-detail{margin:2px 0 6px 30px;border-left:2px solid var(--dsw-alias-border-l2,#e3e3e3);padding:2px 0 2px 10px;display:flex;flex-direction:column;gap:2px;color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family,inherit)}
+.dkf-detail-key{display:inline-block;min-width:48px;color:var(--dsw-alias-label-tertiary,#999)}
+.dkf-detail code{font:12px/18px var(--dsw-font-family-code,monospace);word-break:break-all;color:var(--dsw-alias-label-primary,#111)}
 .dkf-panel{display:flex;flex-direction:column;min-height:0}
 `
 
@@ -158,6 +203,36 @@ window.__ModuleLoader__.load({
 
     function colorOf(action) {
       return ACTION_COLOR[action] ?? NEUTRAL
+    }
+
+    /** 行内按键：Enter / Space 展开，f 聚焦；方向键交给列表容器。 */
+    function rowKeyDown(event, props) {
+      if (event.altKey || event.ctrlKey || event.metaKey) return
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        props.onToggle()
+        return
+      }
+      if (event.key === 'f' || event.key === 'F') {
+        event.preventDefault()
+        props.onFocus()
+      }
+    }
+
+    /** 列表容器：↑/↓ 在行之间移动焦点（行本身 tabIndex=-1，避免几十个 tab 停靠点）。 */
+    function listKeyDown(event) {
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+      const container = event.currentTarget
+      if (container === null || container === undefined || typeof container.querySelectorAll !== 'function') return
+      const rows = Array.from(container.querySelectorAll('[data-row]'))
+      if (rows.length === 0) return
+      event.preventDefault()
+      const current = rows.indexOf(document.activeElement)
+      const delta = event.key === 'ArrowDown' ? 1 : -1
+      const next =
+        current < 0 ? (delta === 1 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, current + delta))
+      const target = rows[next]
+      if (target !== undefined && typeof target.focus === 'function') target.focus()
     }
 
     /** 把一条 graph 边归一成 (a 关系 b)；反向名翻转端点，词表外的名字丢弃。 */
@@ -235,15 +310,13 @@ window.__ModuleLoader__.load({
       return { parent, children, groups, ids }
     }
 
-    /** 全局关系视图：按词表顺序分组，词表外的名字原样归到“未登记”。 */
+    /** 全局关系视图：按词表顺序分组；词表外的名字归到“未登记”。 */
     function globalRelationRows(relations) {
       const known = new Set(GROUPS.map((group) => group.rel))
       const rows = []
       for (const group of GROUPS) {
         const matched = relations.filter((relation) => relation.rel === group.rel)
-        if (matched.length > 0) {
-          rows.push({ rel: group.rel, label: group.label, edge: group.edge, rows: matched })
-        }
+        if (matched.length > 0) rows.push({ rel: group.rel, label: group.label, edge: group.edge, rows: matched })
       }
       const unknown = relations.filter((relation) => !known.has(relation.rel))
       if (unknown.length > 0) rows.push({ rel: 'unknown', label: '未登记', edge: '?', rows: unknown })
@@ -266,8 +339,10 @@ window.__ModuleLoader__.load({
             action: action.action,
             title: action.title,
             date: action.date,
+            id: action.id,
             short: action.short,
             ordinal: action.ordinal,
+            refs: Array.isArray(action.refs) ? action.refs : [],
           })
         }
       }
@@ -323,33 +398,102 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** 展开后的动作列表：一行一条、时间倒序、带 title（像 git log）。 */
+    function ActionLines(props) {
+      const actions = Array.isArray(props.actions) ? props.actions : []
+      if (actions.length === 0) return h('p', { className: 'dkf-empty dkf-sub' }, '这条 issue 还没有动作。')
+      return h(
+        'div',
+        { className: 'dkf-sub' },
+        actions
+          .slice()
+          .reverse()
+          .map((action) =>
+            h(
+              'div',
+              { className: 'dkf-subrow', key: `${action.ordinal}-${action.short || ''}` },
+              h('span', { className: 'dkf-abar', style: { background: colorOf(action.action) } }),
+              h('span', { className: 'dkf-achip', style: { color: colorOf(action.action) } }, action.action || '?'),
+              h('span', { className: 'dkf-atitle', title: action.title }, action.title || '（无标题）'),
+              h('span', { className: 'dkf-ashort' }, action.short || ''),
+              h('span', { className: 'dkf-ago' }, ago(action.date)),
+            ),
+          ),
+      )
+    }
+
+    /** timeline 行展开：这条提交的详情。 */
+    function ActionDetail(props) {
+      const row = props.row
+      const refs = Array.isArray(row.refs) ? row.refs : []
+      return h(
+        'div',
+        { className: 'dkf-detail' },
+        h('div', null, h('span', { className: 'dkf-detail-key' }, '提交'), h('code', null, row.id || '（无 sha）')),
+        h(
+          'div',
+          null,
+          h('span', { className: 'dkf-detail-key' }, '步骤'),
+          h('span', null, `${row.ordinal ?? '?'} / ${props.total ?? '?'}`),
+        ),
+        refs.length > 0
+          ? h('div', null, h('span', { className: 'dkf-detail-key' }, '引用'), h('span', null, refs.join('、')))
+          : null,
+        h('div', null, h('span', { className: 'dkf-detail-key' }, '时间'), h('span', null, row.date || '')),
+      )
+    }
+
+    /** 一行 issue：点行展开动作，行尾 `⌖ 聚焦` 切焦点。 */
     function IssueRow(props) {
       const issue = props.issue
       if (issue === undefined) return null
       const last = issue.last
+      const expanded = props.expanded === true
       return h(
-        'div',
-        {
-          className: cls('dkf-row', props.focus && 'dkf-focus', props.indent && 'dkf-indent', props.onClick && 'dkf-clickable'),
-          onClick: props.onClick,
-          title: last?.title ?? issue.title,
-        },
-        strip(issue.actions),
+        React.Fragment,
+        null,
         h(
-          'span',
-          { className: 'dkf-id' },
-          props.edge !== undefined ? h('span', { className: 'dkf-edge' }, ` ${props.edge} `) : null,
-          issue.id,
+          'div',
+          {
+            className: cls('dkf-row', props.focus && 'dkf-focus', props.indent && 'dkf-indent', 'dkf-clickable'),
+            'data-row': '',
+            tabIndex: -1,
+            onClick: props.onToggle,
+            onKeyDown: (event) => rowKeyDown(event, props),
+          },
+          strip(issue.actions),
+          h('span', { className: 'dkf-caret', 'aria-hidden': 'true' }, expanded ? '▾' : '▸'),
+          h(
+            'span',
+            { className: 'dkf-id' },
+            props.edge !== undefined ? h('span', { className: 'dkf-edge' }, ` ${props.edge} `) : null,
+            issue.id,
+          ),
+          h(
+            'span',
+            { className: 'dkf-badges' },
+            issue.domain ? h('span', { className: 'dkf-chip' }, issue.domain) : null,
+            h('span', { className: 'dkf-chip', style: { color: colorOf(issue.action) } }, issue.action || '?'),
+            issue.done ? h('span', { className: 'dkf-chip dkf-chip-done' }, 'done') : null,
+          ),
+          h('span', { className: 'dkf-title' }, last?.title || issue.title || '（无标题）'),
+          h('span', { className: 'dkf-ago' }, ago(last?.date)),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dkf-focusbtn',
+              tabIndex: -1,
+              title: `聚焦 ${issue.id}（快捷键 f）`,
+              onClick: (event) => {
+                event.stopPropagation()
+                props.onFocus()
+              },
+            },
+            '⌖ 聚焦',
+          ),
         ),
-        h(
-          'span',
-          { className: 'dkf-badges' },
-          issue.domain ? h('span', { className: 'dkf-chip' }, issue.domain) : null,
-          h('span', { className: 'dkf-chip', style: { color: colorOf(issue.action) } }, issue.action || '?'),
-          issue.done ? h('span', { className: 'dkf-chip dkf-chip-done' }, 'done') : null,
-        ),
-        h('span', { className: 'dkf-title' }, last?.title || issue.title || '（无标题）'),
-        h('span', { className: 'dkf-ago' }, ago(last?.date)),
+        expanded ? h(ActionLines, { actions: issue.actions }) : null,
       )
     }
 
@@ -357,18 +501,40 @@ window.__ModuleLoader__.load({
     function ActionRow(props) {
       const row = props.row
       return h(
-        'div',
-        { className: 'dkf-arow' },
-        h('span', { className: 'dkf-abar', style: { background: colorOf(row.action) } }),
+        React.Fragment,
+        null,
         h(
-          'button',
-          { type: 'button', className: 'dkf-aissue', title: `聚焦 ${row.issueId}`, onClick: () => props.onFocus(row.issueId) },
-          row.issueId,
+          'div',
+          {
+            className: 'dkf-arow',
+            'data-row': '',
+            tabIndex: -1,
+            onClick: props.onToggle,
+            onKeyDown: (event) => rowKeyDown(event, props),
+            title: '点开看这条提交的详情',
+          },
+          h('span', { className: 'dkf-abar', style: { background: colorOf(row.action) } }),
+          h('span', { className: 'dkf-aissue' }, row.issueId),
+          h('span', { className: 'dkf-achip', style: { color: colorOf(row.action) } }, row.action || '?'),
+          h('span', { className: 'dkf-atitle', title: row.title }, row.title || '（无标题）'),
+          h('span', { className: 'dkf-ashort' }, row.short || ''),
+          h('span', { className: 'dkf-ago' }, ago(row.date)),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dkf-focusbtn',
+              tabIndex: -1,
+              title: `聚焦 ${row.issueId}（快捷键 f）`,
+              onClick: (event) => {
+                event.stopPropagation()
+                props.onFocus()
+              },
+            },
+            '⌖ 聚焦',
+          ),
         ),
-        h('span', { className: 'dkf-achip', style: { color: colorOf(row.action) } }, row.action || '?'),
-        h('span', { className: 'dkf-atitle', title: row.title }, row.title || '（无标题）'),
-        h('span', { className: 'dkf-ashort' }, row.short || ''),
-        h('span', { className: 'dkf-ago' }, ago(row.date)),
+        props.expanded === true ? h(ActionDetail, { row, total: props.total }) : null,
       )
     }
 
@@ -424,9 +590,16 @@ window.__ModuleLoader__.load({
       if (props.rows.length === 0) return h('p', { className: 'dkf-empty' }, props.emptyText)
       return h(
         'div',
-        { className: 'dkf-list' },
+        { className: 'dkf-list', tabIndex: 0, onKeyDown: listKeyDown },
         props.rows.map((row, index) =>
-          h(ActionRow, { key: `${row.issueId}-${row.ordinal}-${index}`, row, onFocus: props.onFocus }),
+          h(ActionRow, {
+            key: `${row.issueId}-${row.ordinal}-${index}`,
+            row,
+            total: props.totalOf(row.issueId),
+            expanded: props.expanded !== null && props.expanded.kind === 'action' && props.expanded.id === actionKey(row),
+            onToggle: () => props.onToggle({ kind: 'action', id: actionKey(row) }),
+            onFocus: () => props.onFocus(row.issueId),
+          }),
         ),
       )
     }
@@ -435,13 +608,15 @@ window.__ModuleLoader__.load({
       if (props.issues.length === 0) return h('p', { className: 'dkf-empty' }, props.emptyText)
       return h(
         'div',
-        { className: 'dkf-list' },
+        { className: 'dkf-list', tabIndex: 0, onKeyDown: listKeyDown },
         props.issues.map((issue) =>
           h(IssueRow, {
             key: issue.id,
             issue,
             focus: issue.id === props.focusId,
-            onClick: issue.id === props.focusId ? undefined : () => props.onFocus(issue.id),
+            expanded: props.expanded !== null && props.expanded.kind === 'issue' && props.expanded.id === issue.id,
+            onToggle: () => props.onToggle({ kind: 'issue', id: issue.id }),
+            onFocus: () => props.onFocus(issue.id),
           }),
         ),
       )
@@ -465,14 +640,24 @@ window.__ModuleLoader__.load({
                   { className: 'dkf-grow', key: `${relation.rel}-${relation.a}-${relation.b}` },
                   h(
                     'button',
-                    { type: 'button', className: 'dkf-aissue', onClick: () => props.onFocus(relation.a) },
-                    relation.a,
+                    {
+                      type: 'button',
+                      className: 'dkf-endpoint',
+                      title: `聚焦 ${relation.a}`,
+                      onClick: () => props.onFocus(relation.a),
+                    },
+                    `⌖ ${relation.a}`,
                   ),
                   h('span', { className: 'dkf-edge' }, ` ${relation.rel} `),
                   h(
                     'button',
-                    { type: 'button', className: 'dkf-aissue', onClick: () => props.onFocus(relation.b) },
-                    relation.b,
+                    {
+                      type: 'button',
+                      className: 'dkf-endpoint',
+                      title: `聚焦 ${relation.b}`,
+                      onClick: () => props.onFocus(relation.b),
+                    },
+                    `⌖ ${relation.b}`,
                   ),
                 ),
               ),
@@ -490,10 +675,18 @@ window.__ModuleLoader__.load({
       const weak = view.groups.get('relates-to') ?? []
       const strongGroups = GROUPS.filter((group) => group.rel !== 'part-of' && group.rel !== 'relates-to')
 
+      const rowProps = (issue, extra) => ({
+        issue,
+        expanded: props.expanded !== null && props.expanded.kind === 'issue' && props.expanded.id === issue.id,
+        onToggle: () => props.onToggle({ kind: 'issue', id: issue.id }),
+        onFocus: () => props.onFocus(issue.id),
+        ...extra,
+      })
+
       return h(
-        React.Fragment,
-        null,
-        h(IssueRow, { issue: props.focus, focus: true }),
+        'div',
+        { className: 'dkf-list', tabIndex: 0, onKeyDown: listKeyDown },
+        h(IssueRow, { key: props.focus.id, ...rowProps(props.focus, { focus: true }) }),
         view.parent.length > 0
           ? h(
               'div',
@@ -517,9 +710,7 @@ window.__ModuleLoader__.load({
                     )
                   : null,
               ),
-              visibleChildren.map((child) =>
-                h(IssueRow, { key: child.id, issue: child, indent: true, onClick: () => props.onFocus(child.id) }),
-              ),
+              visibleChildren.map((child) => h(IssueRow, { key: child.id, ...rowProps(child, { indent: true }) })),
             )
           : null,
         strongGroups.map((group) => {
@@ -535,9 +726,7 @@ window.__ModuleLoader__.load({
             rows.map(({ entry, issue }) =>
               h(IssueRow, {
                 key: `${group.rel}-${issue.id}`,
-                issue,
-                edge: `${entry.arrow} ${group.edge}`,
-                onClick: () => props.onFocus(issue.id),
+                ...rowProps(issue, { edge: `${entry.arrow} ${group.edge}` }),
               }),
             ),
           )
@@ -556,15 +745,7 @@ window.__ModuleLoader__.load({
                     .map((entry) => props.byId.get(entry.id))
                     .filter(Boolean)
                     .sort(byRecency)
-                    .map((issue) =>
-                      h(IssueRow, {
-                        key: `weak-${issue.id}`,
-                        issue,
-                        edge: '⇄ relates-to',
-                        indent: true,
-                        onClick: () => props.onFocus(issue.id),
-                      }),
-                    )
+                    .map((issue) => h(IssueRow, { key: `weak-${issue.id}`, ...rowProps(issue, { indent: true }) }))
                 : null,
             )
           : null,
@@ -574,6 +755,7 @@ window.__ModuleLoader__.load({
     function KilnView(props) {
       const cwd = typeof props.cwd === 'string' ? props.cwd : ''
       const idBase = 'dsh-kiln-view'
+      const memory = readViewState(cwd)
       const [state, setState] = React.useState(() => {
         const cached = cwd === '' ? undefined : snapshotCache.get(cwd)
         return cached === undefined
@@ -581,10 +763,30 @@ window.__ModuleLoader__.load({
           : { phase: 'ready', payload: cached, error: null }
       })
       const [nonce, setNonce] = React.useState(0)
-      const [focusId, setFocusId] = React.useState(null)
-      const [tabId, setTabId] = React.useState('timeline')
+      const [tabId, setTabId] = React.useState(memory.tabId)
+      const [focusId, setFocusId] = React.useState(memory.focusId)
+      const [expanded, setExpanded] = React.useState(memory.expanded)
       const [expandedWeak, setExpandedWeak] = React.useState(false)
       const [expandedChildren, setExpandedChildren] = React.useState(false)
+
+      const selectTab = (id) => {
+        setTabId(id)
+        writeViewState(cwd, { tabId: id })
+      }
+      const focusIssue = (id) => {
+        setFocusId(id)
+        writeViewState(cwd, { focusId: id })
+      }
+      const clearFocus = () => {
+        setFocusId(null)
+        writeViewState(cwd, { focusId: null })
+      }
+      /** 点同一行再点一次收起；同时只保留一个展开项。 */
+      const toggleExpand = (next) => {
+        const value = expanded !== null && expanded.kind === next.kind && expanded.id === next.id ? null : next
+        setExpanded(value)
+        writeViewState(cwd, { expanded: value })
+      }
 
       React.useEffect(() => {
         if (cwd === '') {
@@ -627,7 +829,7 @@ window.__ModuleLoader__.load({
         return () => controller.abort()
       }, [cwd, nonce])
 
-      // 切焦点时收起展开态：焦点换了，展开的是另一批邻居
+      // 切焦点时收起“展开全部/弱关联”这类附属展开：焦点换了，展开的是另一批邻居
       React.useEffect(() => {
         setExpandedWeak(false)
         setExpandedChildren(false)
@@ -648,6 +850,7 @@ window.__ModuleLoader__.load({
       const globalGroups = React.useMemo(() => globalRelationRows(relations), [relations])
 
       const refresh = () => setNonce((value) => value + 1)
+      const totalOf = (issueId) => (Array.isArray(byId.get(issueId)?.actions) ? byId.get(issueId).actions.length : 0)
 
       const header = h(
         'div',
@@ -671,8 +874,8 @@ window.__ModuleLoader__.load({
               {
                 type: 'button',
                 className: 'dkf-focuschip',
-                onClick: () => setFocusId(null),
-                title: '退出聚焦，回到全局',
+                onClick: clearFocus,
+                title: '退出聚焦，回到全局（Esc）',
               },
               `焦点：${focus.id} ×`,
             )
@@ -680,7 +883,7 @@ window.__ModuleLoader__.load({
         h('button', { type: 'button', className: 'dkf-refresh', onClick: refresh }, '刷新'),
       )
 
-      const tabs = payload?.ok === true ? h(PageTabs, { pages: PAGES, active: tabId, onSelect: setTabId, idBase }) : null
+      const tabs = payload?.ok === true ? h(PageTabs, { pages: PAGES, active: tabId, onSelect: selectTab, idBase }) : null
 
       let body = null
       if (state.phase === 'loading' && payload === null) {
@@ -720,14 +923,19 @@ window.__ModuleLoader__.load({
         if (tabId === 'timeline') {
           content = h(TimelinePanel, {
             rows,
-            onFocus: setFocusId,
+            totalOf,
+            expanded,
+            onToggle: toggleExpand,
+            onFocus: focusIssue,
             emptyText: focus === null ? '还没有任何 kiln 动作。' : '焦点与相关 issue 还没有动作。',
           })
         } else if (tabId === 'issue') {
           content = h(IssuePanel, {
             issues: issueList,
             focusId: focus === null ? null : focus.id,
-            onFocus: setFocusId,
+            expanded,
+            onToggle: toggleExpand,
+            onFocus: focusIssue,
             emptyText: focus === null ? '这个仓库还没有 issue。' : '焦点与相关 issue 为空。',
           })
         } else {
@@ -736,9 +944,11 @@ window.__ModuleLoader__.load({
             view,
             byId,
             groups: globalGroups,
+            expanded,
             expandedWeak,
             expandedChildren,
-            onFocus: setFocusId,
+            onToggle: toggleExpand,
+            onFocus: focusIssue,
             onToggleWeak: () => setExpandedWeak((value) => !value),
             onToggleChildren: () => setExpandedChildren((value) => !value),
           })
@@ -752,7 +962,7 @@ window.__ModuleLoader__.load({
                 'p',
                 { className: 'dkf-warn' },
                 `焦点 ${focusId} 不在本次快照里（可能被截断或已消失）。`,
-                h('button', { type: 'button', className: 'dkf-toggle', onClick: () => setFocusId(null) }, ' 回到全局'),
+                h('button', { type: 'button', className: 'dkf-toggle', onClick: clearFocus }, ' 回到全局'),
               )
             : null,
           payload?.truncated === true
@@ -771,7 +981,21 @@ window.__ModuleLoader__.load({
         )
       }
 
-      return h('div', { className: 'dkf-root' }, header, tabs, h('div', { className: 'dkf-scroll' }, body))
+      return h(
+        'div',
+        {
+          className: 'dkf-root',
+          onKeyDown: (event) => {
+            if (event.key === 'Escape' && focus !== null) {
+              event.preventDefault()
+              clearFocus()
+            }
+          },
+        },
+        header,
+        tabs,
+        h('div', { className: 'dkf-scroll' }, body),
+      )
     }
 
     const inject = ['slots', 'sessions']

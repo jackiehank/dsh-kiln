@@ -122,6 +122,8 @@ export function mapActions(document) {
       short: sha.slice(0, 7),
       date: action.date,
       title: truncate(action.title),
+      /** 该动作声明的 refs：timeline 展开时显示，空就是空，不补默认值。 */
+      refs: Array.isArray(action.refs) ? action.refs.map((ref) => String(ref)) : [],
     }
   })
 }
