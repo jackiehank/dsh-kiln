@@ -68,6 +68,83 @@
   这算不算状态需要判定；
 - 默认焦点规则（最近动作）在 `worktree: on` 的多个 worktree 下是否仍然成立。
 
+前三条的调研见下节；第 4 条仍未收集。
+
+## 调研记录（collect）：待验证 1–3
+
+证据来源：本机 DSH **0.2.1-rc.2** 的实现副本
+`…\default-workspace\.dsh-src\dsh\node_modules\@deepseek-ai\`（`app.asar` 不可直接读，但同一
+release 的包在此目录，下列路径与行号可复现）。运行中的 GUI 走 `connection` 信任栅栏，未持浏览器
+会话时 `/` 返回 401、`/plugins` 返回 404，**拿不到运行时证据**；以下均为源码级证据，标「未实测」的
+项需要浏览器手验。
+
+### 1. `conversation.view` 里放输入框
+
+- **slot 契约不限 DOM**：注册形状是
+  `{ name, id, order, label, locale, children, store, inject(sessionId) }`
+  （`dsh-client-ui-chat/lib/client.js:13222-13245`），视图是普通 React 组件，宿主不约束内部元素；
+  我们现在的视图里已经有可聚焦的「刷新」按钮。
+- **但没有先例**：全量 `conversation.view` 注册者只有 `chat`（同上 `:13224`）与 `trajectory`
+  （`dsh-client-ui-trajectory/lib/client.js:8206`），两者都无文本输入。带输入框的 DSH 表面都在
+  模态/页面层——设置外壳、快捷键速查、计划任务页、插件市场、插件管理器、侧栏浏览器地址栏。
+- **键盘冲突的真实边界是 `ctx.shortcuts`，不是视图容器**：
+  - 有效绑定**优先于**原生操作、编辑器、终端、iframe 与模态控件；只拦截已注册的修饰键组合，
+    普通打字不受影响（`dsh-client-shortcuts/README.zh.md:36`）；
+  - 输入法组合与已消费输入继续传递（同文件 `:50`、`:52`）；
+  - `Esc Esc` 停轮序列限定在「获得焦点的 Chat 或 Composer」（`dsh-client-ui-conversation/README.zh.md:115`），
+    焦点在我们的输入框里时不在该作用域；
+  - Web 默认键位都是 `Mod+…`（`Mod+/`、`Mod+\`、`Control+\``、`Mod+Alt+*`、`Mod+Shift+*`，
+    `dsh-client-shortcuts/README.zh.md:82`），**`Mod+K` 未被占用**；加「聚焦搜索」热键应走
+    `ctx.shortcuts` 注册（参与冲突校验、可在设置里改），不要自己 `window.addEventListener`。
+
+**结论（候选）**：输入框可做，热键走 `ctx.shortcuts`；「输入框在会话视图里的样式与焦点回归」
+没有先例可依，必须手验一次。
+
+### 2. 可复用的搜索 / 命令面板
+
+- **没有全局命令面板**：全仓 `palette` 命中都是配色板，也没有 `Mod+K` 类入口。搜索都是局部组件：
+  - 斜杠菜单：`ctx.commandUi.popupSelect` + `searchLabels()` + `searchMode: 'substring'|'fuzzy-label'`
+    （`dsh-client-ui-commands/README.zh.md:28,34,38`）——**弹窗持有 composer 焦点**，属于输入框
+    流水线，不是通用面板；
+  - 模型菜单搜索（`dsh-client-ui-model-selection/README.zh.md:40,42`）、设置外壳搜索、快捷键速查
+    搜索（打开即聚焦搜索框）、插件市场搜索、计划任务页搜索——各自实现，样式对齐
+    「command 弹窗的紧凑样式」。
+- **共享原语可用**：Web 前端注入给客户端 bundle 的模块表里有 `@deepseek-ai/dsh-client-ui-primitives`
+  （与 `react`、`dsh-client-ui-slots`、`dsh-client-ui-dockkit`、`dsh-client-store`、`zod`、
+  `@tanstack/react-virtual` 并列，见 `dsh-web-frontend/dist/assets/index-CN7NIWNw.js` 内 `SZ()`），
+  约 55 个官方客户端包都在 `require` 它（`MenuSurface` / `MenuGroup` / `InlineEditor` /
+  `relativeTime` 等）。**未实测**：插件 bundle 经 `window.__ModuleLoader__` 的 `require` 能否解析这个
+  名字——`react` 已能解析，同一张表里的 primitives 预期可以，但要用一次
+  `console.log(require('@deepseek-ai/dsh-client-ui-primitives'))` 证实。
+
+**结论（候选）**：复用 primitives 的菜单/输入原语，自建一个极小的过滤框；**不要**借
+`ctx.commandUi.popupSelect`——它被 composer 的 `/` 流水线拥有，会把键盘交给 composer。
+
+### 3. 焦点进 URL query
+
+- **DSH 从不把 UI 状态放进 URL**：`dsh-web`、`dsh-web-app`、`dsh-web-frontend` 里没有
+  `URLSearchParams` / `pushState` / `replaceState` / `location.search`；全量 `location.(search|hash|href)`
+  命中都在第三方打包（pdfjs、devtools、终端），`popstate` 同样只在第三方里。会话选择、View 偏好、
+  主题分别落在 store 与 settings namespace（`ui-conversation` 持久化 View 偏好；`ui-theme` 写
+  `$DSH_HOME/cordis.patch.yml`）。
+- 页面由 `/` 提供，鉴权与路由不看 query：`connection.admit()` 只做 Host/Origin 信任（403）与浏览器
+  会话认证（401）（`dsh-client-connection/lib/index.js:737-750`）；我们自己的 API 路由已把
+  `?cwd=&focus=` 当参数解析（`plugin/lib/index.js:69-80`）。
+- **据此可判**：把 `?focus=` 写进页面 URL 是**我们新造的机制**，而且单向——宿主既不读也不听
+  `popstate`，浏览器后退会改 URL 却不改视图，等于制造一份应用无法对账的状态。
+
+**结论（候选）**：**不做 URL 携带焦点**。若将来真要「可分享」，应另开 issue 做只读深链
+（例如 `kiln path <issue> --json` 的网页视图），而不是把视图状态塞进页面 URL。
+
+### 对四条待验证的处理
+
+| # | 原来 | 现在 |
+| --- | --- | --- |
+| 1 输入框 | 待验证 | 机制可行；热键走 `ctx.shortcuts`；**需手验**一次 |
+| 2 搜索组件 | 待验证 | 用 primitives 自建小过滤框；不借 `commandUi`；**需证实 require 可解析** |
+| 3 URL query | 待验证 | 不做；理由见上（宿主不听 `popstate`） |
+| 4 worktree 焦点 | 待验证 | 未收集，仍未验证 |
+
 ## 边界（不做）
 
 - 不做 Triage / Genealogy 两种阅读模式（另开 issue）；
