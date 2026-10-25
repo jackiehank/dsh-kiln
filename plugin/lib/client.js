@@ -73,6 +73,11 @@ window.__ModuleLoader__.load({
       { id: 'LR', label: '横向' },
       { id: 'TB', label: '纵向' },
     ]
+    /** 取景范围：结构 = 只画有向关系；全部 = 连 `relates-to` 一起画（默认结构）。 */
+    const GRAPH_SCOPES = [
+      { id: 'structure', label: '结构' },
+      { id: 'all', label: '全部' },
+    ]
 
     /**
      * 每个仓库的视图内存：当前页、焦点、展开项。
@@ -86,6 +91,7 @@ window.__ModuleLoader__.load({
       expanded: null,
       relationMode: 'graph',
       graphDirection: 'LR',
+      graphScope: 'structure',
     }
 
     function readViewState(cwd) {
@@ -408,13 +414,26 @@ window.__ModuleLoader__.load({
      * 换来三件事：对称边带关系名、强弱靠线型、节点 id 与 issue 一一对应（`byNode`）。
      *
      * **文本与焦点无关**：聚焦只改渲染出来的 class，不重排（见 GraphPanel）。
-     * 方向是唯一会让文本变的东西（`LR` / `TB`），那是显式的用户操作，允许重排。
+     * 会让文本变的只有两件显式操作：方向（`LR`/`TB`）与范围（结构/全部）。
+     *
+     * `scope === 'structure'` 只画有向关系（`caused-by` / `blocks` / `part-of` / `supersedes`），
+     * 把无向的 `relates-to` 连同“只挂在它上面”的节点一起收起来——实测 58 节点里 53 条边是
+     * `relates-to`，去掉后交叉从 112 降到 0（见 docs/issues/kiln-graph-readability.md）。
      */
-    function buildMermaid(issues, relations, direction = 'LR') {
+    function buildMermaid(issues, relations, direction = 'LR', scope = 'structure') {
+      const structureOnly = scope !== 'all'
+      const kept = structureOnly ? relations.filter((relation) => relation.directed !== false) : relations
+      const touched = new Set()
+      for (const relation of kept) {
+        touched.add(relation.a)
+        touched.add(relation.b)
+      }
+      const visible = structureOnly ? issues.filter((issue) => touched.has(issue.id)) : issues
+
       const nodeOf = new Map()
       const byNode = new Map()
       const used = new Set()
-      const sorted = issues.slice().sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+      const sorted = visible.slice().sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
       const lines = [`flowchart ${direction === 'TB' ? 'TB' : 'LR'}`]
       const byAction = new Map()
 
@@ -439,7 +458,7 @@ window.__ModuleLoader__.load({
       }
 
       let dropped = 0
-      for (const relation of relations) {
+      for (const relation of kept) {
         const from = nodeOf.get(relation.a)
         const to = nodeOf.get(relation.b)
         if (from === undefined || to === undefined) {
@@ -454,7 +473,13 @@ window.__ModuleLoader__.load({
 
       for (const [action, nodes] of byAction) lines.push(`  class ${nodes.join(',')} act_${action}`)
 
-      return { source: lines.join('\n'), nodeOf, byNode, dropped }
+      return {
+        source: lines.join('\n'),
+        nodeOf,
+        byNode,
+        dropped,
+        hidden: { edges: relations.length - kept.length, nodes: issues.length - visible.length },
+      }
     }
 
     /**
@@ -796,9 +821,10 @@ window.__ModuleLoader__.load({
      */
     function GraphPanel(props) {
       const direction = props.direction === 'TB' ? 'TB' : 'LR'
+      const scope = props.scope === 'all' ? 'all' : 'structure'
       const built = React.useMemo(
-        () => buildMermaid(props.issues, props.relations, direction),
-        [props.issues, props.relations, direction],
+        () => buildMermaid(props.issues, props.relations, direction, scope),
+        [props.issues, props.relations, direction, scope],
       )
       const tiers = React.useMemo(
         () => (props.focusId === null ? null : graphTiers(props.focusId, props.relations)),
@@ -876,6 +902,18 @@ window.__ModuleLoader__.load({
           onClick,
         }),
         phase === 'ready' ? null : h('pre', { className: 'dkf-mermaid' }, built.source),
+        built.hidden.edges > 0
+          ? h(
+              'p',
+              { className: 'dkf-note' },
+              `已隐藏 ${built.hidden.edges} 条弱关联（无向）、${built.hidden.nodes} 个只挂在弱关联上的 issue。`,
+              h(
+                'button',
+                { type: 'button', className: 'dkf-toggle', onClick: () => props.onScope('all') },
+                ' 显示全部',
+              ),
+            )
+          : null,
         built.dropped > 0 ? h('p', { className: 'dkf-note' }, `${built.dropped} 条边指向快照外的 issue，未画。`) : null,
         h(
           'p',
@@ -930,12 +968,20 @@ window.__ModuleLoader__.load({
               active: props.direction === 'TB' ? 'TB' : 'LR',
               onSelect: props.onDirection,
             }),
+            h(Segmented, {
+              label: '图的取景范围',
+              options: GRAPH_SCOPES,
+              active: props.scope === 'all' ? 'all' : 'structure',
+              onSelect: props.onScope,
+            }),
           ),
           h(GraphPanel, {
             issues: props.issues,
             relations: props.relations,
             focusId: props.focusId,
             direction: props.direction,
+            scope: props.scope,
+            onScope: props.onScope,
             onFocus: props.onFocus,
           }),
         )
@@ -1091,6 +1137,7 @@ window.__ModuleLoader__.load({
       const [expandedChildren, setExpandedChildren] = React.useState(false)
       const [relationMode, setRelationMode] = React.useState(memory.relationMode ?? 'graph')
       const [graphDirection, setGraphDirection] = React.useState(memory.graphDirection === 'TB' ? 'TB' : 'LR')
+      const [graphScope, setGraphScope] = React.useState(memory.graphScope === 'all' ? 'all' : 'structure')
 
       const selectTab = (id) => {
         setTabId(id)
@@ -1113,6 +1160,12 @@ window.__ModuleLoader__.load({
         const value = id === 'TB' ? 'TB' : 'LR'
         setGraphDirection(value)
         writeViewState(cwd, { graphDirection: value })
+      }
+      /** 取景范围同理：结构 / 全部，也是一次显式的重排。 */
+      const selectScope = (id) => {
+        const value = id === 'all' ? 'all' : 'structure'
+        setGraphScope(value)
+        writeViewState(cwd, { graphScope: value })
       }
       /** 点同一行再点一次收起；同时只保留一个展开项。 */
       const toggleExpand = (next) => {
@@ -1279,6 +1332,7 @@ window.__ModuleLoader__.load({
             groups: globalGroups,
             mode: relationMode,
             direction: graphDirection,
+            scope: graphScope,
             issues,
             relations,
             focusId: focus === null ? null : focus.id,
@@ -1289,6 +1343,7 @@ window.__ModuleLoader__.load({
             onFocus: focusIssue,
             onMode: selectMode,
             onDirection: selectDirection,
+            onScope: selectScope,
             onToggleWeak: () => setExpandedWeak((value) => !value),
             onToggleChildren: () => setExpandedChildren((value) => !value),
           })

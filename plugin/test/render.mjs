@@ -92,7 +92,12 @@ const payload = {
     issue('b', [action('collect', 1, '2026-10-03T00:00:00+08:00')]),
     issue('c', [action('test', 1, '2026-10-02T00:00:00+08:00')]),
   ],
-  edges: [{ from: 'b', to: 'a', name: 'caused-by', directed: true }],
+  // c 只通过一条无向弱关联挂在 a 上：结构取景下应连同这条边一起被收起来，
+  // 而且它不能被算成 b 的一跳邻居（否则聚焦用例就测不出“收窄”了）
+  edges: [
+    { from: 'b', to: 'a', name: 'caused-by', directed: true },
+    { from: 'c', to: 'a', name: 'relates-to' },
+  ],
   total: 3,
   truncated: false,
   cache: { action: 'hit' },
@@ -115,7 +120,7 @@ await import('../lib/client.js?render=1')
 assert.equal(loaded?.id, '@local/dsh-kiln')
 
 /** 渲染一次：presets 依次喂给 KilnView 的 useState。 */
-function render({ focusId = null, tabId = 'timeline', expanded = null, mode = 'graph', direction = 'LR' }) {
+function render({ focusId = null, tabId = 'timeline', expanded = null, mode = 'graph', direction = 'LR', scope = 'structure' }) {
   const React = makeReact([
     { phase: 'ready', payload, error: null }, // state：直接给成 ready
     0, //                        nonce
@@ -126,6 +131,7 @@ function render({ focusId = null, tabId = 'timeline', expanded = null, mode = 'g
     false, //                    expandedChildren
     mode, //                     relationMode（关系页取景）
     direction, //                graphDirection（图方向）
+    scope, //                    graphScope（结构 / 全部）
   ])
   const requireOf = (name) => {
     if (name === 'react') return React
@@ -244,9 +250,9 @@ check('issue 页聚焦：只留焦点与相关 issue，且焦点钉在第一条'
 check('relation 页全局（列表取景）：按关系分组列出边', () => {
   const focused = render({ tabId: 'relation', mode: 'list' })
   const groups = byClass(focused, 'dkf-group-head')
-  assert.equal(groups.length, 1)
+  assert.equal(groups.length, 2)
   assert.match(textOf(groups[0]), /caused-by 1/)
-  assert.equal(byClass(focused, 'dkf-grow').length, 1)
+  assert.equal(byClass(focused, 'dkf-grow').length, 2)
 })
 
 check('relation 页聚焦（列表取景）：焦点行 + 一跳邻居行', () => {
@@ -267,20 +273,32 @@ function mermaidOf(tree) {
   return String(hosts[0].props['data-mermaid'] ?? '')
 }
 
-check('relation 页默认是图：mermaid 源含全部节点与带名边', () => {
+check('relation 页默认是图：结构取景只画有向关系', () => {
   const tree = render({ tabId: 'relation' })
   const source = mermaidOf(tree)
   assert.match(source, /^flowchart LR/)
   const nodes = source.split('\n').filter((line) => /^ {2}n_\w+\["/.test(line))
-  assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b', 'n_c'])
-  // 对称边与弱边都要带关系名（kiln 自己的 --mermaid 会把 relates-to 退化成无标签线）
+  assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b'], 'c 只挂在弱关联上，默认不画')
   assert.ok(source.includes('n_b -.->|caused-by| n_a'), source)
+  assert.ok(!source.includes('---'), '结构取景不含无向边')
   assert.equal(byClass(tree, 'dkf-mermaid').length, 1, '渲染器就位前先显示源码')
+  // 隐藏的东西必须说出来，不能悄悄消失
+  const notes = byClass(tree, 'dkf-note').map(textOf).join('\n')
+  assert.match(notes, /隐藏 1 条弱关联/)
+  assert.match(notes, /1 个只挂在弱关联上的 issue/)
+})
+
+check('全部取景：弱关联与只挂弱关联的节点都回来', () => {
+  const source = mermaidOf(render({ tabId: 'relation', scope: 'all' }))
+  const nodes = source.split('\n').filter((line) => /^ {2}n_\w+\["/.test(line))
+  assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b', 'n_c'])
+  assert.ok(source.includes('n_c ---|relates-to| n_a'), source)
+  const notes = byClass(render({ tabId: 'relation', scope: 'all' }), 'dkf-note').map(textOf).join('\n')
+  assert.ok(!/已隐藏/.test(notes), '全部取景不该再提示隐藏')
 })
 
 check('节点 id 能反查回 issue：data-id = n_<issue>', () => {
-  const tree = render({ tabId: 'relation' })
-  const source = mermaidOf(tree)
+  const source = mermaidOf(render({ tabId: 'relation', scope: 'all' }))
   for (const id of ['a', 'b', 'c']) assert.ok(source.includes(`  n_${id}["${id}"]`), source)
 })
 
@@ -292,13 +310,13 @@ check('图与焦点：聚焦只落在容器的 data-focus 上（文本不变）'
   assert.equal(host.props['data-focus'], 'b')
 })
 
-check('关系取景可切换：两个按钮，列表取景不再画图', () => {
+check('关系取景可切换：列表不画图，图有三组控件', () => {
   const graph = render({ tabId: 'relation' })
-  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), ['图', '列表', '横向', '纵向'])
-  assert.equal(byClass(graph, 'dkf-modebtn-active').length, 2, '取景与方向各选中一个')
+  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), ['图', '列表', '横向', '纵向', '结构', '全部'])
+  assert.equal(byClass(graph, 'dkf-modebtn-active').length, 3, '取景 / 方向 / 范围各选中一个')
   const list = render({ tabId: 'relation', mode: 'list' })
   assert.equal(byClass(list, 'dkf-graph').length, 0)
-  assert.deepEqual(byClass(list, 'dkf-modebtn').map(textOf), ['图', '列表'], '列表取景没有方向控制')
+  assert.deepEqual(byClass(list, 'dkf-modebtn').map(textOf), ['图', '列表'], '列表取景没有方向与范围')
 })
 
 check('图方向：默认横向，切纵向只换 flowchart 的方向词', () => {
