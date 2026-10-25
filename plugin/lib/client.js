@@ -49,6 +49,23 @@ window.__ModuleLoader__.load({
       { id: 'relation', label: '关系' },
     ]
 
+    /**
+     * 进程内的最近快照（按仓库路径）：切页会卸载整个视图，重挂载时先渲染这份，
+     * 再后台刷新（stale-while-revalidate）。只存在内存，刷新页面即清空。
+     */
+    const SNAPSHOT_CACHE_LIMIT = 4
+    const snapshotCache = new Map()
+
+    function rememberSnapshot(cwd, payload) {
+      if (cwd === '' || payload?.ok !== true) return
+      if (snapshotCache.has(cwd)) snapshotCache.delete(cwd)
+      snapshotCache.set(cwd, payload)
+      while (snapshotCache.size > SNAPSHOT_CACHE_LIMIT) {
+        const oldest = snapshotCache.keys().next().value
+        snapshotCache.delete(oldest)
+      }
+    }
+
     const CSS = `
 .dkf-root{display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#111)}
 .dkf-head{display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:.5px solid var(--dsw-alias-border-l2,#e3e3e3);flex:none}
@@ -557,7 +574,12 @@ window.__ModuleLoader__.load({
     function KilnView(props) {
       const cwd = typeof props.cwd === 'string' ? props.cwd : ''
       const idBase = 'dsh-kiln-view'
-      const [state, setState] = React.useState({ phase: 'loading', payload: null, error: null })
+      const [state, setState] = React.useState(() => {
+        const cached = cwd === '' ? undefined : snapshotCache.get(cwd)
+        return cached === undefined
+          ? { phase: 'loading', payload: null, error: null }
+          : { phase: 'ready', payload: cached, error: null }
+      })
       const [nonce, setNonce] = React.useState(0)
       const [focusId, setFocusId] = React.useState(null)
       const [tabId, setTabId] = React.useState('timeline')
@@ -570,7 +592,12 @@ window.__ModuleLoader__.load({
           return undefined
         }
         const controller = new AbortController()
-        setState((previous) => ({ phase: 'loading', payload: previous.payload, error: null }))
+        const cached = snapshotCache.get(cwd)
+        setState((previous) => {
+          // 只在仓库没变时沿用上一份；换了仓库就不能拿旧仓的数据顶着
+          const reusable = previous.payload?.repo === cwd ? previous.payload : (cached ?? null)
+          return { phase: reusable === null ? 'loading' : 'ready', payload: reusable, error: null }
+        })
         const url = `${FLOW_URL}?cwd=${encodeURIComponent(cwd)}`
         fetch(url, { credentials: 'same-origin', signal: controller.signal })
           .then(async (response) => {
@@ -586,6 +613,10 @@ window.__ModuleLoader__.load({
             if (payload?.ok !== true) {
               setState({ phase: 'unavailable', payload, error: null })
               return
+            }
+            rememberSnapshot(cwd, payload)
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('[kiln] snapshot', payload.cache?.action ?? 'unknown', payload.generatedAt)
             }
             setState({ phase: 'ready', payload, error: null })
           })
@@ -624,7 +655,13 @@ window.__ModuleLoader__.load({
         h('span', { className: 'dkf-brand' }, 'kiln'),
         h(
           'span',
-          { className: 'dkf-repo', title: cwd },
+          {
+            className: 'dkf-repo',
+            title:
+              payload?.ok === true
+                ? `${cwd}\n快照：${payload.cache?.action ?? 'unknown'} · ${payload.generatedAt ?? ''}`
+                : cwd,
+          },
           payload?.ok === true ? `${basename(cwd)} · ${issues.length} issue` : basename(cwd),
         ),
         h('span', { className: 'dkf-spacer' }),
