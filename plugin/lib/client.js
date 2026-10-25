@@ -109,22 +109,34 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Pele（mermaid → SVG 渲染器）懒加载：`pele.global.js` 是 vendored 产物，放在本文件旁边，
-     * 走与其它插件相同的 `require.async` 通道取回，不依赖 CDN、不需要宿主开静态路由。
+     * Pele（mermaid → SVG 渲染器）懒加载：vendored 产物是 `lib/client.pele.js`。
+     *
+     * 名字和位置都不是随便定的——DSH 的客户端加载器只认 `client.<name>.js` 形式的
+     * package-local chunk（相对 client.js 所在目录解析），而且那个 chunk 必须自己调
+     * `__ModuleLoader__.load({id})` 注册，否则报 "loaded without registering"。
      * 取不到就返回 null，关系页退化成 mermaid 源码——缺一个渲染器不该让整页报错。
      */
     let peleLoader = null
+    /** 最近一次加载失败的原因，显示在图上——排查时不必让人去开控制台。 */
+    let peleError = ''
     function loadPele() {
       if (peleLoader !== null) return peleLoader
       const load = typeof require.async === 'function' ? require.async : null
-      if (load === null) return Promise.resolve(null)
+      if (load === null) {
+        peleError = 'require.async 不可用'
+        return Promise.resolve(null)
+      }
       peleLoader = Promise.resolve()
-        .then(() => load('./pele.global.js'))
-        .catch(() => null)
+        .then(() => load('./client.pele.js'))
+        .catch((error) => {
+          peleError = String(error?.message ?? error).slice(0, 240)
+          return null
+        })
         .then((module) => {
           for (const candidate of [module, globalThis.pele]) {
             if (typeof candidate?.mount === 'function') return candidate
           }
+          if (peleError === '') peleError = 'chunk 没有导出 mount()'
           return null
         })
         .then((value) => {
@@ -828,7 +840,7 @@ window.__ModuleLoader__.load({
               'p',
               { className: 'dkf-note' },
               phase === 'missing'
-                ? '没找到图渲染器（plugin/lib/pele.global.js），先显示 mermaid 源码。'
+                ? `没拿到图渲染器（plugin/lib/client.pele.js）：${peleError}。先显示 mermaid 源码。`
                 : phase === 'failed'
                   ? '图渲染失败，先显示 mermaid 源码。'
                   : '正在准备图渲染器…',

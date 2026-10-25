@@ -358,6 +358,33 @@ await check('client：能加载、导出形态正确、注册 id=kiln 的 conver
   assert.deepEqual(registered?.options.inject('missing-session'), { cwd: '' })
 })
 
+// ---------------------------------------------------------------- 图渲染器 chunk
+
+await check('Pele chunk：名字合法、自注册、导出 mount', async () => {
+  // DSH 的客户端加载器只接受 `client.<name>.js`，且要求 chunk 自己 load 注册；
+  // 这两条错了，浏览器里只会看到 "loaded without registering"。
+  let registered = null
+  const previous = globalThis.window
+  globalThis.window = {
+    __ModuleLoader__: {
+      load: (definition) => {
+        registered = definition
+      },
+    },
+  }
+  try {
+    await import('../lib/client.pele.js?chunk-test=1')
+  } finally {
+    globalThis.window = previous
+  }
+  assert.equal(registered?.id, '@local/dsh-kiln/client.pele.js')
+  const exported = registered.factory()
+  assert.equal(typeof exported?.mount, 'function')
+  assert.equal(typeof exported?.render, 'function')
+  const { svg } = exported.render('flowchart LR\n  a["a"] -->|caused-by| b["b"]')
+  assert.match(svg, /^<svg/)
+})
+
 // ---------------------------------------------------------------- 汇总
 
 console.log('')
