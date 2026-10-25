@@ -73,8 +73,13 @@ window.__ModuleLoader__.load({
       { id: 'LR', label: '横向' },
       { id: 'TB', label: '纵向' },
     ]
-    /** 取景范围：结构 = 只画有向关系；全部 = 连 `relates-to` 一起画；焦点 = 以焦点为中心重画（默认结构）。 */
+    /**
+     * 取景范围。`auto` 是默认：**没焦点看结构，有焦点看焦点**——两者各自是那两种状态下的
+     * 最佳取景（结构解决“全局太乱”，焦点解决“聚焦后看不清一圈”）；
+     * 另外三档是手动覆盖，用来对比或临时切换。
+     */
     const GRAPH_SCOPES = [
+      { id: 'auto', label: '自动' },
       { id: 'structure', label: '结构' },
       { id: 'all', label: '全部' },
       { id: 'focus', label: '焦点' },
@@ -92,7 +97,7 @@ window.__ModuleLoader__.load({
       expanded: null,
       relationMode: 'graph',
       graphDirection: 'LR',
-      graphScope: 'structure',
+      graphScope: 'auto',
     }
 
     function readViewState(cwd) {
@@ -840,11 +845,12 @@ window.__ModuleLoader__.load({
      */
     function GraphPanel(props) {
       const direction = props.direction === 'TB' ? 'TB' : 'LR'
-      const scope = props.scope === 'all' || props.scope === 'focus' ? props.scope : 'structure'
+      const requested = props.scope
+      // 自动：无焦点用结构、有焦点用焦点取景（用户定的两条默认）
+      const scope = requested === 'auto' || requested === undefined ? (props.focusId === null ? 'structure' : 'focus') : requested
       const focusMode = scope === 'focus' && props.focusId !== null
       // 焦点优先：结构取景里被筛掉的节点可能是焦点自己（`~/kiln` 有 32 个只挂弱关联的），
       // 那种情况下临时按“全部”画，否则会出现“点了 c、图上找不到 c”。
-      // 注意这**不是**让文本普遍依赖焦点：只有焦点落在结构之外时才会变，切焦点仍然不重排。
       const widened =
         scope === 'structure' && props.focusId !== null && !touchesDirected(props.focusId, props.relations)
       // 选了「焦点」但还没聚焦：退回结构取景，别用“全部”糊人
@@ -1015,7 +1021,7 @@ window.__ModuleLoader__.load({
             h(Segmented, {
               label: '图的取景范围',
               options: GRAPH_SCOPES,
-              active: props.scope === 'all' || props.scope === 'focus' ? props.scope : 'structure',
+              active: props.scope === 'all' || props.scope === 'focus' || props.scope === 'structure' ? props.scope : 'auto',
               onSelect: props.onScope,
             }),
           ),
@@ -1181,9 +1187,7 @@ window.__ModuleLoader__.load({
       const [expandedChildren, setExpandedChildren] = React.useState(false)
       const [relationMode, setRelationMode] = React.useState(memory.relationMode ?? 'graph')
       const [graphDirection, setGraphDirection] = React.useState(memory.graphDirection === 'TB' ? 'TB' : 'LR')
-      const [graphScope, setGraphScope] = React.useState(
-        memory.graphScope === 'all' || memory.graphScope === 'focus' ? memory.graphScope : 'structure',
-      )
+      const [graphScope, setGraphScope] = React.useState(['structure', 'all', 'focus'].includes(memory.graphScope) ? memory.graphScope : 'auto')
 
       const selectTab = (id) => {
         setTabId(id)
@@ -1201,15 +1205,15 @@ window.__ModuleLoader__.load({
         setRelationMode(id)
         writeViewState(cwd, { relationMode: id })
       }
-      /** 方向会换掉 mermaid 文本，是唯一允许重排的显式操作。 */
+      /** 方向会换掉 mermaid 文本，是唯一允许重排的显式操作（方向本身不跟焦点走）。 */
       const selectDirection = (id) => {
         const value = id === 'TB' ? 'TB' : 'LR'
         setGraphDirection(value)
         writeViewState(cwd, { graphDirection: value })
       }
-      /** 取景范围同理：结构 / 全部 / 焦点，也是一次显式的重排。 */
+      /** 取景范围：自动 / 结构 / 全部 / 焦点；后三档是显式重排，自动则跟着焦点走。 */
       const selectScope = (id) => {
-        const value = id === 'all' || id === 'focus' ? id : 'structure'
+        const value = ['structure', 'all', 'focus'].includes(id) ? id : 'auto'
         setGraphScope(value)
         writeViewState(cwd, { graphScope: value })
       }

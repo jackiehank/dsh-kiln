@@ -120,7 +120,7 @@ await import('../lib/client.js?render=1')
 assert.equal(loaded?.id, '@local/dsh-kiln')
 
 /** 渲染一次：presets 依次喂给 KilnView 的 useState。 */
-function render({ focusId = null, tabId = 'timeline', expanded = null, mode = 'graph', direction = 'LR', scope = 'structure' }) {
+function render({ focusId = null, tabId = 'timeline', expanded = null, mode = 'graph', direction = 'LR', scope = 'auto' }) {
   const React = makeReact([
     { phase: 'ready', payload, error: null }, // state：直接给成 ready
     0, //                        nonce
@@ -302,13 +302,21 @@ check('节点 id 能反查回 issue：data-id = n_<issue>', () => {
   for (const id of ['a', 'b', 'c']) assert.ok(source.includes(`  n_${id}["${id}"]`), source)
 })
 
-check('聚焦一个只挂弱关联的节点：它自己也必须在图上', () => {
-  const tree = render({ tabId: 'relation', focusId: 'c' })
+check('聚焦一个只挂弱关联的节点：结构取景下它也必须被带上', () => {
+  const tree = render({ tabId: 'relation', focusId: 'c', scope: 'structure' })
   const source = mermaidOf(tree)
   assert.ok(source.includes('n_c["c"]'), `焦点 c 被结构取景藏掉了：\n${source}`)
   // 临时放宽必须说出来，不能让人以为结构里本来就有 k_c 的弱边
   const notes = byClass(tree, 'dkf-note').map(textOf).join('\n')
   assert.match(notes, /只挂在弱关联上，已临时按「全部」画/)
+})
+
+check('自动取景：无焦点用结构，有焦点用焦点（用户定的两条默认）', () => {
+  const idle = mermaidOf(render({ tabId: 'relation' }))
+  assert.equal(idle, mermaidOf(render({ tabId: 'relation', scope: 'structure' })), '无焦点 → 结构')
+  const focused = mermaidOf(render({ tabId: 'relation', focusId: 'b' }))
+  assert.equal(focused, mermaidOf(render({ tabId: 'relation', focusId: 'b', scope: 'focus' })), '有焦点 → 焦点')
+  assert.match(byClass(render({ tabId: 'relation' }), 'dkf-modebtn-active').map(textOf).join(','), /自动/)
 })
 
 check('图与焦点：聚焦只落在容器的 data-focus 上（文本不变）', () => {
@@ -321,7 +329,7 @@ check('图与焦点：聚焦只落在容器的 data-focus 上（文本不变）'
 
 check('关系取景可切换：列表不画图，图有三组控件', () => {
   const graph = render({ tabId: 'relation' })
-  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), ['图', '列表', '横向', '纵向', '结构', '全部', '焦点'])
+  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), ['图', '列表', '横向', '纵向', '自动', '结构', '全部', '焦点'])
   assert.equal(byClass(graph, 'dkf-modebtn-active').length, 3, '取景 / 方向 / 范围各选中一个')
   const list = render({ tabId: 'relation', mode: 'list' })
   assert.equal(byClass(list, 'dkf-graph').length, 0)
@@ -348,8 +356,8 @@ check('焦点取景但还没聚焦：退回结构取景并提示', () => {
 })
 
 check('切焦点：结构取景不变文本，焦点取景重画', () => {
-  const structural = render({ tabId: 'relation', focusId: 'a' })
-  const structuralOther = render({ tabId: 'relation', focusId: 'b' })
+  const structural = render({ tabId: 'relation', focusId: 'a', scope: 'structure' })
+  const structuralOther = render({ tabId: 'relation', focusId: 'b', scope: 'structure' })
   assert.equal(mermaidOf(structural), mermaidOf(structuralOther), '结构取景下切焦点不重排')
   const focusA = render({ tabId: 'relation', focusId: 'a', scope: 'focus' })
   const focusC = render({ tabId: 'relation', focusId: 'c', scope: 'focus' })
