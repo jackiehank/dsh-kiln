@@ -108,3 +108,26 @@
 - **兜底**：认不出边元素（Pele 升级改 id 形态）就这一轮不淡化并说明，不静默。
 
 仍然**没做**的两项照旧挂在 `kiln-graph-readability` 的结论里：标签门槛（语义缩放）与 hover 预览。
+
+## 落地（apply）：淡化改成“换颜色”，不再用透明度
+
+用户实测：**多条箭头汇到同一个节点时，重叠处的颜色比单条深**。原因是透明度会累加——
+三条 `.2` 的线叠在一起，等效约 `.5`，于是“越关键的汇合点越显眼”，正好与意图相反。
+
+改法：边与标签改用**颜色混合**（opaque），不再用 `opacity`：
+
+```css
+.dkf-graph{--dkf-dim-node:.2;--dkf-dim-edge-mix:20%;--dkf-dim-label-mix:20%}
+.dkf-graph svg{
+  --dkf-dim-edge-color:color-mix(in srgb,var(--_fg) var(--dkf-dim-edge-mix),var(--_bg));
+  --dkf-dim-label-color:color-mix(in srgb,var(--_fg) var(--dkf-dim-label-mix),var(--_bg));
+}
+.dkf-gedge-dim path{stroke:var(--dkf-dim-edge-color)}
+.dkf-gedge-dim .pele-marker{fill:var(--dkf-dim-edge-color)}   /* 箭头 */
+.dkf-gedge-label-dim text{fill:var(--dkf-dim-label-color)}
+```
+
+- 颜色是**不透明**的，重叠多少条都还是同一个颜色，不会累加；
+- 三个变量仍可独立调：节点用 `--dkf-dim-node`（节点不重叠，保留透明度以留住动作色），
+  边与标签用各自的 `mix` 百分比；
+- `var(--_fg)` / `var(--_bg)` 是 Pele 自己在 `<svg>` 上算好的前景/背景，所以深色主题下也自动跟着走。

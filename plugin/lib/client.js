@@ -257,10 +257,13 @@ window.__ModuleLoader__.load({
 .dkf-graphwrap{display:flex;flex-direction:column;gap:6px;min-width:0}
 .dkf-graph{border:.5px solid var(--dsw-alias-border-l2,#e3e3e3);border-radius:6px;min-height:260px;padding:6px;overflow:hidden;background:var(--dsw-alias-bg-layer-2,#fafafa)}
 .dkf-graph svg{display:block;max-width:100%;height:auto}
-.dkf-graph{--dkf-dim-node:.2;--dkf-dim-edge:.2;--dkf-dim-label:.2}
+.dkf-graph{--dkf-dim-node:.2;--dkf-dim-edge-mix:20%;--dkf-dim-label-mix:20%}
+.dkf-graph svg{--dkf-dim-edge-color:color-mix(in srgb,var(--_fg,#1f1f1f) var(--dkf-dim-edge-mix),var(--_bg,#fff));--dkf-dim-label-color:color-mix(in srgb,var(--_fg,#1f1f1f) var(--dkf-dim-label-mix),var(--_bg,#fff))}
 .dkf-gnode-dim{opacity:var(--dkf-dim-node);transition:opacity .12s ease}
-.dkf-gedge-dim{opacity:var(--dkf-dim-edge);transition:opacity .12s ease}
-.dkf-gedge-label-dim{opacity:var(--dkf-dim-label);transition:opacity .12s ease}
+/* 边用“换颜色”而不是整体透明度：多条箭头叠在一起时，透明度会累加出更深的块 */
+.dkf-gedge-dim path{stroke:var(--dkf-dim-edge-color);transition:stroke .12s ease}
+.dkf-gedge-dim .pele-marker{fill:var(--dkf-dim-edge-color)}
+.dkf-gedge-label-dim text{fill:var(--dkf-dim-label-color);transition:fill .12s ease}
 .dkf-gnode-focus{filter:drop-shadow(0 0 2px var(--dsw-alias-state-business-primary,#4176e6))}
 .dkf-mermaid{margin:0;padding:8px 10px;max-height:320px;overflow:auto;border-radius:4px;background:var(--dsw-alias-markdown-code-block,#f6f6f6);color:var(--dsw-alias-label-secondary,#666);font:11px/16px var(--dsw-font-family-code,monospace);white-space:pre}
 `
