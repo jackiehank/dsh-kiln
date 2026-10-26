@@ -631,9 +631,9 @@ await check('hover：只有一条"叠一层"的规则，三页的元素都在里
     if (name === 'react') return reactStub
     throw new Error('unexpected require: ' + name)
   }).__internals.css
-  const overlay = 'background-image:linear-gradient(var(--dkf-hover),var(--dkf-hover))'
-  assert.equal(css.split(overlay).length - 1, 1, '叠底公式只能出现一次（一处定义，多处引用选择器）')
-  const at = css.indexOf(overlay)
+  const layer = '--dkf-hover-layer:linear-gradient(var(--dkf-hover),var(--dkf-hover))'
+  assert.equal(css.split(layer).length - 1, 1, 'hover 底色只定义一次（变量），各处引用它')
+  const at = css.indexOf('background-image:var(--dkf-hover-layer)')
   const selector = css.slice(css.lastIndexOf('}', at) + 1, css.indexOf('{', at))
   for (const name of ['refresh', 'focuschip', 'tab', 'modebtn', 'row', 'focus', 'crumb', 'subrow', 'arow', 'toggle', 'focusbtn']) {
     assert.ok(selector.includes(`.dkf-${name}:hover`), `.dkf-${name} 必须走同一条 hover 规则`)
@@ -785,14 +785,22 @@ await check('搜索框真居中：页头是左右等宽的三栏网格，输入�
   assert.ok(css.includes('.dkf-head-actions{'), '右侧动作要单独成一栏（否则栏宽由内容决定，居中会偏）')
 })
 
-await check('选中一行：搜索选中与 issue 焦点行共用同一条规则（左侧 2px 强调条）', async () => {
+await check('选中一行：与鼠标经过同一层底色，不加额外强调', async () => {
   const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
   const css = loaded.factory((name) => {
     if (name === 'react') return reactStub
     throw new Error('unexpected require: ' + name)
   }).__internals.css
-  assert.ok(css.includes('.dkf-hit-on,.dkf-focus{'), '两种"选中"必须同一条规则，否则又会各长各的')
-  assert.match(css, /\.dkf-hit-on,\.dkf-focus\{[^}]*inset 2px 0 0 var\(--dkf-accent\)/, '选中要有可见的强调条（浅色主题下 bg-layer-2 等于底色）')
+  assert.ok(
+    css.includes('.dkf-hit-on{background-image:var(--dkf-hover-layer)}'),
+    '搜索选中 = 鼠标经过的那层底色（同一个变量，与 issue 行同一套观感）',
+  )
+  assert.ok(!/\.dkf-hit-on[^{]*\{[^}]*dkf-accent/.test(css), '不要强调条')
+  assert.match(
+    css,
+    /\.dkf-focus\{background:var\(--dkf-bg2\);box-shadow:inset 0 0 0 \.5px var\(--dkf-line\)\}/,
+    'issue 焦点行回到原来那条（与普通行一致，只是底色不同）',
+  )
 })
 await check('标签已不作为筛选维度：组清单里只剩领域与状态', async () => {
   const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }

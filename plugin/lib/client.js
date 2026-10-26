@@ -229,6 +229,8 @@ window.__ModuleLoader__.load({
   --dkf-bg2:var(--dsw-alias-bg-layer-2,#f7f7f7);
   --dkf-raise:var(--dsw-alias-bg-layer-3,#fff);
   --dkf-hover:var(--dsw-alias-interactive-bg-hover,#2631480f);
+  /* 唯一的一层 hover 底色：鼠标经过与「当前选中行」共用它 */
+  --dkf-hover-layer:linear-gradient(var(--dkf-hover),var(--dkf-hover));
   --dkf-accent:var(--dsw-alias-state-business-primary,#4176e6);
   --dkf-ok:var(--dsw-alias-state-success-primary,#35a35f);
   --dkf-warn:var(--dsw-alias-state-warn-primary,#b4690e);
@@ -248,7 +250,7 @@ window.__ModuleLoader__.load({
  * 可点控件的文字顺带提到 primary；行不需要（标题本来就是 primary）。
  * 不做过渡：这类即时反馈在宿主里也是直接切（图上的 .12s 只给淡化/焦点那种状态变化）。
  */
-.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-row:hover,.dkf-focus:hover,.dkf-crumb:hover,.dkf-subrow:hover,.dkf-arow:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover,.dkf-hit:hover{background-image:linear-gradient(var(--dkf-hover),var(--dkf-hover))}
+.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-row:hover,.dkf-focus:hover,.dkf-crumb:hover,.dkf-subrow:hover,.dkf-arow:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover,.dkf-hit:hover{background-image:var(--dkf-hover-layer)}
 .dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-crumb:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover,.dkf-hit:hover{color:var(--dkf-fg)}
 /* 页头第一层：三栏网格——左右两栏等宽，搜索框因此是**真居中**（不是"剩下的空白居中"） */
 .dkf-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(96px,min(360px,40%)) minmax(0,1fr);align-items:center;gap:8px;padding:0 12px;min-height:34px;border-bottom:.5px solid var(--dkf-line);flex:none}
@@ -260,8 +262,8 @@ window.__ModuleLoader__.load({
 .dkf-search:focus{outline:none;box-shadow:inset 0 0 0 2px var(--dkf-accent)}
 /* 搜索结果：一行一条 issue，命中片段高亮 */
 .dkf-hit{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:4px 6px;border-radius:var(--dkf-r);cursor:pointer;min-width:0}
-/* 选中一行：搜索结果的 ↑↓ 选中与 issue 页的焦点行共用同一条规则（左侧 2px 强调条） */
-.dkf-hit-on,.dkf-focus{background:var(--dkf-bg2);box-shadow:inset 2px 0 0 var(--dkf-accent),inset 0 0 0 .5px var(--dkf-line)}
+/* 选中一行：就是"鼠标经过"那层底色常驻，和 issue 行同一套观感，不加额外强调 */
+.dkf-hit-on{background-image:var(--dkf-hover-layer)}
 .dkf-hit-go{color:var(--dkf-fg3);flex:none;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-hl{color:var(--dkf-fg);border-radius:var(--dkf-r);background:color-mix(in srgb,var(--dkf-accent) 18%,transparent)}
 .dkf-refresh,.dkf-focuschip{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:var(--dkf-r);color:var(--dkf-fg2);white-space:nowrap;font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
@@ -300,6 +302,7 @@ window.__ModuleLoader__.load({
 .dkf-rail::before{content:'';position:absolute;left:12px;top:12px;bottom:12px;width:1px;background:var(--dkf-line)}
 .dkf-row{display:grid;grid-template-columns:auto 10px auto auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:4px 6px;border-radius:var(--dkf-r);min-width:0;outline:none}
 .dkf-row:focus-visible,.dkf-arow:focus-visible{box-shadow:inset 0 0 0 2px var(--dkf-accent)}
+.dkf-focus{background:var(--dkf-bg2);box-shadow:inset 0 0 0 .5px var(--dkf-line)}
 .dkf-clickable{cursor:pointer}
 .dkf-indent{margin-left:18px}
 .dkf-crumb{color:var(--dkf-fg2);cursor:pointer;padding:2px 6px;width:max-content;border-radius:var(--dkf-r);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
