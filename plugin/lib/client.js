@@ -1159,8 +1159,39 @@ window.__ModuleLoader__.load({
         if (typeof id === 'string') props.onFocus(id)
       }
 
+      /**
+       * 拖动期间压住说明框。
+       *
+       * Pele 拖动时会 `setPointerCapture` 到容器，`pointermove` 的 target 随之变成容器本身，
+       * `closest('[data-id]')` 自然找不到节点——说明框“顺手”就没了。那是它的实现细节，不是我们的
+       * 保证，所以这里显式记一笔：按下就算拖动开始，抬起 / 取消才结束。用 ref 而不是 state，
+       * 免得每次拖动都多一次渲染。
+       */
+      const dragging = React.useRef(false)
+      React.useEffect(() => {
+        if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined
+        // 捕获期间 pointerup 有可能落在窗口外面，挂到 window 上才收得干净
+        const end = () => {
+          dragging.current = false
+        }
+        window.addEventListener('pointerup', end)
+        window.addEventListener('pointercancel', end)
+        return () => {
+          window.removeEventListener('pointerup', end)
+          window.removeEventListener('pointercancel', end)
+        }
+      }, [])
+      const onPointerDown = () => {
+        dragging.current = true
+        if (hover !== null && hover !== undefined) setHover(null)
+      }
+
       /** 与 click 同一套反查：光标压到节点上就记下它的 issue，压到边/空白就收掉说明框。 */
       const onPointerMove = (event) => {
+        if (dragging.current === true) {
+          if (hover !== null && hover !== undefined) setHover(null)
+          return
+        }
         const target = event?.target
         const node = typeof target?.closest === 'function' ? target.closest('[data-id]') : null
         const id = node === null ? null : built.byNode.get(node.getAttribute('data-id'))
@@ -1229,6 +1260,7 @@ window.__ModuleLoader__.load({
           'data-mermaid': built.source,
           'data-focus': props.focusId ?? '',
           onClick,
+          onPointerDown,
           onPointerMove,
           onPointerLeave,
         }),
