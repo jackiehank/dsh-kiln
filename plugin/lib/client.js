@@ -303,7 +303,6 @@ window.__ModuleLoader__.load({
 .dkf-graphwrap{display:flex;flex-direction:column;gap:8px;min-width:0}
 .dkf-graph{border-radius:var(--dkf-r-box);background:var(--dkf-bg2);box-shadow:inset 0 0 0 .5px var(--dkf-line);padding:8px;overflow:hidden;min-height:260px}
 .dkf-graph svg{display:block;max-width:100%;height:auto}
-.dkf-graph{--dkf-dim-node:.2;--dkf-dim-edge-mix:20%;--dkf-dim-label-mix:20%}
 /*
  * Pele 在自己生成的 SVG 上写死了一套浅色默认值（白底、近黑的线），且不看主题。
  * 不把 --pele-* 接过来，深色下就是“近黑压深灰”（1.18:1）、节点还是白卡片。
@@ -314,6 +313,8 @@ window.__ModuleLoader__.load({
   --pele-line:var(--dkf-fg2);--pele-surface:var(--dkf-raise);--pele-surface-alt:var(--dkf-bg);
   --pele-border:var(--dkf-line-2);--pele-accent:var(--dkf-accent);
   --dkf-canvas:var(--dkf-bg2);
+  --dkf-dim-node:.2;--dkf-dim-edge-mix:20%;--dkf-dim-label-mix:20%;
+  --dkf-focus-glow:2px;--dkf-focus-color:var(--dkf-accent);
 }
 /* 淡化向画布色混，而不是向白底混：按定义永远比正常边更靠近画布，换主题也不会反过来 */
 .dkf-graph svg{--dkf-dim-edge-color:color-mix(in srgb,var(--dkf-fg2) var(--dkf-dim-edge-mix),var(--dkf-canvas));--dkf-dim-label-color:color-mix(in srgb,var(--dkf-fg2) var(--dkf-dim-label-mix),var(--dkf-canvas))}
@@ -324,7 +325,6 @@ window.__ModuleLoader__.load({
 .dkf-gedge-label-dim text{fill:var(--dkf-dim-label-color);transition:fill .12s ease}
 /* 淡化的边标签连底板一起退回画布，否则“暗字压亮板”会糊成一团 */
 .dkf-gedge-label-dim rect{fill:var(--dkf-canvas)}
-.dkf-graph{--dkf-focus-glow:2px;--dkf-focus-color:var(--dkf-accent)}
 .dkf-gnode-focus{filter:drop-shadow(0 0 var(--dkf-focus-glow) var(--dkf-focus-color)) drop-shadow(0 0 calc(var(--dkf-focus-glow) * 2) var(--dkf-focus-color))}
 .dkf-legend{display:flex;flex-wrap:wrap;gap:4px 16px;padding:0 4px}
 .dkf-legend-row{display:flex;align-items:center;gap:6px;color:var(--dkf-fg3);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
