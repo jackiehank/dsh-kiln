@@ -10,6 +10,10 @@ DSH × kiln 的插件初稿：在会话顶部标签排（对话 / 轨迹 / 上�
   part-of 作母/子分组与面包屑，`blocks` → `supersedes` → `caused-by` 按强弱排，弱关联（relates-to）
   默认展开，行内带方向与关系名。关系页只有图（全局 / 聚焦），hover 节点弹出该 issue 的 ask 标题。
   焦点切换只在内存里，不落盘。
+- 外观（见 `docs/issues/kiln-ui-refresh.md`）：两层页头——第一层是仓库名与全局动作，
+  第二层左边页切换、右边当前页的计数或图的取景控件。字号 / 圆角 / 颜色全部取宿主 `--dsw-*`
+  语义 token（11 / 12 / 13px，4 / 8 / 12px），代码字体用 `--ds-font-family-code`。
+  变量集中在 `.dkf-root` 的 `--dkf-*` 上，改皮肤只动那一处。
 - 与壳的关系：kiln 视图挂载期间隐藏 DSH 的“拖动调宽”手柄
   （`[data-conversation-content]:has(.dkf-root) [data-width-handle]`），切回对话页自动恢复。
 

@@ -191,76 +191,116 @@ window.__ModuleLoader__.load({
     }
 
     const CSS = `
-.dkf-root{display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#111)}
-.dkf-head{display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:.5px solid var(--dsw-alias-border-l2,#e3e3e3);flex:none}
-.dkf-brand{font:600 13px/20px var(--dsw-font-family,inherit)}
-.dkf-repo{color:var(--dsw-alias-label-secondary,#666);font:12px/20px var(--dsw-font-family-code,monospace);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+/* 设计语言的唯一出处：具体值只写在这里，其余规则一律引用变量。
+   字号取宿主台阶（11 / 12 / 13），圆角取 --dsw-radius-*（4 / 8 / 12），
+   颜色取语义 token（label / border / bg / interactive / state），不写裸色。 */
+.dkf-root{
+  --dkf-fs-meta:11px;--dkf-lh-meta:16px;
+  --dkf-fs-body:12px;--dkf-lh-body:18px;
+  --dkf-fs-em:13px;--dkf-lh-em:20px;
+  --dkf-r:var(--dsw-radius-xs,4px);
+  --dkf-r-box:var(--dsw-radius-sm,8px);
+  --dkf-r-float:var(--dsw-radius-md,12px);
+  --dkf-fg:var(--dsw-alias-label-primary,#1f1f1f);
+  --dkf-fg2:var(--dsw-alias-label-secondary,#5c5c5c);
+  --dkf-fg3:var(--dsw-alias-label-tertiary,#8c8c8c);
+  --dkf-line:var(--dsw-alias-border-l2,#0000001a);
+  --dkf-line-2:var(--dsw-alias-border-l3,#00000029);
+  --dkf-bg:var(--dsw-alias-bg-layer-1,#fff);
+  --dkf-bg2:var(--dsw-alias-bg-layer-2,#f7f7f7);
+  --dkf-hover:var(--dsw-alias-interactive-bg-hover,#2631480f);
+  --dkf-accent:var(--dsw-alias-state-business-primary,#4176e6);
+  --dkf-ok:var(--dsw-alias-state-success-primary,#35a35f);
+  --dkf-warn:var(--dsw-alias-state-warn-primary,#b4690e);
+  --dkf-mono:var(--ds-font-family-code,ui-monospace,Menlo,monospace);
+  --dkf-sans:var(--dsw-font-family,inherit);
+  display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden;
+  background:var(--dkf-bg);color:var(--dkf-fg);
+  font-family:var(--dkf-sans);font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body);
+}
+/* 键盘焦点：三页一套，与宿主 focus ring 同宽 */
+.dkf-tab:focus-visible,.dkf-modebtn:focus-visible,.dkf-refresh:focus-visible,.dkf-focuschip:focus-visible,.dkf-toggle:focus-visible,.dkf-focusbtn:focus-visible{box-shadow:inset 0 0 0 2px var(--dkf-accent)}
+/* 页头第一层：只放身份与全局动作 */
+.dkf-head{display:flex;align-items:center;gap:8px;padding:0 12px;min-height:34px;border-bottom:.5px solid var(--dkf-line);flex:none}
+.dkf-repo{font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body);font-weight:600;color:var(--dkf-fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .dkf-spacer{flex:1}
-.dkf-refresh{border:.5px solid var(--dsw-alias-border-l2,#ddd);background:0 0;color:var(--dsw-alias-label-secondary,#666);border-radius:4px;font:12px/18px var(--dsw-font-family,inherit);padding:1px 8px;cursor:pointer}
-.dkf-refresh:hover{color:var(--dsw-alias-label-primary,#111);background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
-.dkf-focuschip{all:unset;cursor:pointer;color:var(--dsw-alias-label-primary,#111);font:12px/18px var(--dsw-font-family-code,monospace);border:.5px solid var(--dsw-alias-border-l3,#ccc);border-radius:10px;padding:1px 8px;white-space:nowrap;max-width:320px;overflow:hidden;text-overflow:ellipsis}
-.dkf-focuschip:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
-.dkf-tabs{display:flex;gap:2px;padding:0 14px;border-bottom:.5px solid var(--dsw-alias-border-l2,#e3e3e3);flex:none}
-.dkf-tab{all:unset;cursor:pointer;padding:5px 10px;border-radius:4px 4px 0 0;color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family,inherit)}
-.dkf-tab:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
-.dkf-tab-active{color:var(--dsw-alias-label-primary,#111);box-shadow:inset 0 -2px 0 var(--dsw-alias-label-primary,#111)}
-.dkf-scroll{flex:1;min-height:0;overflow:auto;padding:10px 14px 32px}
-.dkf-note{color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family,inherit);margin:0 0 6px}
-.dkf-warn{color:#b4690e;font:12px/18px var(--dsw-font-family,inherit);margin:0 0 6px}
-.dkf-error{margin:8px 0;padding:10px 12px;border:.5px solid var(--dsw-alias-border-l2,#e3e3e3);border-radius:6px}
-.dkf-error-title{margin:0 0 4px;font:500 13px/20px var(--dsw-font-family,inherit)}
-.dkf-error-detail{margin:0;color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family-code,monospace);word-break:break-all}
-.dkf-list{display:flex;flex-direction:column;outline:none}
-.dkf-row{display:grid;grid-template-columns:auto auto auto auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:5px 6px;border-radius:4px;min-width:0;outline:none}
-.dkf-row:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
-.dkf-row:focus-visible{box-shadow:inset 0 0 0 1.5px var(--dsw-alias-state-business-primary,#4176e6)}
-.dkf-focus{border:.5px solid var(--dsw-alias-border-l3,#ccc);background:var(--dsw-alias-bg-layer-2,#fafafa);margin-bottom:2px}
+.dkf-refresh,.dkf-focuschip{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:var(--dkf-r);color:var(--dkf-fg2);white-space:nowrap;font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-refresh:hover,.dkf-focuschip:hover{background:var(--dkf-hover);color:var(--dkf-fg)}
+.dkf-focuschip{font-family:var(--dkf-mono);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line-2);max-width:320px;overflow:hidden;text-overflow:ellipsis}
+/* 页头第二层：左页切换、右当前页计数或工具，三页同高同排 */
+.dkf-bar{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;padding:4px 12px;min-height:36px;border-bottom:.5px solid var(--dkf-line);flex:none}
+.dkf-tabs{display:inline-flex;align-items:center;gap:2px;padding:2px 0;flex:none}
+.dkf-tab{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:24px;padding:0 9px;border-radius:var(--dkf-r);color:var(--dkf-fg2);font-family:var(--dkf-sans);font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body)}
+.dkf-tab:hover{background:var(--dkf-hover);color:var(--dkf-fg)}
+.dkf-tab-active{background:var(--dkf-bg2);color:var(--dkf-fg);font-weight:600;box-shadow:inset 0 0 0 .5px var(--dkf-line)}
+.dkf-bar-tools{display:flex;align-items:center;gap:6px;margin-left:auto;min-width:0}
+.dkf-count{color:var(--dkf-fg3);white-space:nowrap;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-mode{display:inline-flex;align-items:center;gap:2px}
+.dkf-modebtn{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:22px;padding:0 6px;border-radius:var(--dkf-r);color:var(--dkf-fg3);font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-modebtn:hover{color:var(--dkf-fg);background:var(--dkf-hover)}
+.dkf-modebtn-active{background:var(--dkf-bg2);color:var(--dkf-fg);font-weight:600;box-shadow:inset 0 0 0 .5px var(--dkf-line)}
+.dkf-bar-tools .dkf-mode+.dkf-mode{padding-left:6px;box-shadow:inset 1px 0 0 var(--dkf-line)}
+/* 内容区：唯一可滚动的地方 */
+.dkf-scroll{flex:1;min-height:0;overflow:auto;padding:8px 8px 32px}
+.dkf-note{color:var(--dkf-fg2);margin:0 0 8px;padding:0 4px;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-warn{color:var(--dkf-warn);margin:0 0 8px;padding:0 4px;font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body)}
+.dkf-error{margin:8px 4px;padding:10px 12px;border-radius:var(--dkf-r-box);background:var(--dkf-bg2);box-shadow:inset 0 0 0 .5px var(--dkf-line)}
+.dkf-error-title{margin:0 0 4px;font-size:var(--dkf-fs-em);line-height:var(--dkf-lh-em);font-weight:600}
+.dkf-error-detail{margin:0;color:var(--dkf-fg2);word-break:break-all;font-family:var(--dkf-mono);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-empty{color:var(--dkf-fg3);margin:8px 4px;font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body)}
+/* 列表：三页共用同一套列宽，同名列落在同一 x */
+.dkf-list{display:flex;flex-direction:column;outline:none;position:relative}
+/* 竖脊：时间线的“有序”由这一条线承担，色点压在线上 */
+.dkf-rail::before{content:'';position:absolute;left:12px;top:12px;bottom:12px;width:1px;background:var(--dkf-line)}
+.dkf-row{display:grid;grid-template-columns:auto 10px auto auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:4px 6px;border-radius:var(--dkf-r);min-width:0;outline:none}
+.dkf-row:hover{background:var(--dkf-hover)}
+.dkf-row:focus-visible,.dkf-arow:focus-visible{box-shadow:inset 0 0 0 2px var(--dkf-accent)}
+.dkf-focus{background:var(--dkf-bg2);box-shadow:inset 0 0 0 .5px var(--dkf-line)}
+.dkf-focus:hover{background:var(--dkf-bg2)}
 .dkf-clickable{cursor:pointer}
-.dkf-indent{margin-left:22px}
-.dkf-crumb{color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family,inherit);padding:2px 6px;cursor:pointer;width:max-content;border-radius:4px}
-.dkf-crumb:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04));color:var(--dsw-alias-label-primary,#111)}
-.dkf-strip{display:inline-flex;gap:2px;align-items:center}
-.dkf-block{width:7px;height:15px;border-radius:2px;background:var(--dsw-alias-label-tertiary,#999);opacity:.85}
-.dkf-block-current{outline:1.5px solid var(--dsw-alias-label-primary,#111);outline-offset:1px}
-.dkf-id{font:500 12px/18px var(--dsw-font-family-code,monospace);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
-.dkf-caret{color:var(--dsw-alias-label-tertiary,#999);font:10px/16px var(--dsw-font-family,inherit);width:8px;text-align:center}
+.dkf-indent{margin-left:18px}
+.dkf-crumb{color:var(--dkf-fg2);cursor:pointer;padding:2px 6px;width:max-content;border-radius:var(--dkf-r);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-crumb:hover{background:var(--dkf-hover);color:var(--dkf-fg)}
+.dkf-strip{display:inline-flex;gap:1px;align-items:center}
+.dkf-block{width:3px;height:11px;border-radius:1px;background:var(--dkf-fg3);opacity:.55}
+.dkf-block-current{opacity:1;box-shadow:0 0 0 1.5px var(--dkf-bg)}
+.dkf-caret{color:var(--dkf-fg3);width:10px;text-align:center;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-id{font-family:var(--dkf-mono);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta);font-weight:500;color:var(--dkf-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+.dkf-edge{font-family:var(--dkf-mono);color:var(--dkf-fg3)}
 .dkf-badges{display:inline-flex;gap:4px;align-items:center;flex:none}
-.dkf-chip{font:10px/16px var(--dsw-font-family,inherit);padding:0 5px;border-radius:3px;border:.5px solid var(--dsw-alias-border-l2,#e3e3e3);color:var(--dsw-alias-label-secondary,#666);white-space:nowrap}
-.dkf-chip-done{color:#35a35f;border-color:rgba(53,163,95,.4)}
-.dkf-edge{font:10px/16px var(--dsw-font-family-code,monospace);color:var(--dsw-alias-label-tertiary,#999);white-space:nowrap}
-.dkf-title{color:var(--dsw-alias-label-primary,#111);font:12px/18px var(--dsw-font-family,inherit);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.dkf-ago{color:var(--dsw-alias-label-tertiary,#999);font:11px/16px var(--dsw-font-family,inherit);white-space:nowrap}
-.dkf-empty{color:var(--dsw-alias-label-tertiary,#999);font:12px/18px var(--dsw-font-family,inherit);margin:6px 2px}
-.dkf-group{margin:10px 0 0}
-.dkf-group-head{display:flex;align-items:center;gap:6px;color:var(--dsw-alias-label-tertiary,#999);font:11px/16px var(--dsw-font-family,inherit);text-transform:uppercase;letter-spacing:.04em;margin:0 0 4px 2px}
-.dkf-toggle{all:unset;cursor:pointer;color:var(--dsw-alias-label-secondary,#666);font:11px/16px var(--dsw-font-family,inherit)}
-.dkf-toggle:hover{color:var(--dsw-alias-label-primary,#111)}
-.dkf-focusbtn{all:unset;cursor:pointer;color:var(--dsw-alias-label-tertiary,#999);font:11px/16px var(--dsw-font-family,inherit);white-space:nowrap;padding:1px 5px;border-radius:4px;opacity:0}
+.dkf-chip{padding:0 4px;border-radius:var(--dkf-r);color:var(--dkf-fg2);white-space:nowrap;box-shadow:inset 0 0 0 .5px var(--dkf-line);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-chip-done{color:var(--dkf-ok);box-shadow:inset 0 0 0 .5px currentColor}
+.dkf-chip-action{color:var(--dkf-row-color,var(--dkf-fg2))}
+.dkf-title{color:var(--dkf-fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body)}
+.dkf-ago{color:var(--dkf-fg3);white-space:nowrap;font-variant-numeric:tabular-nums;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-focusbtn{all:unset;cursor:pointer;color:var(--dkf-fg3);white-space:nowrap;padding:0 5px;border-radius:var(--dkf-r);opacity:0;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-row:hover .dkf-focusbtn,.dkf-row:focus-within .dkf-focusbtn,.dkf-arow:hover .dkf-focusbtn,.dkf-arow:focus-within .dkf-focusbtn{opacity:1}
-.dkf-focusbtn:hover,.dkf-focusbtn:focus-visible{opacity:1;color:var(--dsw-alias-label-primary,#111);background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
-.dkf-arow{display:grid;grid-template-columns:3px auto auto minmax(0,1fr) auto auto auto;align-items:center;gap:8px;padding:4px 6px;border-radius:4px;min-width:0;outline:none;cursor:pointer}
-.dkf-arow:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
-.dkf-arow:focus-visible{box-shadow:inset 0 0 0 1.5px var(--dsw-alias-state-business-primary,#4176e6)}
-.dkf-abar{width:3px;height:16px;border-radius:2px;background:${NEUTRAL}}
-.dkf-aissue{color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family-code,monospace);white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis}
-.dkf-achip{font:10px/16px var(--dsw-font-family,inherit);padding:0 5px;border-radius:3px;border:.5px solid currentColor;white-space:nowrap}
-.dkf-atitle{color:var(--dsw-alias-label-primary,#111);font:12px/18px var(--dsw-font-family,inherit);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.dkf-ashort{font:10px/16px var(--dsw-font-family-code,monospace);color:var(--dsw-alias-label-tertiary,#999)}
-.dkf-sub{margin:2px 0 6px 30px;border-left:2px solid var(--dsw-alias-border-l2,#e3e3e3);padding:2px 0 2px 10px;display:flex;flex-direction:column;gap:2px}
-.dkf-subrow{display:grid;grid-template-columns:3px auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:2px 4px;border-radius:3px}
-.dkf-subrow:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
-.dkf-detail{margin:2px 0 6px 30px;border-left:2px solid var(--dsw-alias-border-l2,#e3e3e3);padding:2px 0 2px 10px;display:flex;flex-direction:column;gap:2px;color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family,inherit)}
-.dkf-detail-key{display:inline-block;min-width:48px;color:var(--dsw-alias-label-tertiary,#999)}
-.dkf-detail code{font:12px/18px var(--dsw-font-family-code,monospace);word-break:break-all;color:var(--dsw-alias-label-primary,#111)}
+.dkf-focusbtn:hover,.dkf-focusbtn:focus-visible{opacity:1;color:var(--dkf-fg);background:var(--dkf-hover)}
+/* 时间线：一行一个动作，点色 = 动作色 */
+.dkf-arow{position:relative;display:grid;grid-template-columns:12px auto auto minmax(0,1fr) auto auto auto;align-items:center;gap:8px;padding:4px 6px;border-radius:var(--dkf-r);min-width:0;outline:none;cursor:pointer}
+.dkf-arow:hover{background:var(--dkf-hover)}
+.dkf-abar{width:7px;height:7px;border-radius:50%;justify-self:center;position:relative;z-index:1;background:var(--dkf-row-color,var(--dkf-fg3));box-shadow:0 0 0 2px var(--dkf-bg)}
+.dkf-aissue{font-family:var(--dkf-mono);color:var(--dkf-fg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:22ch;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-achip{color:var(--dkf-row-color,var(--dkf-fg2));white-space:nowrap;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-atitle{color:var(--dkf-fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body)}
+.dkf-ashort{font-family:var(--dkf-mono);color:var(--dkf-fg3);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+/* 展开层：动作历史与提交详情，缩进到标题列 */
+.dkf-sub{margin:2px 0 6px 34px;padding:2px 0 2px 10px;border-left:1px solid var(--dkf-line);display:flex;flex-direction:column;gap:1px}
+.dkf-subrow{display:grid;grid-template-columns:12px auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:2px 6px;border-radius:var(--dkf-r)}
+.dkf-subrow:hover{background:var(--dkf-hover)}
+.dkf-subrow .dkf-abar{width:5px;height:5px;box-shadow:none}
+.dkf-detail{margin:2px 6px 8px 34px;padding:2px 0 2px 10px;border-left:1px solid var(--dkf-line);display:flex;flex-direction:column;gap:2px;color:var(--dkf-fg2);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-detail-key{display:inline-block;min-width:44px;color:var(--dkf-fg3)}
+.dkf-detail code{font-family:var(--dkf-mono);color:var(--dkf-fg);word-break:break-all;font-size:var(--dkf-fs-meta)}
 .dkf-panel{display:flex;flex-direction:column;min-height:0}
-.dkf-mode{display:inline-flex;gap:2px;align-self:flex-start;margin:0 0 8px;padding:2px;border:.5px solid var(--dsw-alias-border-l2,#e3e3e3);border-radius:6px}
-.dkf-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.dkf-toolbar .dkf-mode{margin:0 0 8px}
-.dkf-modebtn{all:unset;cursor:pointer;padding:2px 10px;border-radius:4px;color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family,inherit)}
-.dkf-modebtn:hover{color:var(--dsw-alias-label-primary,#111)}
-.dkf-modebtn-active{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.06));color:var(--dsw-alias-label-primary,#111)}
-.dkf-graphwrap{display:flex;flex-direction:column;gap:6px;min-width:0}
-.dkf-graph{border:.5px solid var(--dsw-alias-border-l2,#e3e3e3);border-radius:6px;min-height:260px;padding:6px;overflow:hidden;background:var(--dsw-alias-bg-layer-2,#fafafa)}
+/* 分组：靠字号与留白分组，不画线 */
+.dkf-group{margin:12px 0 0}
+.dkf-group-head{display:flex;align-items:center;gap:6px;color:var(--dkf-fg3);font-weight:600;margin:0 0 4px;padding:0 6px;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-toggle{all:unset;cursor:pointer;color:var(--dkf-fg2);padding:0 4px;border-radius:var(--dkf-r);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-toggle:hover{color:var(--dkf-fg);background:var(--dkf-hover)}
+/* 关系图：图框去外边框，图例压成一行 */
+.dkf-graphwrap{display:flex;flex-direction:column;gap:8px;min-width:0}
+.dkf-graph{border-radius:var(--dkf-r-box);background:var(--dkf-bg2);box-shadow:inset 0 0 0 .5px var(--dkf-line);padding:8px;overflow:hidden;min-height:260px}
 .dkf-graph svg{display:block;max-width:100%;height:auto}
 .dkf-graph{--dkf-dim-node:.2;--dkf-dim-edge-mix:20%;--dkf-dim-label-mix:20%}
 .dkf-graph svg{--dkf-dim-edge-color:color-mix(in srgb,var(--_fg,#1f1f1f) var(--dkf-dim-edge-mix),var(--_bg,#fff));--dkf-dim-label-color:color-mix(in srgb,var(--_fg,#1f1f1f) var(--dkf-dim-label-mix),var(--_bg,#fff))}
@@ -269,20 +309,21 @@ window.__ModuleLoader__.load({
 .dkf-gedge-dim path{stroke:var(--dkf-dim-edge-color);transition:stroke .12s ease}
 .dkf-gedge-dim .pele-marker{fill:var(--dkf-dim-edge-color)}
 .dkf-gedge-label-dim text{fill:var(--dkf-dim-label-color);transition:fill .12s ease}
-.dkf-graph{--dkf-focus-glow:2px;--dkf-focus-color:var(--dsw-alias-state-business-primary,#4176e6)}
+.dkf-graph{--dkf-focus-glow:2px;--dkf-focus-color:var(--dkf-accent)}
 .dkf-gnode-focus{filter:drop-shadow(0 0 var(--dkf-focus-glow) var(--dkf-focus-color)) drop-shadow(0 0 calc(var(--dkf-focus-glow) * 2) var(--dkf-focus-color))}
-.dkf-legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:2px 18px;padding:6px 2px 0}
-.dkf-legend-row{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary,#666);font:12px/20px var(--dsw-font-family,inherit)}
+.dkf-legend{display:flex;flex-wrap:wrap;gap:4px 16px;padding:0 4px}
+.dkf-legend-row{display:flex;align-items:center;gap:6px;color:var(--dkf-fg3);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-legend-off{opacity:.15}
-.dkf-legend-svg{flex:none;color:var(--dsw-alias-label-primary,#111)}
-.dkf-legend-end{font:10px/16px var(--dsw-font-family-code,monospace);color:var(--dsw-alias-label-primary,#111);flex:none}
-.dkf-legend-text{color:var(--dsw-alias-label-secondary,#666)}
-/* 节点说明框：定位用 left/top + transform（翻转），所以不必量高度；不接指针，免得自己挡自己 */
-.dkf-tip{position:fixed;z-index:40;pointer-events:none;max-width:340px;padding:6px 9px;border-radius:6px;border:.5px solid var(--dsw-alias-border-l2,#e3e3e3);background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:0 4px 14px rgba(0,0,0,.14)}
+.dkf-legend-svg{flex:none;width:40px;height:auto;color:var(--dkf-fg2)}
+.dkf-legend-end{font-family:var(--dkf-mono);color:var(--dkf-fg2);flex:none}
+.dkf-legend-text{color:var(--dkf-fg3)}
+/* 节点提示：宿主浮层阴影，不自己画边框 */
+.dkf-tip{position:fixed;z-index:40;pointer-events:none;max-width:320px;padding:8px 10px;border-radius:var(--dkf-r-float);background:var(--dkf-bg);box-shadow:var(--dsw-elevation-panel,0 3px 8px rgba(0,0,0,.08))}
 .dkf-tip-head{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
-.dkf-tip-id{font:11px/16px var(--dsw-font-family-code,monospace);color:var(--dsw-alias-label-tertiary,#999);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dkf-tip-meta{margin-left:auto;flex:none;font:11px/16px var(--dsw-font-family,inherit);color:var(--dsw-alias-label-tertiary,#999)}
-.dkf-tip-title{font:12px/18px var(--dsw-font-family,inherit);color:var(--dsw-alias-label-primary,#111);white-space:normal;overflow-wrap:anywhere}
+.dkf-tip-id{font-family:var(--dkf-mono);color:var(--dkf-fg3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-tip-meta{margin-left:auto;flex:none;color:var(--dkf-fg3);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-tip-title{color:var(--dkf-fg);white-space:normal;overflow-wrap:anywhere;font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body)}
+.dkf-mermaid{margin:0;padding:8px 10px;max-height:320px;overflow:auto;border-radius:var(--dkf-r);background:var(--dkf-bg2);color:var(--dkf-fg2);font-family:var(--dkf-mono);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta);white-space:pre}
 /*
  * DSH 的“拖动调宽”手柄（[data-width-handle]，由 dsh-client-ui-conversation 的
  * ConversationWidthControls 渲染）是对话容器的兄弟节点、绝对定位，会横穿我们的整个视图：
@@ -291,7 +332,6 @@ window.__ModuleLoader__.load({
  * .dkf-root 卸载，:has() 不再命中，手柄自动回来。
  */
 [data-conversation-content]:has(.dkf-root) [data-width-handle]{display:none}
-.dkf-mermaid{margin:0;padding:8px 10px;max-height:320px;overflow:auto;border-radius:4px;background:var(--dsw-alias-markdown-code-block,#f6f6f6);color:var(--dsw-alias-label-secondary,#666);font:11px/16px var(--dsw-font-family-code,monospace);white-space:pre}
 `
 
     /** 样式只注入一次；插件卸载不回收（无害），重载复用同一节点。 */
@@ -762,9 +802,9 @@ window.__ModuleLoader__.load({
           .map((action) =>
             h(
               'div',
-              { className: 'dkf-subrow', key: `${action.ordinal}-${action.short || ''}` },
-              h('span', { className: 'dkf-abar', style: { background: colorOf(action.action) } }),
-              h('span', { className: 'dkf-achip', style: { color: colorOf(action.action) } }, action.action || '?'),
+              { className: 'dkf-subrow', key: `${action.ordinal}-${action.short || ''}`, style: { '--dkf-row-color': colorOf(action.action) } },
+              h('span', { className: 'dkf-abar' }),
+              h('span', { className: 'dkf-achip' }, action.action || '?'),
               h('span', { className: 'dkf-atitle', title: action.title }, action.title || '（无标题）'),
               h('span', { className: 'dkf-ashort' }, action.short || ''),
               h('span', { className: 'dkf-ago' }, ago(action.date)),
@@ -809,6 +849,7 @@ window.__ModuleLoader__.load({
             className: cls('dkf-row', props.focus && 'dkf-focus', props.indent && 'dkf-indent', 'dkf-clickable'),
             'data-row': '',
             tabIndex: -1,
+            style: { '--dkf-row-color': colorOf(issue.action) },
             onClick: props.onToggle,
             onKeyDown: (event) => rowKeyDown(event, props),
           },
@@ -824,7 +865,7 @@ window.__ModuleLoader__.load({
             'span',
             { className: 'dkf-badges' },
             issue.domain ? h('span', { className: 'dkf-chip' }, issue.domain) : null,
-            h('span', { className: 'dkf-chip', style: { color: colorOf(issue.action) } }, issue.action || '?'),
+            h('span', { className: 'dkf-chip dkf-chip-action' }, issue.action || '?'),
             issue.done ? h('span', { className: 'dkf-chip dkf-chip-done' }, 'done') : null,
           ),
           h('span', { className: 'dkf-title' }, last?.title || issue.title || '（无标题）'),
@@ -860,13 +901,14 @@ window.__ModuleLoader__.load({
             className: 'dkf-arow',
             'data-row': '',
             tabIndex: -1,
+            style: { '--dkf-row-color': colorOf(row.action) },
             onClick: props.onToggle,
             onKeyDown: (event) => rowKeyDown(event, props),
             title: '点开看这条提交的详情',
           },
-          h('span', { className: 'dkf-abar', style: { background: colorOf(row.action) } }),
+          h('span', { className: 'dkf-abar' }),
           h('span', { className: 'dkf-aissue' }, row.issueId),
-          h('span', { className: 'dkf-achip', style: { color: colorOf(row.action) } }, row.action || '?'),
+          h('span', { className: 'dkf-achip' }, row.action || '?'),
           h('span', { className: 'dkf-atitle', title: row.title }, row.title || '（无标题）'),
           h('span', { className: 'dkf-ashort' }, row.short || ''),
           h('span', { className: 'dkf-ago' }, ago(row.date)),
@@ -941,7 +983,7 @@ window.__ModuleLoader__.load({
       if (props.rows.length === 0) return h('p', { className: 'dkf-empty' }, props.emptyText)
       return h(
         'div',
-        { className: 'dkf-list', tabIndex: 0, onKeyDown: listKeyDown },
+        { className: 'dkf-list dkf-rail', tabIndex: 0, onKeyDown: listKeyDown },
         props.rows.map((row, index) =>
           h(ActionRow, {
             key: `${row.issueId}-${row.ordinal}-${index}`,
@@ -1378,47 +1420,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** 关系页：只有图。全局 / 聚焦两种取景共用同一个焦点，页内不分“图 / 列表”了。 */
-    function RelationPanel(props) {
-      return h(
-        'div',
-        { className: 'dkf-panel' },
-        h(
-          'div',
-          { className: 'dkf-toolbar' },
-          h(Segmented, {
-            label: '图的布局方向',
-            options: GRAPH_DIRECTIONS,
-            active: props.direction === 'TB' ? 'TB' : 'LR',
-            onSelect: props.onDirection,
-          }),
-          h(Segmented, {
-            label: '视图',
-            options: GRAPH_VIEWS,
-            active: props.graphView === 'focus' ? 'focus' : 'global',
-            onSelect: props.onView,
-          }),
-          props.graphView === 'focus'
-            ? h(Segmented, {
-                label: '聚焦的半径',
-                options: GRAPH_DEPTHS,
-                active: props.depth === '2' ? '2' : '1',
-                onSelect: props.onFocusDepth,
-              })
-            : null,
-        ),
-        h(GraphPanel, {
-          issues: props.issues,
-          relations: props.relations,
-          focusId: props.focusId,
-          direction: props.direction,
-          graphView: props.graphView,
-          depth: props.depth,
-          onFocus: props.onFocus,
-        }),
-      )
-    }
-
     function KilnView(props) {
       const cwd = typeof props.cwd === 'string' ? props.cwd : ''
       const idBase = 'dsh-kiln-view'
@@ -1544,7 +1545,6 @@ window.__ModuleLoader__.load({
       const header = h(
         'div',
         { className: 'dkf-head' },
-        h('span', { className: 'dkf-brand' }, 'kiln'),
         h(
           'span',
           {
@@ -1554,7 +1554,7 @@ window.__ModuleLoader__.load({
                 ? `${cwd}\n快照：${payload.cache?.action ?? 'unknown'} · ${payload.generatedAt ?? ''}`
                 : cwd,
           },
-          payload?.ok === true ? `${basename(cwd)} · ${issues.length} issue` : basename(cwd),
+          basename(cwd) || 'kiln',
         ),
         h('span', { className: 'dkf-spacer' }),
         focus !== null
@@ -1569,10 +1569,61 @@ window.__ModuleLoader__.load({
               `焦点：${focus.id} ×`,
             )
           : null,
-        h('button', { type: 'button', className: 'dkf-refresh', onClick: refresh }, '刷新'),
+        h('button', { type: 'button', className: 'dkf-refresh', onClick: refresh, title: '重新读取 kiln 快照' }, '刷新'),
       )
 
-      const tabs = payload?.ok === true ? h(PageTabs, { pages: PAGES, active: tabId, onSelect: selectTab, idBase }) : null
+      /**
+       * 第二层页头：左页切换，右「当前页的计数或工具」。
+       * 关系页放三段取景控件，其余两页放计数——三页的第二层永远存在、同高、内容右对齐。
+       */
+      const pageTools =
+        tabId === 'relation'
+          ? [
+              h(Segmented, {
+                key: 'direction',
+                label: '图的布局方向',
+                options: GRAPH_DIRECTIONS,
+                active: graphDirection,
+                onSelect: selectDirection,
+              }),
+              h(Segmented, {
+                key: 'view',
+                label: '视图',
+                options: GRAPH_VIEWS,
+                active: graphView,
+                onSelect: selectView,
+              }),
+              graphView === 'focus'
+                ? h(Segmented, {
+                    key: 'depth',
+                    label: '聚焦的半径',
+                    options: GRAPH_DEPTHS,
+                    active: graphDepth,
+                    onSelect: selectDepth,
+                  })
+                : null,
+            ]
+          : null
+
+      const bar =
+        payload?.ok === true
+          ? h(
+              'div',
+              { className: 'dkf-bar' },
+              h(PageTabs, { pages: PAGES, active: tabId, onSelect: selectTab, idBase }),
+              h(
+                'div',
+                { className: 'dkf-bar-tools' },
+                pageTools !== null
+                  ? pageTools
+                  : h(
+                      'span',
+                      { className: 'dkf-count' },
+                      tabId === 'timeline' ? `${rows.length} 个动作` : `${issueList.length} 个 issue`,
+                    ),
+              ),
+            )
+          : null
 
       let body = null
       if (state.phase === 'loading' && payload === null) {
@@ -1643,16 +1694,13 @@ window.__ModuleLoader__.load({
                   onToggleChildren: () => setExpandedChildren((value) => !value),
                 })
         } else {
-          content = h(RelationPanel, {
-            direction: graphDirection,
-            graphView,
-            depth: graphDepth,
+          content = h(GraphPanel, {
             issues,
             relations,
             focusId: focus === null ? null : focus.id,
-            onDirection: selectDirection,
-            onView: selectView,
-            onFocusDepth: selectDepth,
+            direction: graphDirection,
+            graphView,
+            depth: graphDepth,
             onFocus: focusIssue,
           })
         }
@@ -1696,7 +1744,7 @@ window.__ModuleLoader__.load({
           },
         },
         header,
-        tabs,
+        bar,
         h('div', { className: 'dkf-scroll' }, body),
       )
     }

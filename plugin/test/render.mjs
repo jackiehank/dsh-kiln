@@ -203,6 +203,32 @@ check('绑定：三段 tablist，默认选中第一段', () => {
   assert.equal(tabs[1].props.tabIndex, -1)
 })
 
+check('页头：两层，第二层左页切换、右当前页计数', () => {
+  const view = render({ tabId: 'timeline' })
+  assert.equal(byClass(view, 'dkf-bar').length, 1, '三页共用一个第二层页头')
+  const bar = byClass(view, 'dkf-bar')[0]
+  assert.equal(byClass(bar, 'dkf-tabs').length, 1, '页切换在第二层左侧')
+  assert.equal(textOf(byClass(bar, 'dkf-count')[0]), '4 个动作', '时间线页右侧放动作数')
+  assert.equal(byClass(view, 'dkf-modebtn').length, 0, '非关系页没有图的取景控件')
+})
+
+check('页头：关系页右侧换成取景控件，不再另起一行工具条', () => {
+  const view = render({ tabId: 'relation' })
+  const bar = byClass(view, 'dkf-bar')[0]
+  assert.equal(byClass(bar, 'dkf-count').length, 0, '关系页右侧是控件不是计数')
+  assert.deepEqual(byClass(bar, 'dkf-modebtn').map(textOf), ['横向', '纵向', '全局', '聚焦'])
+  assert.equal(byClass(view, 'dkf-toolbar').length, 0, '旧的行内工具条已去掉')
+})
+
+check('时间线：列表带竖脊，行的动作色走行级 CSS 变量', () => {
+  const view = render({ tabId: 'timeline' })
+  assert.equal(byClass(view, 'dkf-rail').length, 1, '竖脊只在时间线的列表上')
+  const row = byClass(view, 'dkf-arow')[0]
+  assert.ok(row.props.style['--dkf-row-color'], '行把动作色放进 --dkf-row-color')
+  assert.equal(byClass(row, 'dkf-abar')[0].props.style, undefined, '色点不再内联 background')
+  assert.equal(byClass(row, 'dkf-achip')[0].props.style, undefined, '动作名不再内联 color')
+})
+
 check('timeline 全局：4 条 action 一行一条，按时间倒序', () => {
   const rows = byClass(tree, 'dkf-arow')
   assert.equal(rows.length, 4)
