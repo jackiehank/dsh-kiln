@@ -38,3 +38,67 @@
 - 浅色主题的观感不变（边仍是最深的一条，节点仍是白底深字）。
 - `.dkf-graph` 之外不出现新的裸色值；`--pele-*` 的映射只写在一个规则里。
 - 测试里钉住两条：映射存在、淡化混色目标是画布色而不是白/前景。
+
+## 收集：图是 Pele 画的，颜色也是 Pele 定的
+
+![深色 · 聚焦：正常的边几乎看不见，淡化后的边反而最亮](assets/dark-focus-before.png)
+
+![深色 · 全局：一堆白框浮在深色画布上，边几乎消失](assets/dark-global-before.png)
+
+### Pele 的主题钩子（`plugin/lib/client.pele.js` 里的一行字符串）
+
+```js
+"--_bg:var(--pele-bg,#fff);--_fg:var(--pele-fg,#1f1f1f);--_m:var(--pele-muted,#6e6e6e);
+ --_l:var(--pele-line,#1f1f1f);--_s:var(--pele-surface,#f3f3f3);--_a:var(--pele-surface-alt,#e6e6e6);
+ --_b:var(--pele-border,#8a8a8a);--_c:var(--pele-accent,#5b7bd5)"
+```
+
+它把 `--pele-*` 转成内部变量 `--_*`，再用在生成的 SVG 上。各变量的落点（在 bundle 里数出来的）：
+
+| Pele 变量 | 默认 | 用在哪 | 证据 |
+| --- | --- | --- | --- |
+| `--pele-line` | `#1f1f1f` | **所有边**与箭头 | `<g class="pele-edges" stroke="var(--_l)">` |
+| `--pele-surface` | `#f3f3f3` | 节点填充 | `fill="var(--_s)"` ×25 |
+| `--pele-border` | `#8a8a8a` | 形状描边、缩放控件边框 | `stroke="var(--_b)"` ×78 |
+| `--pele-bg` | `#fff` | 边标签底板、控件底 | `fill="var(--_bg)"` ×38 |
+| `--pele-fg` | `#1f1f1f` | 节点/标签文字、箭头 | `fill="var(--_fg)"` ×7 |
+| `--pele-muted` | `#6e6e6e` | 次级文字 | `var(--_m)` |
+| `--pele-surface-alt` | `#e6e6e6` | 交替色块 | `fill="var(--_a)"` ×16 |
+| `--pele-accent` | `#5b7bd5` | 强调 | `fill="var(--_c)"` ×3 |
+
+**我们从来没给 `--pele-*` 赋过值**（`client.js` 里 0 处），Pele 自己也不看主题
+（bundle 里 `prefers-color-scheme` 0 次、`data-theme` 0 次）。所以无论 DSH 是浅色还是深色，
+图永远按默认的"白底深字"渲染——这就是全部根因。
+
+### 从两张截图上取的颜色（不是猜的）
+
+| 位置 | 实测 | 对应 |
+| --- | --- | --- |
+| 图卡画布 | `#2c2c2e` | 正好等于深色 `--dsw-alias-bg-layer-2`（`neutral-bluish-850`）→ token 本身是对的 |
+| 页面底 | `#232324` | `--dsw-alias-bg-layer-1`（`875`） |
+| 节点填充 | `#f3f3f3` | Pele `--pele-surface` 的默认值 |
+| 正常边 | `#1f1f1f` | Pele `--pele-line` 的默认值 |
+| 淡化边 | `#d2d2d2` | 我们算的 `color-mix(20% #1f1f1f, 80% #fff)` = `0.2×31 + 0.8×255 = 210` = `#d2d2d2` |
+
+最后一行是关键：淡化后的颜色与像素值**逐位吻合**，说明"越淡越亮"不是观感问题，是公式拿错了混色终点——
+拿白底（`--_bg`）当终点，而不是拿图的画布色当终点。
+
+### 对比度（WCAG 相对亮度）
+
+| | 正常边 | 淡化边 | 结论 |
+| --- | --- | --- | --- |
+| 深色 · 改前 | 1.18:1（`#1f1f1f` on `#2c2c2e`） | 9.22:1（`#d2d2d2` on `#2c2c2e`） | 反了：淡化线比正常线显眼 8 倍 |
+| 深色 · 改后 | 9.25:1（`#cfd3d6`） | 1.65:1 | 顺序正确 |
+| 浅色 · 改后 | 5.8:1（`#61666b` on `#fff`） | 1.32:1 | 与改前同量级（改前 `#1f1f1f` 11.6:1 / `#d2d2d2` 1.36:1） |
+
+深色下要用的目标色不是猜的，是宿主 token 自己给的：`label-secondary` 深色 = `#cfd3d6`、
+`bg-layer-2` 深色 = `#2c2c2e`、`bg-layer-3` 深色 = `#353638`。
+
+### 结论
+
+深色下的正确关系是"边的颜色跟着 token 走、淡化向画布走"：
+
+- 边 / 箭头 ← `--dkf-fg2`（`label-secondary`），两种主题下都保证和背景有对比；
+- 节点填充 ← `--dkf-bg`（layer-1，深色下比画布暗一档）/ 画布 ← `--dkf-bg2`；
+- 淡化色 ← `color-mix(边色 20%, 画布色)`，按定义永远比正常边更靠近画布，**任何主题都不会反**。
+
