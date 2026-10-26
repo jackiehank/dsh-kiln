@@ -307,6 +307,11 @@ check('图例：五句话 + 带箭头的样条，没画的那类淡出', () => {
     'A 与 B 相关',
   ])
 
+  // 样条两端必须标出 A、B，否则文字里的 A/B 没有落点
+  for (const row of rows) {
+    assert.deepEqual(byClass(row, 'dkf-legend-end').map(textOf), ['A', 'B'])
+  }
+
   const off = byClass(tree, 'dkf-legend-off').map((row) => textOf(byClass(row, 'dkf-legend-text')[0]))
   assert.deepEqual(off, ['A 是 B 的一部分', 'A 阻塞 B', 'A 取代 B', 'A 与 B 相关'], '只有 caused-by 在当前视图里')
 
