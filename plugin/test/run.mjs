@@ -662,6 +662,51 @@ await check('提示框：只有一套 .dkf-tip 样式，多行提示靠 pre-line
   assert.match(css, /\.dkf-tip-title\{[^}]*white-space:pre-line/, '多行提示（cwd + 快照）要能换行')
 })
 
+await check('筛选：facets 只给"有得选"的分组，并按数量降序', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const { issueFacets } = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals ?? {}
+  assert.equal(typeof issueFacets, 'function', '需要 __DSH_KILN_TEST__ 暴露 issueFacets')
+
+  const issues = [
+    { id: 'a', domain: 'design', tags: ['ui'], done: true },
+    { id: 'b', domain: 'cli', tags: [], done: false },
+    { id: 'c', domain: 'cli', tags: ['ui', 'perf'], done: false },
+  ]
+  const facets = issueFacets(issues)
+  assert.deepEqual(facets.domains.map((o) => [o.id, o.count]), [['cli', 2], ['design', 1]])
+  assert.deepEqual(facets.states.map((o) => [o.id, o.count]), [['open', 2], ['done', 1]])
+  assert.deepEqual(facets.tags.map((o) => [o.id, o.count]), [['ui', 2], ['perf', 1]])
+
+  const single = issueFacets([{ id: 'a', domain: 'x', tags: [], done: true }])
+  assert.deepEqual(single.domains, [], '只有一个领域就不给这一组')
+  assert.deepEqual(single.states, [], '只有一个状态就不给这一组')
+  assert.deepEqual(single.tags, [], '没有标签就不给这一组')
+})
+
+await check('筛选：同组多选是 OR，组间是 AND', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const { filterIssues, readFilters, filtersActive } = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals ?? {}
+  const issues = [
+    { id: 'a', domain: 'design', tags: ['ui'], done: true },
+    { id: 'b', domain: 'cli', tags: [], done: false },
+    { id: 'c', domain: 'cli', tags: ['ui', 'perf'], done: false },
+  ]
+  const ids = (list) => list.map((issue) => issue.id).join(',')
+  assert.equal(ids(filterIssues(issues, { domains: ['cli'], tags: [], states: [] })), 'b,c')
+  assert.equal(ids(filterIssues(issues, { domains: ['cli', 'design'], tags: [], states: [] })), 'a,b,c', '同组多选是 OR')
+  assert.equal(ids(filterIssues(issues, { domains: ['cli'], tags: ['perf'], states: [] })), 'c', '组间是 AND')
+  assert.equal(ids(filterIssues(issues, { domains: [], tags: [], states: ['done'] })), 'a')
+  assert.equal(ids(filterIssues(issues, readFilters(undefined))), 'a,b,c', '没筛选就是原样')
+  assert.equal(filtersActive(readFilters(null)), false)
+  assert.equal(filtersActive({ domains: ['x'], tags: [], states: [] }), true)
+})
+
 // ---------------------------------------------------------------- 汇总
 console.log('')
 if (failures.length === 0) {

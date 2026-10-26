@@ -56,6 +56,16 @@ window.__ModuleLoader__.load({
       { id: 'relation', label: '关系' },
     ]
     /**
+     * 筛选的三个维度。来源只有快照里已有的字段：domain / tags / done。
+     * 顺序是"越常用越靠左"；某组在本仓没有可选项时整组不渲染（见 issueFacets）。
+     */
+    const FILTER_GROUPS = [
+      { id: 'domains', label: '领域' },
+      { id: 'states', label: '状态' },
+      { id: 'tags', label: '标签' },
+    ]
+    const FILTER_STATE_LABEL = { open: '进行中', done: '已完成' }
+    /**
      * 边的线型阶梯：结构性强 → 弱，墨越来越轻。
      * 用 \`linkStyle\` 写死 dasharray / 线宽，而不是靠端点标识——多条线汇到一个节点时，
      * 端点标识会叠在一起（见 docs/issues/kiln-graph-label-threshold.md）。
@@ -106,6 +116,7 @@ window.__ModuleLoader__.load({
      */
     const VIEW_STATE_LIMIT = 4
     const viewStates = new Map()
+    const EMPTY_FILTERS = { domains: [], tags: [], states: [] }
     const EMPTY_VIEW_STATE = {
       tabId: 'timeline',
       focusId: null,
@@ -113,6 +124,7 @@ window.__ModuleLoader__.load({
       graphDirection: 'LR',
       graphView: 'global',
       graphDepth: '1',
+      filters: EMPTY_FILTERS,
     }
 
     function readViewState(cwd) {
@@ -220,7 +232,7 @@ window.__ModuleLoader__.load({
   font-family:var(--dkf-sans);font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body);
 }
 /* 键盘焦点：三页一套，与宿主 focus ring 同宽 */
-.dkf-tab:focus-visible,.dkf-modebtn:focus-visible,.dkf-refresh:focus-visible,.dkf-focuschip:focus-visible,.dkf-toggle:focus-visible,.dkf-focusbtn:focus-visible{box-shadow:inset 0 0 0 2px var(--dkf-accent)}
+.dkf-tab:focus-visible,.dkf-modebtn:focus-visible,.dkf-refresh:focus-visible,.dkf-focuschip:focus-visible,.dkf-toggle:focus-visible,.dkf-focusbtn:focus-visible,.dkf-filterbtn:focus-visible,.dkf-filter-clear:focus-visible{box-shadow:inset 0 0 0 2px var(--dkf-accent)}
 /*
  * hover 只有一套说法：在“当前底色”上叠一层 --dkf-hover。
  * 用 background-image 叠而不是 background-color，是因为它不覆盖已有底色——
@@ -229,8 +241,8 @@ window.__ModuleLoader__.load({
  * 可点控件的文字顺带提到 primary；行不需要（标题本来就是 primary）。
  * 不做过渡：这类即时反馈在宿主里也是直接切（图上的 .12s 只给淡化/焦点那种状态变化）。
  */
-.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-row:hover,.dkf-focus:hover,.dkf-crumb:hover,.dkf-subrow:hover,.dkf-arow:hover,.dkf-toggle:hover,.dkf-focusbtn:hover{background-image:linear-gradient(var(--dkf-hover),var(--dkf-hover))}
-.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-crumb:hover,.dkf-toggle:hover,.dkf-focusbtn:hover{color:var(--dkf-fg)}
+.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-row:hover,.dkf-focus:hover,.dkf-crumb:hover,.dkf-subrow:hover,.dkf-arow:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover{background-image:linear-gradient(var(--dkf-hover),var(--dkf-hover))}
+.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-crumb:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover{color:var(--dkf-fg)}
 /* 页头第一层：只放身份与全局动作 */
 .dkf-head{display:flex;align-items:center;gap:8px;padding:0 12px;min-height:34px;border-bottom:.5px solid var(--dkf-line);flex:none}
 .dkf-repo{font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body);font-weight:600;color:var(--dkf-fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
@@ -248,6 +260,13 @@ window.__ModuleLoader__.load({
 .dkf-modebtn{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:22px;padding:0 6px;border-radius:var(--dkf-r);color:var(--dkf-fg3);font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-modebtn-active{background:var(--dkf-bg2);color:var(--dkf-fg);font-weight:600;box-shadow:inset 0 0 0 .5px var(--dkf-line)}
 .dkf-bar-tools .dkf-mode+.dkf-mode{padding-left:6px;box-shadow:inset 1px 0 0 var(--dkf-line)}
+/* 筛选条：与页栏同材质；chip 的“选中”沿用全站那一条（bg2 + 600 + 0.5px 内描边） */
+.dkf-filters{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;padding:6px 12px;border-bottom:.5px solid var(--dkf-line);flex:none}
+.dkf-filter-group{display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px;min-width:0}
+.dkf-filter-label{color:var(--dkf-fg3);margin-right:2px;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-filterbtn{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:var(--dkf-r);color:var(--dkf-fg2);white-space:nowrap;box-shadow:inset 0 0 0 .5px var(--dkf-line);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-filterbtn-on{background:var(--dkf-bg2);color:var(--dkf-fg);font-weight:600;box-shadow:inset 0 0 0 .5px var(--dkf-line-2)}
+.dkf-filter-clear{all:unset;cursor:pointer;color:var(--dkf-fg3);margin-left:auto;padding:0 6px;border-radius:var(--dkf-r);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 /* 内容区：唯一可滚动的地方 */
 .dkf-scroll{flex:1;min-height:0;overflow:auto;padding:8px 8px 32px}
 .dkf-note{color:var(--dkf-fg2);margin:0 0 8px;padding:0 4px;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
@@ -806,6 +825,70 @@ window.__ModuleLoader__.load({
       return leftDate < rightDate ? 1 : -1
     }
 
+    /**
+     * 筛选：同组内多选是 OR（领域 A 或 B），组间是 AND（领域 A 且标签 x）。
+     * 只认快照里已有的字段（domain / tags / done），不猜"应该有什么"。
+     */
+    function readFilters(value) {
+      const source = value === null || value === undefined ? EMPTY_FILTERS : value
+      return {
+        domains: Array.isArray(source.domains) ? source.domains.slice() : [],
+        tags: Array.isArray(source.tags) ? source.tags.slice() : [],
+        states: Array.isArray(source.states) ? source.states.slice() : [],
+      }
+    }
+
+    function filtersActive(filters) {
+      if (filters === null || filters === undefined) return false
+      return filters.domains.length > 0 || filters.tags.length > 0 || filters.states.length > 0
+    }
+
+    function matchesFilters(issue, filters) {
+      if (filters.domains.length > 0 && !filters.domains.includes(issue.domain ?? '')) return false
+      if (filters.tags.length > 0) {
+        const tags = Array.isArray(issue.tags) ? issue.tags : []
+        if (!tags.some((tag) => filters.tags.includes(tag))) return false
+      }
+      if (filters.states.length > 0) {
+        const state = issue.done === true ? 'done' : 'open'
+        if (!filters.states.includes(state)) return false
+      }
+      return true
+    }
+
+    function filterIssues(issues, filters) {
+      if (filters === null || filters === undefined || !filtersActive(filters)) return issues
+      return issues.filter((issue) => matchesFilters(issue, filters))
+    }
+
+    /**
+     * 本仓实际有哪些可筛的值。只在"有得选"时才给这一组：
+     * 只有一个领域就没有"按领域筛"的意义；一个标签都没有就不给标签组。
+     */
+    function issueFacets(issues) {
+      const domains = new Map()
+      const tags = new Map()
+      const states = new Map()
+      for (const issue of issues) {
+        const domain = issue.domain ?? ''
+        domains.set(domain, (domains.get(domain) ?? 0) + 1)
+        for (const tag of Array.isArray(issue.tags) ? issue.tags : []) {
+          tags.set(tag, (tags.get(tag) ?? 0) + 1)
+        }
+        const state = issue.done === true ? 'done' : 'open'
+        states.set(state, (states.get(state) ?? 0) + 1)
+      }
+      const toOptions = (map, emptyLabel) =>
+        [...map.entries()]
+          .sort((left, right) => (right[1] - left[1]) || left[0].localeCompare(right[0]))
+          .map(([id, count]) => ({ id, label: id === '' ? emptyLabel : id, count }))
+      return {
+        domains: domains.size > 1 ? toOptions(domains, '未分类') : [],
+        states: states.size > 1 ? toOptions(states, '') : [],
+        tags: toOptions(tags, ''),
+      }
+    }
+
     /** 焦点行下方的迷你动作条：最近 12 个，更早的折成 +k。 */
     function strip(actions) {
       if (!Array.isArray(actions) || actions.length === 0) return null
@@ -1013,6 +1096,42 @@ window.__ModuleLoader__.load({
             page.label,
           )
         }),
+      )
+    }
+
+    /** 筛选条：三组 chips（同组 OR、组间 AND）；空组不渲染，有筛选时右侧给「清除」。 */
+    function FilterRow(props) {
+      const facets = props.facets
+      const groups = FILTER_GROUPS.filter((group) => facets[group.id].length > 0)
+      if (groups.length === 0) return null
+      const labelOf = (groupId, option) =>
+        groupId === 'states' ? (FILTER_STATE_LABEL[option.id] ?? option.id) : option.label
+      return h(
+        'div',
+        { className: 'dkf-filters', role: 'group', 'aria-label': '筛选 issue' },
+        groups.map((group) =>
+          h(
+            'div',
+            { className: 'dkf-filter-group', key: group.id },
+            h('span', { className: 'dkf-filter-label' }, group.label),
+            facets[group.id].map((option) =>
+              h(
+                'button',
+                {
+                  key: `${group.id}:${option.id}`,
+                  type: 'button',
+                  className: cls('dkf-filterbtn', props.active[group.id].includes(option.id) && 'dkf-filterbtn-on'),
+                  'aria-pressed': props.active[group.id].includes(option.id),
+                  onClick: () => props.onToggle(group.id, option.id),
+                },
+                `${labelOf(group.id, option)} ${option.count}`,
+              ),
+            ),
+          ),
+        ),
+        filtersActive(props.active)
+          ? h('button', { type: 'button', className: 'dkf-filter-clear', onClick: props.onClear }, '清除')
+          : null,
       )
     }
 
@@ -1503,6 +1622,8 @@ window.__ModuleLoader__.load({
         memory.graphView === 'focus' ? 'focus' : 'global',
       )
       const [graphDepth, setGraphDepth] = React.useState(memory.graphDepth === '2' ? '2' : '1')
+      const [filterOpen, setFilterOpen] = React.useState(false)
+      const [filters, setFilters] = React.useState(() => readFilters(memory.filters))
 
       /**
        * 提示框：元素上只写 `data-hint`，机制收在这里（根节点监听 pointerover 做委托）。
@@ -1713,6 +1834,57 @@ window.__ModuleLoader__.load({
             ]
           : null
 
+      /**
+       * 筛选只作用在 issue 页的列表（无焦点时）；聚焦读的是结构，不掺筛选。
+       * 可选项来自快照本身：只有一个领域就不给"领域"组，没有标签就不给"标签"组。
+       */
+      const facets = React.useMemo(() => issueFacets(issueList), [issueList])
+      const activeFilters = readFilters(filters)
+      const shownIssues = React.useMemo(() => filterIssues(issueList, activeFilters), [issueList, activeFilters])
+      const filterOn = filtersActive(activeFilters)
+      const filterCount = activeFilters.domains.length + activeFilters.tags.length + activeFilters.states.length
+      const filterGroups = facets.domains.length + facets.states.length + facets.tags.length
+      const canFilter = tabId === 'issue' && focus === null && filterGroups > 0
+
+      const toggleFilter = (groupId, id) => {
+        setFilters((previous) => {
+          const base = readFilters(previous)
+          const list = Array.isArray(base[groupId]) ? base[groupId] : []
+          const next = {
+            ...base,
+            [groupId]: list.includes(id) ? list.filter((value) => value !== id) : [...list, id],
+          }
+          writeViewState(cwd, { filters: next })
+          return next
+        })
+      }
+      const clearFilters = () => {
+        setFilters(EMPTY_FILTERS)
+        writeViewState(cwd, { filters: EMPTY_FILTERS })
+      }
+
+      const issueTools = [
+        canFilter
+          ? h(
+              'button',
+              {
+                key: 'filter',
+                type: 'button',
+                className: cls('dkf-modebtn', filterOpen && 'dkf-modebtn-active'),
+                'aria-expanded': filterOpen,
+                'data-hint': filterOpen ? '收起筛选' : '按领域 / 状态 / 标签筛选',
+                onClick: () => setFilterOpen((value) => !value),
+              },
+              filterOn ? `筛选 ${filterCount}` : '筛选',
+            )
+          : null,
+        h(
+          'span',
+          { key: 'count', className: 'dkf-count' },
+          filterOn && canFilter ? `${shownIssues.length} / ${issueList.length} issue` : `${issueList.length} 个 issue`,
+        ),
+      ]
+
       const bar =
         payload?.ok === true
           ? h(
@@ -1724,11 +1896,9 @@ window.__ModuleLoader__.load({
                 { className: 'dkf-bar-tools' },
                 pageTools !== null
                   ? pageTools
-                  : h(
-                      'span',
-                      { className: 'dkf-count' },
-                      tabId === 'timeline' ? `${rows.length} 个动作` : `${issueList.length} 个 issue`,
-                    ),
+                  : tabId === 'issue'
+                    ? issueTools
+                    : h('span', { className: 'dkf-count' }, `${rows.length} 个动作`),
               ),
             )
           : null
@@ -1782,12 +1952,12 @@ window.__ModuleLoader__.load({
           content =
             focus === null
               ? h(IssuePanel, {
-                  issues: issueList,
+                  issues: shownIssues,
                   focusId: null,
                   expanded,
                   onToggle: toggleExpand,
                   onFocus: focusIssue,
-                  emptyText: '这个仓库还没有 issue。',
+                  emptyText: filterOn ? '没有符合筛选条件的 issue。' : '这个仓库还没有 issue。',
                 })
               : h(IssueFocusList, {
                   focus,
@@ -1868,6 +2038,10 @@ window.__ModuleLoader__.load({
         },
         header,
         bar,
+        // 筛选条只在 issue 页展开时出现，紧贴页栏下面（不跟着内容滚走）
+        canFilter && filterOpen
+          ? h(FilterRow, { facets, active: activeFilters, onToggle: toggleFilter, onClear: clearFilters })
+          : null,
         // 滚动时内容从提示框底下走，必须收起来
         h('div', { className: 'dkf-scroll', onScroll: clearHint }, body),
         hintTip,
@@ -1895,6 +2069,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, css: CSS } } : {}) }
   },
 })

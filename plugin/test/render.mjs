@@ -129,6 +129,8 @@ function render({
   direction = 'LR',
   view = 'global',
   depth = '1',
+  filterOpen = false,
+  filters = undefined,
 }) {
   const React = makeReact([
     {
@@ -145,6 +147,8 @@ function render({
     direction, //                  graphDirection（图方向）
     view, //                       graphView（全局 / 聚焦）
     depth, //                      graphDepth（一圈的半径）
+    filterOpen, //                 filterOpen（筛选条是否展开）
+    filters, //                    filters（领域 / 状态 / 标签）
   ])
   const requireOf = (name) => {
     if (name === 'react') return React
@@ -250,6 +254,20 @@ check('提示框：被截断的 id / 标题也有提示', () => {
   const title = byClass(view, 'dkf-title')[0]
   assert.ok(String(id.props['data-hint'] ?? '').length > 0, 'id 有 max-width，截断后要能看全')
   assert.ok(String(title.props['data-hint'] ?? '').length > 0, '标题有省略号，同样要有提示')
+})
+
+check('筛选：本仓没有可筛维度时不给空壳按钮', () => {
+  // 测试数据只有一个领域、一个状态、没有标签 —— 三组都筛不出东西
+  const view = render({ tabId: 'issue' })
+  const labels = byClass(view, 'dkf-modebtn').map(textOf)
+  assert.ok(!labels.includes('筛选'), '没有可选项时不该出现筛选按钮')
+  assert.equal(byClass(view, 'dkf-filters').length, 0, '也不该有筛选条')
+})
+
+check('筛选：命中为空时说「没有符合筛选」，不是「还没有 issue」', () => {
+  const view = render({ tabId: 'issue', filters: { domains: [], tags: [], states: ['done'] } })
+  assert.equal(byClass(view, 'dkf-row').length, 0, '测试数据全是进行中，按已完成筛就空了')
+  assert.match(textOf(byClass(view, 'dkf-empty')[0]), /没有符合筛选/)
 })
 
 check('timeline 全局：4 条 action 一行一条，按时间倒序', () => {
