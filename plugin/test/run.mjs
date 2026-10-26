@@ -738,6 +738,39 @@ await check('时间线筛选：动作与领域两组，过滤的是动作行', a
   assert.equal(filterRows(rows, readRowFilters(undefined), byId).length, 3, '没筛选就是原样')
 })
 
+await check('搜索：切词、AND、排序与高亮区间', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const { splitTerms, searchIssues, matchRanges } = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals ?? {}
+  assert.equal(typeof searchIssues, 'function', '需要 __DSH_KILN_TEST__ 暴露 searchIssues')
+
+  assert.deepEqual(splitTerms('  Graph   UI '), ['graph', 'ui'], '按空白切词并小写')
+  assert.deepEqual(splitTerms('   '), [])
+  assert.deepEqual(matchRanges('Kiln-Graph', ['graph']), [[5, 10]])
+  assert.deepEqual(matchRanges('aaaa', ['aa']), [[0, 4]], '相邻区间合并成一段')
+
+  const issues = [
+    { id: 'kiln-graph-dark', title: '深色下的图', last: { date: '2026-10-02' } },
+    { id: 'kiln-search', title: '加一个搜索框', last: { date: '2026-10-03' } },
+    { id: 'other', title: '只在标题里出现 graph', last: { date: '2026-10-01' } },
+  ]
+  assert.deepEqual(
+    searchIssues(issues, 'graph').map((row) => row.issue.id),
+    ['kiln-graph-dark', 'other'],
+    'id 命中排在标题命中前面',
+  )
+  assert.deepEqual(
+    searchIssues(issues, 'graph dark').map((row) => row.issue.id),
+    ['kiln-graph-dark'],
+    '两个词都要出现（AND）',
+  )
+  assert.deepEqual(searchIssues(issues, 'SEARCH').map((row) => row.issue.id), ['kiln-search'], '大小写不敏感')
+  assert.deepEqual(searchIssues(issues, '  '), [], '空查询不出结果')
+  assert.deepEqual(searchIssues(issues, 'nonexistent'), [])
+})
+
 await check('标签已不作为筛选维度：组清单里只剩领域与状态', async () => {
   const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
   const { filterGroups } = loaded.factory((name) => {

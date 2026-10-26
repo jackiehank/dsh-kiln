@@ -132,6 +132,7 @@ function render({
   filterOpen = false,
   filters = undefined,
   rowFilters = undefined,
+  query = '',
 }) {
   const React = makeReact([
     {
@@ -149,8 +150,9 @@ function render({
     view, //                       graphView（全局 / 聚焦）
     depth, //                      graphDepth（一圈的半径）
     filterOpen, //                 filterOpen（筛选条是否展开）
-    filters, //                    filters（issue 页：领域 / 状态 / 标签）
+    filters, //                    filters（issue 页：领域 / 状态）
     rowFilters, //                 rowFilters（时间线：动作 / 领域）
+    query, //                      query（搜索框的输入）
   ])
   const requireOf = (name) => {
     if (name === 'react') return React
@@ -258,6 +260,31 @@ check('提示框：被截断的 id / 标题也有提示', () => {
   const title = byClass(view, 'dkf-title')[0]
   assert.ok(String(id.props['data-hint'] ?? '').length > 0, 'id 有 max-width，截断后要能看全')
   assert.ok(String(title.props['data-hint'] ?? '').length > 0, '标题有省略号，同样要有提示')
+})
+
+check('搜索：输入框在第一层页头，不是另一行', () => {
+  const view = render({})
+  const input = byClass(view, 'dkf-search')[0]
+  assert.ok(input !== undefined, '页头要有搜索输入框')
+  assert.equal(input.props.placeholder, '搜索 issue…')
+  assert.equal(byClass(view, 'dkf-head')[0].children.filter(Boolean).includes(input), true, '输入框属于 .dkf-head 这一行')
+})
+
+check('搜索：有输入就换成结果列表，页栏显示命中数', () => {
+  const view = render({ tabId: 'issue', query: 'a' })
+  const hits = byClass(view, 'dkf-hit')
+  assert.equal(hits.length, 1, '测试数据里只有 a 命中')
+  assert.equal(textOf(byClass(view, 'dkf-count')[0]), '1 条命中 · 仓库共 3 条')
+  assert.equal(byClass(view, 'dkf-row').length, 0, '搜索期间不再渲染当前页的列表')
+  assert.equal(byClass(hits[0], 'dkf-hl').length > 0, true, '命中片段要能高亮')
+})
+
+check('搜索：没有命中时给明确空态', () => {
+  const view = render({ tabId: 'issue', query: 'zzz' })
+  assert.equal(byClass(view, 'dkf-hit').length, 0)
+  const empty = byClass(view, 'dkf-empty')[0]
+  assert.match(textOf(empty), /没有找到「zzz」/)
+  assert.match(textOf(empty), /Esc/)
 })
 
 check('筛选：本仓没有可筛维度时不给空壳按钮', () => {

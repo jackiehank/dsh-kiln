@@ -248,12 +248,20 @@ window.__ModuleLoader__.load({
  * 可点控件的文字顺带提到 primary；行不需要（标题本来就是 primary）。
  * 不做过渡：这类即时反馈在宿主里也是直接切（图上的 .12s 只给淡化/焦点那种状态变化）。
  */
-.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-row:hover,.dkf-focus:hover,.dkf-crumb:hover,.dkf-subrow:hover,.dkf-arow:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover{background-image:linear-gradient(var(--dkf-hover),var(--dkf-hover))}
-.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-crumb:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover{color:var(--dkf-fg)}
+.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-row:hover,.dkf-focus:hover,.dkf-crumb:hover,.dkf-subrow:hover,.dkf-arow:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover,.dkf-hit:hover{background-image:linear-gradient(var(--dkf-hover),var(--dkf-hover))}
+.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-crumb:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover,.dkf-hit:hover{color:var(--dkf-fg)}
 /* 页头第一层：只放身份与全局动作 */
 .dkf-head{display:flex;align-items:center;gap:8px;padding:0 12px;min-height:34px;border-bottom:.5px solid var(--dkf-line);flex:none}
-.dkf-repo{font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body);font-weight:600;color:var(--dkf-fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.dkf-spacer{flex:1}
+.dkf-repo{font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body);font-weight:600;color:var(--dkf-fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:0 1 auto;max-width:180px}
+/* 搜索框：占掉原来的弹性空白，窄宽度下先缩仓库名与焦点 chip，不缩它 */
+.dkf-search{flex:1 1 160px;min-width:96px;max-width:360px;height:22px;margin:0 8px;padding:0 8px;border:0;border-radius:var(--dkf-r);background:var(--dkf-bg2);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line);font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-search::placeholder{color:var(--dkf-fg3)}
+.dkf-search:focus{outline:none;box-shadow:inset 0 0 0 2px var(--dkf-accent)}
+/* 搜索结果：一行一条 issue，命中片段高亮 */
+.dkf-hit{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:4px 6px;border-radius:var(--dkf-r);cursor:pointer;min-width:0}
+.dkf-hit-on{background:var(--dkf-bg2);box-shadow:inset 0 0 0 .5px var(--dkf-line)}
+.dkf-hit-go{color:var(--dkf-fg3);flex:none;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-hl{color:var(--dkf-fg);border-radius:var(--dkf-r);background:color-mix(in srgb,var(--dkf-accent) 18%,transparent)}
 .dkf-refresh,.dkf-focuschip{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:var(--dkf-r);color:var(--dkf-fg2);white-space:nowrap;font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-focuschip{font-family:var(--dkf-mono);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line-2);max-width:320px;overflow:hidden;text-overflow:ellipsis}
 /* 页头第二层：左页切换、右当前页计数或工具，三页同高同排 */
@@ -282,6 +290,8 @@ window.__ModuleLoader__.load({
 .dkf-error-title{margin:0 0 4px;font-size:var(--dkf-fs-em);line-height:var(--dkf-lh-em);font-weight:600}
 .dkf-error-detail{margin:0;color:var(--dkf-fg2);word-break:break-all;font-family:var(--dkf-mono);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-empty{color:var(--dkf-fg3);margin:8px 4px;font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body)}
+.dkf-empty p{margin:0 0 4px}
+.dkf-empty p:last-child{margin:0}
 /* 列表：三页共用同一套列宽，同名列落在同一 x */
 .dkf-list{display:flex;flex-direction:column;outline:none;position:relative}
 /* 竖脊：时间线的“有序”由这一条线承担，色点压在线上 */
@@ -939,6 +949,65 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * 搜索：空白切词、大小写不敏感；每个词都要出现（AND），可分别落在 id 或标题上。
+     * 只认快照里已有的两个字段（issue id、issue 标题），不做模糊子序列——
+     * 数据量小，子序列只会带来意外命中，收益不如"id 前缀优先"的排序。
+     */
+    function splitTerms(query) {
+      return String(query ?? '')
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((term) => term !== '')
+    }
+
+    function mergeRanges(ranges) {
+      if (ranges.length === 0) return []
+      const sorted = ranges.slice().sort((left, right) => left[0] - right[0])
+      const merged = [sorted[0]]
+      for (const range of sorted.slice(1)) {
+        const last = merged[merged.length - 1]
+        if (range[0] <= last[1]) last[1] = Math.max(last[1], range[1])
+        else merged.push(range)
+      }
+      return merged
+    }
+
+    /** 文本里所有命中的区间；词之间相邻或重叠时合并成一段，正好用来切高亮。 */
+    function matchRanges(text, terms) {
+      const haystack = String(text ?? '').toLowerCase()
+      const ranges = []
+      for (const term of terms) {
+        let from = 0
+        for (;;) {
+          const at = haystack.indexOf(term, from)
+          if (at < 0) break
+          ranges.push([at, at + term.length])
+          from = at + term.length
+        }
+      }
+      return mergeRanges(ranges)
+    }
+
+    /** 排序按"用户最可能想要的"：id 以首词开头 > id 命中 > 标题命中 > 拆开命中；同档按最近动作。 */
+    function searchIssues(issues, query) {
+      const terms = splitTerms(query)
+      if (terms.length === 0) return []
+      const rows = []
+      for (const issue of issues) {
+        const id = String(issue?.id ?? '')
+        const title = String(issue?.title ?? '')
+        const haystack = `${id.toLowerCase()} ${title.toLowerCase()}`
+        if (!terms.every((term) => haystack.includes(term))) continue
+        const idHit = terms.every((term) => id.toLowerCase().includes(term))
+        const titleHit = terms.every((term) => title.toLowerCase().includes(term))
+        const rank = id.toLowerCase().startsWith(terms[0]) ? 0 : idHit ? 1 : titleHit ? 2 : 3
+        rows.push({ issue, rank, idRanges: matchRanges(id, terms), titleRanges: matchRanges(title, terms) })
+      }
+      rows.sort((left, right) => left.rank - right.rank || byRecency(left.issue, right.issue))
+      return rows
+    }
+
     /** 焦点行下方的迷你动作条：最近 12 个，更早的折成 +k。 */
     function strip(actions) {
       if (!Array.isArray(actions) || actions.length === 0) return null
@@ -1183,6 +1252,60 @@ window.__ModuleLoader__.load({
         filtersActive(props.active)
           ? h('button', { type: 'button', className: 'dkf-filter-clear', onClick: props.onClear }, '清除')
           : null,
+      )
+    }
+
+    /** 把命中区间切成「文本 / 高亮 / 文本…」，高亮段用 `.dkf-hl`。 */
+    function highlightParts(text, ranges) {
+      if (!Array.isArray(ranges) || ranges.length === 0) return text
+      const parts = []
+      let at = 0
+      for (const [start, end] of ranges) {
+        if (start > at) parts.push(text.slice(at, start))
+        parts.push(h('span', { key: `${start}-${end}`, className: 'dkf-hl' }, text.slice(start, end)))
+        at = end
+      }
+      if (at < text.length) parts.push(text.slice(at))
+      return parts
+    }
+
+    /**
+     * 搜索结果：一行一条 issue（id / 标题 / 领域 / 状态 / ⏎）。
+     * 有输入就整块替掉内容区——不是把当前页的列表收窄（那样搜不到别的页里的东西）。
+     */
+    function SearchResults(props) {
+      if (props.rows.length === 0) {
+        return h(
+          'div',
+          { className: 'dkf-empty' },
+          h('p', null, `没有找到「${String(props.query ?? '').trim()}」`),
+          h('p', null, '试试更短的关键词，或按 Esc 清空。'),
+        )
+      }
+      return h(
+        'div',
+        { className: 'dkf-list', role: 'listbox', 'aria-label': '搜索结果' },
+        props.rows.map((row, index) =>
+          h(
+            'div',
+            {
+              key: row.issue.id,
+              className: cls('dkf-hit', index === props.selected && 'dkf-hit-on'),
+              role: 'option',
+              'aria-selected': index === props.selected,
+              onClick: () => props.onPick(row.issue.id),
+            },
+            h('span', { className: 'dkf-id' }, highlightParts(String(row.issue.id), row.idRanges)),
+            h('span', { className: 'dkf-title' }, highlightParts(String(row.issue.title ?? ''), row.titleRanges)),
+            h(
+              'span',
+              { className: 'dkf-badges' },
+              row.issue.domain ? h('span', { className: 'dkf-chip' }, row.issue.domain) : null,
+              h('span', { className: 'dkf-chip' }, row.issue.done === true ? '已完成' : '进行中'),
+            ),
+            h('span', { className: 'dkf-hit-go', 'aria-hidden': 'true' }, '⏎'),
+          ),
+        ),
       )
     }
 
@@ -1676,6 +1799,12 @@ window.__ModuleLoader__.load({
       const [filterOpen, setFilterOpen] = React.useState(false)
       const [filters, setFilters] = React.useState(() => readFilters(memory.filters))
       const [rowFilters, setRowFilters] = React.useState(() => readRowFilters(memory.rowFilters))
+      /** 搜索：查询串与结果里被选中的下标都只活在本次挂载（切页/卸载即清空）。 */
+      const [query, setQuery] = React.useState('')
+      const [searchIndex, setSearchIndex] = React.useState(-1)
+      const searchRef = React.useRef(null)
+      /** 中文输入法组合期间，回车是"上屏"不是"确认"，别让键盘处理抢先。 */
+      const composing = React.useRef(false)
 
       /**
        * 提示框：元素上只写 `data-hint`，机制收在这里（根节点监听 pointerover 做委托）。
@@ -1726,6 +1855,9 @@ window.__ModuleLoader__.load({
 
       const selectTab = (id) => {
         setTabId(id)
+        // 点页签 = 离开搜索（否则结果页签与结果视图各说一套）
+        setQuery('')
+        setSearchIndex(-1)
         writeViewState(cwd, { tabId: id })
       }
       const focusIssue = (id) => {
@@ -1820,6 +1952,55 @@ window.__ModuleLoader__.load({
       const rows = React.useMemo(() => sortActions(flattenActions(scoped)), [scoped])
       const issueList = React.useMemo(() => sortIssues(scoped, focus === null ? null : focus.id), [scoped, focus])
 
+      /**
+       * 搜索：整仓范围（不看筛选，也不看焦点作用域——"直接找那一条"不该被悄悄过滤），
+       * 有输入就把内容区换成结果列表。
+       */
+      const searching = splitTerms(query).length > 0
+      const searchRows = React.useMemo(() => searchIssues(issues, query), [issues, query])
+
+      const clearSearch = () => {
+        setQuery('')
+        setSearchIndex(-1)
+      }
+      const pickSearch = (id) => {
+        clearSearch()
+        focusIssue(id)
+        selectTab('issue')
+      }
+      const onSearchKeyDown = (event) => {
+        if (composing.current) return
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          event.stopPropagation()
+          if (query !== '') clearSearch()
+          else if (searchRef.current !== null && typeof searchRef.current.blur === 'function') searchRef.current.blur()
+          return
+        }
+        if (searchRows.length === 0) return
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault()
+          const delta = event.key === 'ArrowDown' ? 1 : -1
+          setSearchIndex((previous) => {
+            const base = Number.isFinite(previous) && previous >= 0 ? previous : delta === 1 ? -1 : 0
+            return (base + delta + searchRows.length) % searchRows.length
+          })
+          return
+        }
+        if (event.key === 'Enter') {
+          const index = Number.isFinite(searchIndex) && searchIndex >= 0 ? searchIndex : 0
+          const row = searchRows[index]
+          if (row !== undefined) {
+            event.preventDefault()
+            pickSearch(row.issue.id)
+          }
+        }
+      }
+      // 查询变了就把选中退回第一条：否则清空再输入还停在上次的下标上
+      React.useEffect(() => {
+        setSearchIndex(-1)
+      }, [query])
+
       const refresh = () => setNonce((value) => value + 1)
       const totalOf = (issueId) => (Array.isArray(byId.get(issueId)?.actions) ? byId.get(issueId).actions.length : 0)
 
@@ -1837,7 +2018,24 @@ window.__ModuleLoader__.load({
           },
           basename(cwd) || 'kiln',
         ),
-        h('span', { className: 'dkf-spacer' }),
+        h('input', {
+          className: 'dkf-search',
+          type: 'text',
+          value: query,
+          placeholder: '搜索 issue…',
+          'aria-label': '搜索 issue',
+          spellCheck: false,
+          autoComplete: 'off',
+          ref: searchRef,
+          onChange: (event) => setQuery(event.target.value),
+          onKeyDown: onSearchKeyDown,
+          onCompositionStart: () => {
+            composing.current = true
+          },
+          onCompositionEnd: () => {
+            composing.current = false
+          },
+        }),
         focus !== null
           ? h(
               'button',
@@ -1993,11 +2191,17 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { className: 'dkf-bar-tools' },
-                pageTools !== null
-                  ? pageTools
-                  : tabId === 'issue'
-                    ? issueTools
-                    : rowTools,
+                searching
+                  ? h(
+                      'span',
+                      { key: 'hits', className: 'dkf-count' },
+                      `${searchRows.length} 条命中 · 仓库共 ${issues.length} 条`,
+                    )
+                  : pageTools !== null
+                    ? pageTools
+                    : tabId === 'issue'
+                      ? issueTools
+                      : rowTools,
               ),
             )
           : null
@@ -2037,7 +2241,15 @@ window.__ModuleLoader__.load({
         )
       } else {
         let content = null
-        if (tabId === 'timeline') {
+        if (searching) {
+          // 有输入就整块换成结果：搜索是"直接找那一条"，不掺页面与筛选
+          content = h(SearchResults, {
+            rows: searchRows,
+            query,
+            selected: searchIndex,
+            onPick: pickSearch,
+          })
+        } else if (tabId === 'timeline') {
           content = h(TimelinePanel, {
             rows: shownRows,
             totalOf,
@@ -2141,8 +2353,8 @@ window.__ModuleLoader__.load({
         },
         header,
         bar,
-        // 筛选条只在展开时出现，紧贴页栏下面（不跟着内容滚走）
-        filterOpen && canFilterRows
+        // 筛选条只在展开时出现，紧贴页栏下面（不跟着内容滚走）；搜索期间让位给结果
+        !searching && filterOpen && canFilterRows
           ? h(FilterRow, {
               groups: ROW_FILTER_GROUPS,
               facets: rowFacetData,
@@ -2150,7 +2362,7 @@ window.__ModuleLoader__.load({
               onToggle: toggleRowFilter,
               onClear: clearRowFilters,
             })
-          : filterOpen && canFilter
+          : !searching && filterOpen && canFilter
             ? h(FilterRow, {
                 groups: FILTER_GROUPS,
                 facets,
@@ -2186,6 +2398,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, searchIssues, matchRanges, mergeRanges, css: CSS } } : {}) }
   },
 })
