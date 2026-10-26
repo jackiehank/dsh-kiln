@@ -56,17 +56,14 @@ window.__ModuleLoader__.load({
       { id: 'relation', label: '关系' },
     ]
     /**
-     * 筛选的三个维度。来源只有快照里已有的字段：domain / tags / done。
+     * 筛的两个维度。来源只有快照里已有的字段：domain / done。
+     * 标签不做：它是动作级的 trailer，视图只拿得到 issue 级并集，而且一个仓动辄十几个标签，
+     * 一行 chips 根本装不下（kiln-issue-filter 的"去掉标签筛选"一节）。
      * 顺序是"越常用越靠左"；某组在本仓没有可选项时整组不渲染（见 issueFacets）。
      */
     const FILTER_GROUPS = [
       { id: 'domains', label: '领域' },
       { id: 'states', label: '状态' },
-      {
-        id: 'tags',
-        label: '标签',
-        hint: '任一条动作的提交带过这个标签（kiln 的 tag 写在动作的 trailer 上，这里筛的是并集）',
-      },
     ]
     /** 时间线的筛选组：动作名 + 算在动作头上的领域。 */
     const ROW_FILTER_GROUPS = [
@@ -125,7 +122,7 @@ window.__ModuleLoader__.load({
      */
     const VIEW_STATE_LIMIT = 4
     const viewStates = new Map()
-    const EMPTY_FILTERS = { domains: [], tags: [], states: [] }
+    const EMPTY_FILTERS = { domains: [], states: [] }
     const EMPTY_VIEW_STATE = {
       tabId: 'timeline',
       focusId: null,
@@ -836,14 +833,13 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 筛选：同组内多选是 OR（领域 A 或 B），组间是 AND（领域 A 且标签 x）。
-     * 只认快照里已有的字段（domain / tags / done），不猜"应该有什么"。
+     * 筛选：同组内多选是 OR（领域 A 或 B），组间是 AND（领域 A 且未完成）。
+     * 只认快照里已有的字段（domain / done），不猜"应该有什么"。
      */
     function readFilters(value) {
       const source = value === null || value === undefined ? EMPTY_FILTERS : value
       return {
         domains: Array.isArray(source.domains) ? source.domains.slice() : [],
-        tags: Array.isArray(source.tags) ? source.tags.slice() : [],
         states: Array.isArray(source.states) ? source.states.slice() : [],
       }
     }
@@ -904,10 +900,7 @@ window.__ModuleLoader__.load({
 
     function matchesFilters(issue, filters) {
       if (filters.domains.length > 0 && !filters.domains.includes(issue.domain ?? '')) return false
-      if (filters.tags.length > 0) {
-        const tags = Array.isArray(issue.tags) ? issue.tags : []
-        if (!tags.some((tag) => filters.tags.includes(tag))) return false
-      }
+
       if (filters.states.length > 0) {
         const state = issue.done === true ? 'done' : 'open'
         if (!filters.states.includes(state)) return false
@@ -926,14 +919,10 @@ window.__ModuleLoader__.load({
      */
     function issueFacets(issues) {
       const domains = new Map()
-      const tags = new Map()
       const states = new Map()
       for (const issue of issues) {
         const domain = issue.domain ?? ''
         domains.set(domain, (domains.get(domain) ?? 0) + 1)
-        for (const tag of Array.isArray(issue.tags) ? issue.tags : []) {
-          tags.set(tag, (tags.get(tag) ?? 0) + 1)
-        }
         const state = issue.done === true ? 'done' : 'open'
         states.set(state, (states.get(state) ?? 0) + 1)
       }
@@ -947,7 +936,6 @@ window.__ModuleLoader__.load({
           states.size > 1
             ? toOptions(states, '').map((option) => ({ ...option, label: FILTER_STATE_LABEL[option.id] ?? option.id }))
             : [],
-        tags: toOptions(tags, ''),
       }
     }
 
@@ -1176,11 +1164,7 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'dkf-filter-group', key: group.id },
-            h(
-              'span',
-              { className: 'dkf-filter-label', 'data-hint': group.hint === undefined ? null : group.hint },
-              group.label,
-            ),
+            h('span', { className: 'dkf-filter-label' }, group.label),
             facets[group.id].map((option) =>
               h(
                 'button',
@@ -1910,8 +1894,8 @@ window.__ModuleLoader__.load({
       const activeFilters = readFilters(filters)
       const shownIssues = React.useMemo(() => filterIssues(issueList, activeFilters), [issueList, activeFilters])
       const filterOn = filtersActive(activeFilters)
-      const filterCount = activeFilters.domains.length + activeFilters.tags.length + activeFilters.states.length
-      const filterGroups = facets.domains.length + facets.states.length + facets.tags.length
+      const filterCount = activeFilters.domains.length + activeFilters.states.length
+      const filterGroups = facets.domains.length + facets.states.length
       const canFilter = tabId === 'issue' && focus === null && filterGroups > 0
 
       const toggleFilter = (groupId, id) => {

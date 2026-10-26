@@ -11,9 +11,9 @@ DSH × kiln 的插件初稿：在会话顶部标签排（对话 / 轨迹 / 上�
   默认展开，行内带方向与关系名。关系页只有图（全局 / 聚焦），hover 节点弹出该 issue 的 ask 标题。
   焦点切换只在内存里，不落盘。
 - 筛选（见 `docs/issues/kiln-issue-filter.md`、`kiln-timeline-filter.md`）：两页各筛自己的行。
-  issue 页按 **领域 / 状态 / 标签**，时间线页按 **动作 / 领域**；同组多选是 OR、组间是 AND，
+  issue 页按 **领域 / 状态**，时间线页按 **动作 / 领域**；同组多选是 OR、组间是 AND，
   某个维度在本仓没有可选项时整组不出现。纯客户端过滤（不调 `kiln list`），筛选状态按仓库记在内存里。
-  时间线不做标签维度：kiln 的 tag 写在动作的 trailer 上，但 `path --json` 只给 issue 级并集。
+  标签不作为筛选维度：tag 是动作级 trailer、视图只有 issue 级并集，而且一个仓动辄十几个标签。
 - 外观（见 `docs/issues/kiln-ui-refresh.md`）：两层页头——第一层是仓库名与全局动作，
   第二层左边页切换、右边当前页的计数或图的取景控件。字号 / 圆角 / 颜色全部取宿主 `--dsw-*`
   语义 token（11 / 12 / 13px，4 / 8 / 12px），代码字体用 `--ds-font-family-code`。

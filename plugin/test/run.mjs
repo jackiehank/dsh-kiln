@@ -678,12 +678,11 @@ await check('筛选：facets 只给"有得选"的分组，并按数量降序', a
   const facets = issueFacets(issues)
   assert.deepEqual(facets.domains.map((o) => [o.id, o.count]), [['cli', 2], ['design', 1]])
   assert.deepEqual(facets.states.map((o) => [o.id, o.count]), [['open', 2], ['done', 1]])
-  assert.deepEqual(facets.tags.map((o) => [o.id, o.count]), [['ui', 2], ['perf', 1]])
+  assert.equal(facets.tags, undefined, '标签已不是筛选维度（动作级数据，视图只有并集，且标签太多）')
 
   const single = issueFacets([{ id: 'a', domain: 'x', tags: [], done: true }])
   assert.deepEqual(single.domains, [], '只有一个领域就不给这一组')
   assert.deepEqual(single.states, [], '只有一个状态就不给这一组')
-  assert.deepEqual(single.tags, [], '没有标签就不给这一组')
 })
 
 await check('筛选：同组多选是 OR，组间是 AND', async () => {
@@ -693,18 +692,19 @@ await check('筛选：同组多选是 OR，组间是 AND', async () => {
     throw new Error('unexpected require: ' + name)
   }).__internals ?? {}
   const issues = [
-    { id: 'a', domain: 'design', tags: ['ui'], done: true },
-    { id: 'b', domain: 'cli', tags: [], done: false },
-    { id: 'c', domain: 'cli', tags: ['ui', 'perf'], done: false },
+    { id: 'a', domain: 'design', done: true },
+    { id: 'b', domain: 'cli', done: false },
+    { id: 'c', domain: 'cli', done: false },
   ]
   const ids = (list) => list.map((issue) => issue.id).join(',')
-  assert.equal(ids(filterIssues(issues, { domains: ['cli'], tags: [], states: [] })), 'b,c')
-  assert.equal(ids(filterIssues(issues, { domains: ['cli', 'design'], tags: [], states: [] })), 'a,b,c', '同组多选是 OR')
-  assert.equal(ids(filterIssues(issues, { domains: ['cli'], tags: ['perf'], states: [] })), 'c', '组间是 AND')
-  assert.equal(ids(filterIssues(issues, { domains: [], tags: [], states: ['done'] })), 'a')
+  assert.equal(ids(filterIssues(issues, { domains: ['cli'], states: [] })), 'b,c')
+  assert.equal(ids(filterIssues(issues, { domains: ['cli', 'design'], states: [] })), 'a,b,c', '同组多选是 OR')
+  assert.equal(ids(filterIssues(issues, { domains: ['cli'], states: ['open'] })), 'b,c', '组间是 AND')
+  assert.equal(ids(filterIssues(issues, { domains: ['design'], states: ['open'] })), '', '领域与状态交叉为空')
+  assert.equal(ids(filterIssues(issues, { domains: [], states: ['done'] })), 'a')
   assert.equal(ids(filterIssues(issues, readFilters(undefined))), 'a,b,c', '没筛选就是原样')
   assert.equal(filtersActive(readFilters(null)), false)
-  assert.equal(filtersActive({ domains: ['x'], tags: [], states: [] }), true)
+  assert.equal(filtersActive({ domains: ['x'], states: [] }), true)
 })
 
 await check('时间线筛选：动作与领域两组，过滤的是动作行', async () => {
@@ -738,17 +738,14 @@ await check('时间线筛选：动作与领域两组，过滤的是动作行', a
   assert.equal(filterRows(rows, readRowFilters(undefined), byId).length, 3, '没筛选就是原样')
 })
 
-await check('标签筛选的语义：组名上挂「并集」提示（tag 是动作级的）', async () => {
+await check('标签已不作为筛选维度：组清单里只剩领域与状态', async () => {
   const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
   const { filterGroups } = loaded.factory((name) => {
     if (name === 'react') return reactStub
     throw new Error('unexpected require: ' + name)
   }).__internals ?? {}
-  const tags = (filterGroups ?? []).find((group) => group.id === 'tags')
-  assert.ok(tags !== undefined, '标签必须是一组')
-  assert.match(String(tags.hint ?? ''), /并集/, 'tag 源在动作的 trailer 上，筛选是"任一动作带过"，要在提示里说清')
+  assert.deepEqual((filterGroups ?? []).map((group) => group.id), ['domains', 'states'])
 })
-
 // ---------------------------------------------------------------- 汇总
 console.log('')
 if (failures.length === 0) {
