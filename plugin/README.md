@@ -14,6 +14,9 @@ DSH × kiln 的插件初稿：在会话顶部标签排（对话 / 轨迹 / 上�
   第二层左边页切换、右边当前页的计数或图的取景控件。字号 / 圆角 / 颜色全部取宿主 `--dsw-*`
   语义 token（11 / 12 / 13px，4 / 8 / 12px），代码字体用 `--ds-font-family-code`。
   变量集中在 `.dkf-root` 的 `--dkf-*` 上，改皮肤只动那一处。
+- 状态只有一套：hover 是"在当前底色上叠一层 `--dkf-hover`"（用 `background-image` 叠，
+  所以焦点行的底色不会被顶掉）；图里没有底色可叠，就把淡化的节点临时拉回正常亮度。
+  选中是 bg-layer-2 + 600 字重，键盘焦点是 2px accent 内环。
 - 关系图跟着主题走：Pele 不认主题（默认白底深字），所以 `.dkf-graph` 把它的 8 个 `--pele-*` 钩子
   接到同一套 `--dkf-*` 角色上，淡化色也改成向画布混（`docs/issues/kiln-graph-dark-theme.md`）。
   图里的字体同样接进这套角色：字族/等宽走 `--pele-font(-mono)`，字号作为 `fontSize` 传给

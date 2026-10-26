@@ -374,6 +374,44 @@ Edge headless 连 `--dump-dom` 都跑不起来，截图这条路走不通；深�
 token"保证，没法实拍。需要重启桌面应用后肉眼过一遍：页栏在窄侧栏下的折行、深色下 bg-layer-2
 与 layer-1 的对比是否够、竖脊会不会被行 hover 底色吃掉。
 
+## 落地 2：hover 统一
+
+改之前 CSS 里有 11 条 hover 规则、各写各的：9 条各自 `background:var(--dkf-hover)`，
+1 条只改 opacity（行尾按钮的揭示），还有一条是 `.dkf-focus:hover{background:var(--dkf-bg2)}`
+——焦点行本来就铺着 bg2，这条等于**没有反馈**，全表唯一"指上去不动"的行。
+
+### 一条说法
+
+| | 规则 |
+| --- | --- |
+| 叠底 | `background-image:linear-gradient(var(--dkf-hover),var(--dkf-hover))`，一条规则覆盖 11 个可交互元素 |
+| 为什么用背景图 | 它**不覆盖**已有底色：焦点行铺了 bg-layer-2 也能叠上一层，焦点态与 hover 态同时可见 |
+| 文字 | 可点控件（刷新 / 焦点 chip / 页签 / 取景按钮 / 面包屑 / 折叠 / 行尾聚焦）hover 时提到 primary；行不动（标题本来就是 primary） |
+| 过渡 | 不做。这类即时反馈在宿主里也是直接切；`.12s` 只留给淡化与焦点那种状态变化 |
+
+### 图里的同义句
+
+列表能叠底色，SVG 里不能（叠出来是脏的）。所以图的 hover 说的是同一句话——
+**指到谁，谁就恢复可读**：`.dkf-gnode-dim:hover{opacity:1}`，鼠标移开自动退回，不需要 JS，
+也不会跟焦点的光晕抢。顺带给 `.pele-node` 加了 `cursor:pointer`（它本来就是可点的）。
+
+### 顺带修掉的两个 hover 瑕疵
+
+| | 问题 | 改法 |
+| --- | --- | --- |
+| 时间线色点 | 用 `box-shadow:0 0 0 2px var(--dkf-bg)` 打了个"底色光圈"，hover 时行底变了、光圈没变，留下一圈亮边 | 去掉光圈，线直接连到点（VS Code TIMELINE 就是这么画的） |
+| issue 行动作条 | 最后一格同样用底色环标记 | 改成加高（11→13px）+ 不透明，不用底色环 |
+
+### 验证（第二轮）
+
+- `npm test --prefix plugin` → 37 + 31 全过。新增两条：
+  叠底公式在 CSS 里只出现一次且 11 个选择器都在里面、CSS 里不再有
+  `background:var(--dkf-hover)` / `.dkf-focus:hover{background:var(--dkf-bg2)}`；
+  以及图上的 `dkf-gnode-dim:hover` 与 `cursor:pointer`。
+- 仍然没法实拍（同前）。重启后重点看三处：焦点行 hover 有没有反应、鼠标扫过淡化节点时它是否亮起来、
+  时间线色点周围还有没有那圈亮边。
+
+
 
 
 

@@ -221,24 +221,31 @@ window.__ModuleLoader__.load({
 }
 /* 键盘焦点：三页一套，与宿主 focus ring 同宽 */
 .dkf-tab:focus-visible,.dkf-modebtn:focus-visible,.dkf-refresh:focus-visible,.dkf-focuschip:focus-visible,.dkf-toggle:focus-visible,.dkf-focusbtn:focus-visible{box-shadow:inset 0 0 0 2px var(--dkf-accent)}
+/*
+ * hover 只有一套说法：在“当前底色”上叠一层 --dkf-hover。
+ * 用 background-image 叠而不是 background-color，是因为它不覆盖已有底色——
+ * 焦点行本来就铺了 bg-layer-2，换成 background-color 会把它“顶掉”，
+ * 以前那条 .dkf-focus:hover{background:bg2} 等于没有反馈，就是这么来的。
+ * 可点控件的文字顺带提到 primary；行不需要（标题本来就是 primary）。
+ * 不做过渡：这类即时反馈在宿主里也是直接切（图上的 .12s 只给淡化/焦点那种状态变化）。
+ */
+.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-row:hover,.dkf-focus:hover,.dkf-crumb:hover,.dkf-subrow:hover,.dkf-arow:hover,.dkf-toggle:hover,.dkf-focusbtn:hover{background-image:linear-gradient(var(--dkf-hover),var(--dkf-hover))}
+.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-crumb:hover,.dkf-toggle:hover,.dkf-focusbtn:hover{color:var(--dkf-fg)}
 /* 页头第一层：只放身份与全局动作 */
 .dkf-head{display:flex;align-items:center;gap:8px;padding:0 12px;min-height:34px;border-bottom:.5px solid var(--dkf-line);flex:none}
 .dkf-repo{font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body);font-weight:600;color:var(--dkf-fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .dkf-spacer{flex:1}
 .dkf-refresh,.dkf-focuschip{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:var(--dkf-r);color:var(--dkf-fg2);white-space:nowrap;font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
-.dkf-refresh:hover,.dkf-focuschip:hover{background:var(--dkf-hover);color:var(--dkf-fg)}
 .dkf-focuschip{font-family:var(--dkf-mono);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line-2);max-width:320px;overflow:hidden;text-overflow:ellipsis}
 /* 页头第二层：左页切换、右当前页计数或工具，三页同高同排 */
 .dkf-bar{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;padding:4px 12px;min-height:36px;border-bottom:.5px solid var(--dkf-line);flex:none}
 .dkf-tabs{display:inline-flex;align-items:center;gap:2px;padding:2px 0;flex:none}
 .dkf-tab{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:24px;padding:0 9px;border-radius:var(--dkf-r);color:var(--dkf-fg2);font-family:var(--dkf-sans);font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body)}
-.dkf-tab:hover{background:var(--dkf-hover);color:var(--dkf-fg)}
 .dkf-tab-active{background:var(--dkf-bg2);color:var(--dkf-fg);font-weight:600;box-shadow:inset 0 0 0 .5px var(--dkf-line)}
 .dkf-bar-tools{display:flex;align-items:center;gap:6px;margin-left:auto;min-width:0}
 .dkf-count{color:var(--dkf-fg3);white-space:nowrap;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-mode{display:inline-flex;align-items:center;gap:2px}
 .dkf-modebtn{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:22px;padding:0 6px;border-radius:var(--dkf-r);color:var(--dkf-fg3);font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
-.dkf-modebtn:hover{color:var(--dkf-fg);background:var(--dkf-hover)}
 .dkf-modebtn-active{background:var(--dkf-bg2);color:var(--dkf-fg);font-weight:600;box-shadow:inset 0 0 0 .5px var(--dkf-line)}
 .dkf-bar-tools .dkf-mode+.dkf-mode{padding-left:6px;box-shadow:inset 1px 0 0 var(--dkf-line)}
 /* 内容区：唯一可滚动的地方 */
@@ -254,17 +261,14 @@ window.__ModuleLoader__.load({
 /* 竖脊：时间线的“有序”由这一条线承担，色点压在线上 */
 .dkf-rail::before{content:'';position:absolute;left:12px;top:12px;bottom:12px;width:1px;background:var(--dkf-line)}
 .dkf-row{display:grid;grid-template-columns:auto 10px auto auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:4px 6px;border-radius:var(--dkf-r);min-width:0;outline:none}
-.dkf-row:hover{background:var(--dkf-hover)}
 .dkf-row:focus-visible,.dkf-arow:focus-visible{box-shadow:inset 0 0 0 2px var(--dkf-accent)}
 .dkf-focus{background:var(--dkf-bg2);box-shadow:inset 0 0 0 .5px var(--dkf-line)}
-.dkf-focus:hover{background:var(--dkf-bg2)}
 .dkf-clickable{cursor:pointer}
 .dkf-indent{margin-left:18px}
 .dkf-crumb{color:var(--dkf-fg2);cursor:pointer;padding:2px 6px;width:max-content;border-radius:var(--dkf-r);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
-.dkf-crumb:hover{background:var(--dkf-hover);color:var(--dkf-fg)}
 .dkf-strip{display:inline-flex;gap:1px;align-items:center}
 .dkf-block{width:3px;height:11px;border-radius:1px;background:var(--dkf-fg3);opacity:.55}
-.dkf-block-current{opacity:1;box-shadow:0 0 0 1.5px var(--dkf-bg)}
+.dkf-block-current{height:13px;opacity:1}
 .dkf-caret{color:var(--dkf-fg3);width:10px;text-align:center;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-id{font-family:var(--dkf-mono);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta);font-weight:500;color:var(--dkf-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
 .dkf-edge{font-family:var(--dkf-mono);color:var(--dkf-fg3)}
@@ -276,11 +280,10 @@ window.__ModuleLoader__.load({
 .dkf-ago{color:var(--dkf-fg3);white-space:nowrap;font-variant-numeric:tabular-nums;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-focusbtn{all:unset;cursor:pointer;color:var(--dkf-fg3);white-space:nowrap;padding:0 5px;border-radius:var(--dkf-r);opacity:0;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-row:hover .dkf-focusbtn,.dkf-row:focus-within .dkf-focusbtn,.dkf-arow:hover .dkf-focusbtn,.dkf-arow:focus-within .dkf-focusbtn{opacity:1}
-.dkf-focusbtn:hover,.dkf-focusbtn:focus-visible{opacity:1;color:var(--dkf-fg);background:var(--dkf-hover)}
+.dkf-focusbtn:focus-visible{opacity:1}
 /* 时间线：一行一个动作，点色 = 动作色 */
 .dkf-arow{position:relative;display:grid;grid-template-columns:12px auto auto minmax(0,1fr) auto auto auto;align-items:center;gap:8px;padding:4px 6px;border-radius:var(--dkf-r);min-width:0;outline:none;cursor:pointer}
-.dkf-arow:hover{background:var(--dkf-hover)}
-.dkf-abar{width:7px;height:7px;border-radius:50%;justify-self:center;position:relative;z-index:1;background:var(--dkf-row-color,var(--dkf-fg3));box-shadow:0 0 0 2px var(--dkf-bg)}
+.dkf-abar{width:7px;height:7px;border-radius:50%;justify-self:center;position:relative;z-index:1;background:var(--dkf-row-color,var(--dkf-fg3))}
 .dkf-aissue{font-family:var(--dkf-mono);color:var(--dkf-fg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:22ch;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-achip{color:var(--dkf-row-color,var(--dkf-fg2));white-space:nowrap;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-atitle{color:var(--dkf-fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body)}
@@ -288,8 +291,7 @@ window.__ModuleLoader__.load({
 /* 展开层：动作历史与提交详情，缩进到标题列 */
 .dkf-sub{margin:2px 0 6px 34px;padding:2px 0 2px 10px;border-left:1px solid var(--dkf-line);display:flex;flex-direction:column;gap:1px}
 .dkf-subrow{display:grid;grid-template-columns:12px auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:2px 6px;border-radius:var(--dkf-r)}
-.dkf-subrow:hover{background:var(--dkf-hover)}
-.dkf-subrow .dkf-abar{width:5px;height:5px;box-shadow:none}
+.dkf-subrow .dkf-abar{width:5px;height:5px}
 .dkf-detail{margin:2px 6px 8px 34px;padding:2px 0 2px 10px;border-left:1px solid var(--dkf-line);display:flex;flex-direction:column;gap:2px;color:var(--dkf-fg2);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-detail-key{display:inline-block;min-width:44px;color:var(--dkf-fg3)}
 .dkf-detail code{font-family:var(--dkf-mono);color:var(--dkf-fg);word-break:break-all;font-size:var(--dkf-fs-meta)}
@@ -298,7 +300,6 @@ window.__ModuleLoader__.load({
 .dkf-group{margin:12px 0 0}
 .dkf-group-head{display:flex;align-items:center;gap:6px;color:var(--dkf-fg3);font-weight:600;margin:0 0 4px;padding:0 6px;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-toggle{all:unset;cursor:pointer;color:var(--dkf-fg2);padding:0 4px;border-radius:var(--dkf-r);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
-.dkf-toggle:hover{color:var(--dkf-fg);background:var(--dkf-hover)}
 /* 关系图：图框去外边框，图例压成一行 */
 .dkf-graphwrap{display:flex;flex-direction:column;gap:8px;min-width:0}
 .dkf-graph{border-radius:var(--dkf-r-box);background:var(--dkf-bg2);box-shadow:inset 0 0 0 .5px var(--dkf-line);padding:8px;overflow:hidden;min-height:260px}
@@ -320,6 +321,13 @@ window.__ModuleLoader__.load({
 /* 淡化向画布色混，而不是向白底混：按定义永远比正常边更靠近画布，换主题也不会反过来 */
 .dkf-graph svg{--dkf-dim-edge-color:color-mix(in srgb,var(--dkf-fg2) var(--dkf-dim-edge-mix),var(--dkf-canvas));--dkf-dim-label-color:color-mix(in srgb,var(--dkf-fg2) var(--dkf-dim-label-mix),var(--dkf-canvas))}
 .dkf-gnode-dim{opacity:var(--dkf-dim-node);transition:opacity .12s ease}
+/*
+ * 图上的 hover 与列表同一句话：“指到谁，谁就恢复可读”。
+ * 列表是叠一层浅底；图里没有底色可叠，就把淡化的节点临时拉回正常亮度
+ * （鼠标移开自动退回，不需要 JS，也不会跟焦点的光晕抢）。
+ */
+.dkf-graph .pele-node{cursor:pointer}
+.dkf-gnode-dim:hover{opacity:1}
 /* 边用“换颜色”而不是整体透明度：多条箭头叠在一起时，透明度会累加出更深的块 */
 .dkf-gedge-dim path{stroke:var(--dkf-dim-edge-color);transition:stroke .12s ease}
 .dkf-gedge-dim .pele-marker{fill:var(--dkf-dim-edge-color)}

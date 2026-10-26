@@ -625,6 +625,33 @@ await check('图的字体：字族/等宽接到 --dkf-sans / --dkf-mono', async 
   assert.ok(css.includes('--pele-font-mono:var(--dkf-mono)'), '等宽要走宿主的代码字体')
 })
 
+await check('hover：只有一条"叠一层"的规则，三页的元素都在里面', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const css = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals.css
+  const overlay = 'background-image:linear-gradient(var(--dkf-hover),var(--dkf-hover))'
+  assert.equal(css.split(overlay).length - 1, 1, '叠底公式只能出现一次（一处定义，多处引用选择器）')
+  const at = css.indexOf(overlay)
+  const selector = css.slice(css.lastIndexOf('}', at) + 1, css.indexOf('{', at))
+  for (const name of ['refresh', 'focuschip', 'tab', 'modebtn', 'row', 'focus', 'crumb', 'subrow', 'arow', 'toggle', 'focusbtn']) {
+    assert.ok(selector.includes(`.dkf-${name}:hover`), `.dkf-${name} 必须走同一条 hover 规则`)
+  }
+  assert.ok(!css.includes('background:var(--dkf-hover)'), '不能再退回"直接换底色"的写法（会盖掉焦点行的底色）')
+  assert.ok(!css.includes('.dkf-focus:hover{background:var(--dkf-bg2)}'), '焦点行不能还是"没有反馈"的那个例外')
+})
+
+await check('hover：图里指到淡化的节点，把它拉回正常亮度', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const css = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals.css
+  assert.ok(css.includes('.dkf-gnode-dim:hover{opacity:1}'), '淡化节点 hover 要恢复')
+  assert.ok(css.includes('.dkf-graph .pele-node{cursor:pointer}'), '可点的节点要有可点的光标')
+})
+
 // ---------------------------------------------------------------- 汇总
 console.log('')
 if (failures.length === 0) {
