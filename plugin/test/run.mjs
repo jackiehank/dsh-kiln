@@ -707,6 +707,37 @@ await check('筛选：同组多选是 OR，组间是 AND', async () => {
   assert.equal(filtersActive({ domains: ['x'], tags: [], states: [] }), true)
 })
 
+await check('时间线筛选：动作与领域两组，过滤的是动作行', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const { rowFacets, filterRows, readRowFilters } = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals ?? {}
+  assert.equal(typeof rowFacets, 'function', '需要 __DSH_KILN_TEST__ 暴露 rowFacets')
+
+  const byId = new Map([
+    ['a', { id: 'a', domain: 'design' }],
+    ['b', { id: 'b', domain: 'cli' }],
+  ])
+  const rows = [
+    { issueId: 'a', action: 'ask' },
+    { issueId: 'a', action: 'apply' },
+    { issueId: 'b', action: 'ask' },
+  ]
+  const facets = rowFacets(rows, byId)
+  assert.deepEqual(facets.actions.map((o) => [o.id, o.count]), [['ask', 2], ['apply', 1]])
+  assert.deepEqual(facets.domains.map((o) => [o.id, o.count]), [['design', 2], ['cli', 1]])
+
+  const single = rowFacets([{ issueId: 'a', action: 'ask' }], byId)
+  assert.deepEqual(single.actions, [], '只有一种动作就不给这一组')
+  assert.deepEqual(single.domains, [], '只有一个领域就不给这一组')
+
+  assert.equal(filterRows(rows, { actions: ['apply'], domains: [] }, byId).length, 1, '按动作名')
+  assert.equal(filterRows(rows, { actions: [], domains: ['cli'] }, byId).length, 1, '按动作所属 issue 的领域')
+  assert.equal(filterRows(rows, { actions: ['ask'], domains: ['design'] }, byId).length, 1, '组间 AND')
+  assert.equal(filterRows(rows, readRowFilters(undefined), byId).length, 3, '没筛选就是原样')
+})
+
 // ---------------------------------------------------------------- 汇总
 console.log('')
 if (failures.length === 0) {

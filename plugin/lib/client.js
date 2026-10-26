@@ -64,6 +64,11 @@ window.__ModuleLoader__.load({
       { id: 'states', label: '状态' },
       { id: 'tags', label: '标签' },
     ]
+    /** 时间线的筛选组：动作名 + 算在动作头上的领域。 */
+    const ROW_FILTER_GROUPS = [
+      { id: 'actions', label: '动作' },
+      { id: 'domains', label: '领域' },
+    ]
     const FILTER_STATE_LABEL = { open: '进行中', done: '已完成' }
     /**
      * 边的线型阶梯：结构性强 → 弱，墨越来越轻。
@@ -125,6 +130,7 @@ window.__ModuleLoader__.load({
       graphView: 'global',
       graphDepth: '1',
       filters: EMPTY_FILTERS,
+      rowFilters: { actions: [], domains: [] },
     }
 
     function readViewState(cwd) {
@@ -838,9 +844,58 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** 任何一组有选中就算"筛选中"；issue 用三组、时间线用两组，共用同一套判断。 */
     function filtersActive(filters) {
       if (filters === null || filters === undefined) return false
-      return filters.domains.length > 0 || filters.tags.length > 0 || filters.states.length > 0
+      return Object.values(filters).some((list) => Array.isArray(list) && list.length > 0)
+    }
+
+    /** 时间线的动作筛选：动作名 + 所属 issue 的领域。 */
+    const EMPTY_ROW_FILTERS = { actions: [], domains: [] }
+
+    function readRowFilters(value) {
+      const source = value === null || value === undefined ? EMPTY_ROW_FILTERS : value
+      return {
+        actions: Array.isArray(source.actions) ? source.actions.slice() : [],
+        domains: Array.isArray(source.domains) ? source.domains.slice() : [],
+      }
+    }
+
+    /** 动作行上的筛选：actions 看动作名，domains 看这个动作所属 issue 的领域。 */
+    function filterRows(rows, filters, byId) {
+      if (filters === null || filters === undefined || !filtersActive(filters)) return rows
+      return rows.filter((row) => {
+        if (filters.actions.length > 0 && !filters.actions.includes(row.action)) return false
+        if (filters.domains.length > 0) {
+          const domain = byId?.get?.(row.issueId)?.domain ?? ''
+          if (!filters.domains.includes(domain)) return false
+        }
+        return true
+      })
+    }
+
+    /**
+     * 时间线可筛的值：动作名（按出现次数）、领域（按条数，且只在多于一个时给）。
+     * 标签不在这里——kiln 的 tag 是动作提交上的 trailer，但 `path --json` 不吐它，
+     * 视图只能拿到 issue 级并集，拿它筛动作会张冠李戴。
+     */
+    function rowFacets(rows, byId) {
+      const actions = new Map()
+      const domains = new Map()
+      for (const row of rows) {
+        const action = row.action ?? ''
+        actions.set(action, (actions.get(action) ?? 0) + 1)
+        const domain = byId?.get?.(row.issueId)?.domain ?? ''
+        domains.set(domain, (domains.get(domain) ?? 0) + 1)
+      }
+      const toOptions = (map, emptyLabel) =>
+        [...map.entries()]
+          .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+          .map(([id, count]) => ({ id, label: id === '' ? emptyLabel : id, count }))
+      return {
+        actions: actions.size > 1 ? toOptions(actions, '?') : [],
+        domains: domains.size > 1 ? toOptions(domains, '未分类') : [],
+      }
     }
 
     function matchesFilters(issue, filters) {
@@ -884,7 +939,10 @@ window.__ModuleLoader__.load({
           .map(([id, count]) => ({ id, label: id === '' ? emptyLabel : id, count }))
       return {
         domains: domains.size > 1 ? toOptions(domains, '未分类') : [],
-        states: states.size > 1 ? toOptions(states, '') : [],
+        states:
+          states.size > 1
+            ? toOptions(states, '').map((option) => ({ ...option, label: FILTER_STATE_LABEL[option.id] ?? option.id }))
+            : [],
         tags: toOptions(tags, ''),
       }
     }
@@ -1099,21 +1157,26 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** 筛选条：三组 chips（同组 OR、组间 AND）；空组不渲染，有筛选时右侧给「清除」。 */
+    /**
+     * 筛选条：三组 chips（同组 OR、组间 AND）；空组不渲染，有筛选时右侧给「清除」。
+     * 组清单由调用方给（issue 页三组、时间线两组），选项标签在 facets 里已经拍平。
+     */
     function FilterRow(props) {
       const facets = props.facets
-      const groups = FILTER_GROUPS.filter((group) => facets[group.id].length > 0)
+      const groups = props.groups.filter((group) => (facets[group.id] ?? []).length > 0)
       if (groups.length === 0) return null
-      const labelOf = (groupId, option) =>
-        groupId === 'states' ? (FILTER_STATE_LABEL[option.id] ?? option.id) : option.label
       return h(
         'div',
-        { className: 'dkf-filters', role: 'group', 'aria-label': '筛选 issue' },
+        { className: 'dkf-filters', role: 'group', 'aria-label': '筛选' },
         groups.map((group) =>
           h(
             'div',
             { className: 'dkf-filter-group', key: group.id },
-            h('span', { className: 'dkf-filter-label' }, group.label),
+            h(
+              'span',
+              { className: 'dkf-filter-label', 'data-hint': group.hint === undefined ? null : group.hint },
+              group.label,
+            ),
             facets[group.id].map((option) =>
               h(
                 'button',
@@ -1124,7 +1187,7 @@ window.__ModuleLoader__.load({
                   'aria-pressed': props.active[group.id].includes(option.id),
                   onClick: () => props.onToggle(group.id, option.id),
                 },
-                `${labelOf(group.id, option)} ${option.count}`,
+                `${option.label} ${option.count}`,
               ),
             ),
           ),
@@ -1624,6 +1687,7 @@ window.__ModuleLoader__.load({
       const [graphDepth, setGraphDepth] = React.useState(memory.graphDepth === '2' ? '2' : '1')
       const [filterOpen, setFilterOpen] = React.useState(false)
       const [filters, setFilters] = React.useState(() => readFilters(memory.filters))
+      const [rowFilters, setRowFilters] = React.useState(() => readRowFilters(memory.rowFilters))
 
       /**
        * 提示框：元素上只写 `data-hint`，机制收在这里（根节点监听 pointerover 做委托）。
@@ -1863,6 +1927,53 @@ window.__ModuleLoader__.load({
         writeViewState(cwd, { filters: EMPTY_FILTERS })
       }
 
+      /** 时间线：筛的是动作（行就是动作），维度是动作名与它所属 issue 的领域。 */
+      const rowFacetData = React.useMemo(() => rowFacets(rows, byId), [rows, byId])
+      const activeRowFilters = readRowFilters(rowFilters)
+      const shownRows = React.useMemo(() => filterRows(rows, activeRowFilters, byId), [rows, activeRowFilters, byId])
+      const rowFilterOn = filtersActive(activeRowFilters)
+      const rowFilterCount = activeRowFilters.actions.length + activeRowFilters.domains.length
+      const canFilterRows = tabId === 'timeline' && rowFacetData.actions.length + rowFacetData.domains.length > 0
+
+      const toggleRowFilter = (groupId, id) => {
+        setRowFilters((previous) => {
+          const base = readRowFilters(previous)
+          const list = Array.isArray(base[groupId]) ? base[groupId] : []
+          const next = {
+            ...base,
+            [groupId]: list.includes(id) ? list.filter((value) => value !== id) : [...list, id],
+          }
+          writeViewState(cwd, { rowFilters: next })
+          return next
+        })
+      }
+      const clearRowFilters = () => {
+        setRowFilters(EMPTY_ROW_FILTERS)
+        writeViewState(cwd, { rowFilters: EMPTY_ROW_FILTERS })
+      }
+
+      const rowTools = [
+        canFilterRows
+          ? h(
+              'button',
+              {
+                key: 'filter',
+                type: 'button',
+                className: cls('dkf-modebtn', filterOpen && 'dkf-modebtn-active'),
+                'aria-expanded': filterOpen,
+                'data-hint': filterOpen ? '收起筛选' : '按动作 / 领域筛选',
+                onClick: () => setFilterOpen((value) => !value),
+              },
+              rowFilterOn ? `筛选 ${rowFilterCount}` : '筛选',
+            )
+          : null,
+        h(
+          'span',
+          { key: 'count', className: 'dkf-count' },
+          rowFilterOn && canFilterRows ? `${shownRows.length} / ${rows.length} 个动作` : `${rows.length} 个动作`,
+        ),
+      ]
+
       const issueTools = [
         canFilter
           ? h(
@@ -1898,7 +2009,7 @@ window.__ModuleLoader__.load({
                   ? pageTools
                   : tabId === 'issue'
                     ? issueTools
-                    : h('span', { className: 'dkf-count' }, `${rows.length} 个动作`),
+                    : rowTools,
               ),
             )
           : null
@@ -1940,12 +2051,16 @@ window.__ModuleLoader__.load({
         let content = null
         if (tabId === 'timeline') {
           content = h(TimelinePanel, {
-            rows,
+            rows: shownRows,
             totalOf,
             expanded,
             onToggle: toggleExpand,
             onFocus: focusIssue,
-            emptyText: focus === null ? '还没有任何 kiln 动作。' : '焦点与相关 issue 还没有动作。',
+            emptyText: rowFilterOn
+              ? '没有符合筛选条件的动作。'
+              : focus === null
+                ? '还没有任何 kiln 动作。'
+                : '焦点与相关 issue 还没有动作。',
           })
         } else if (tabId === 'issue') {
           // 有焦点 = 读结构（母 / 子 / 强关系 / 弱关联）；没焦点 = 一行一个 issue
@@ -2038,10 +2153,24 @@ window.__ModuleLoader__.load({
         },
         header,
         bar,
-        // 筛选条只在 issue 页展开时出现，紧贴页栏下面（不跟着内容滚走）
-        canFilter && filterOpen
-          ? h(FilterRow, { facets, active: activeFilters, onToggle: toggleFilter, onClear: clearFilters })
-          : null,
+        // 筛选条只在展开时出现，紧贴页栏下面（不跟着内容滚走）
+        filterOpen && canFilterRows
+          ? h(FilterRow, {
+              groups: ROW_FILTER_GROUPS,
+              facets: rowFacetData,
+              active: activeRowFilters,
+              onToggle: toggleRowFilter,
+              onClear: clearRowFilters,
+            })
+          : filterOpen && canFilter
+            ? h(FilterRow, {
+                groups: FILTER_GROUPS,
+                facets,
+                active: activeFilters,
+                onToggle: toggleFilter,
+                onClear: clearFilters,
+              })
+            : null,
         // 滚动时内容从提示框底下走，必须收起来
         h('div', { className: 'dkf-scroll', onScroll: clearHint }, body),
         hintTip,
@@ -2069,6 +2198,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, css: CSS } } : {}) }
   },
 })

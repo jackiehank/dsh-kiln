@@ -63,3 +63,30 @@ issue 页已经有筛选了（`kiln-issue-filter`），但两页筛的对象不�
 
 要真正做动作级标签，正确做法是上游给 `kiln path --json` 的动作对象补 `tags` 字段，
 而不是在客户端再起 N 个子进程。
+
+## 落地
+
+1. **纯函数**：`rowFacets(rows, byId)`（动作名与领域，按次数降序，单值不给组）、
+   `filterRows(rows, filters, byId)`（同组 OR、组间 AND）、`readRowFilters`（归一化记忆值）。
+2. **`FilterRow` 泛化**：组清单由调用方给（issue 页三组、时间线两组），选项标签在 facets 里拍平
+   （状态的"进行中/已完成"也在 `issueFacets` 里翻译），组件本身不再知道业务维度。
+3. **页栏**：时间线右侧 = `[筛选] [N / M 个动作]`；`canFilterRows` 只看"本页有没有两种以上可筛值"，
+   与 issue 页的 `canFilter` 各自独立。
+4. **状态**：`rowFilters` 进 `VIEW_STATE`（按仓库记内存），与 `filters` 分开——两页筛的东西不同，
+   互相不该串。
+5. **空态**：筛空时给「没有符合筛选条件的动作。」；焦点作用域下的提示沿用原来的两句。
+
+### 验证
+
+- `npm test --prefix plugin` → 41 个宿主用例 + 37 个渲染用例全过。新增三条：
+  - `rowFacets` / `filterRows`：按动作名、按所属 issue 的领域、组间 AND、单值不给组；
+  - 渲染：`rowFilters.actions = ['apply']` 时时间线只剩 1 行，计数变 `1 / 4 个动作`，按钮写「筛选 1」；
+  - 渲染：筛空时文案是「没有符合筛选条件的动作」。
+- 顺带更新了一条旧断言：以前"非关系页没有 `.dkf-modebtn`"，现在时间线页有筛选按钮，
+  改成"非关系页没有图的取景控件（横向/纵向/全局/聚焦）"。
+
+### 已知边界
+
+- **动作级标签要等上游**：`kiln path --json` 的动作对象补上 `tags` 之后，这一页才能加标签维度；
+  现在只能拿 issue 级并集，用它筛动作会张冠李戴（见 collect）。
+- 领域维度依赖动作所属 issue 的 domain；一个仓只有一种领域时该组不出现。

@@ -131,6 +131,7 @@ function render({
   depth = '1',
   filterOpen = false,
   filters = undefined,
+  rowFilters = undefined,
 }) {
   const React = makeReact([
     {
@@ -148,7 +149,8 @@ function render({
     view, //                       graphView（全局 / 聚焦）
     depth, //                      graphDepth（一圈的半径）
     filterOpen, //                 filterOpen（筛选条是否展开）
-    filters, //                    filters（领域 / 状态 / 标签）
+    filters, //                    filters（issue 页：领域 / 状态 / 标签）
+    rowFilters, //                 rowFilters（时间线：动作 / 领域）
   ])
   const requireOf = (name) => {
     if (name === 'react') return React
@@ -213,7 +215,9 @@ check('页头：两层，第二层左页切换、右当前页计数', () => {
   const bar = byClass(view, 'dkf-bar')[0]
   assert.equal(byClass(bar, 'dkf-tabs').length, 1, '页切换在第二层左侧')
   assert.equal(textOf(byClass(bar, 'dkf-count')[0]), '4 个动作', '时间线页右侧放动作数')
-  assert.equal(byClass(view, 'dkf-modebtn').length, 0, '非关系页没有图的取景控件')
+  const labels = byClass(view, 'dkf-modebtn').map(textOf)
+  assert.ok(!labels.some((label) => ['横向', '纵向', '全局', '聚焦'].includes(label)), '非关系页没有图的取景控件')
+  assert.ok(labels.includes('筛选'), '时间线页有动作筛选（4 条动作里不止一种动作名）')
 })
 
 check('页头：关系页右侧换成取景控件，不再另起一行工具条', () => {
@@ -268,6 +272,23 @@ check('筛选：命中为空时说「没有符合筛选」，不是「还没有 
   const view = render({ tabId: 'issue', filters: { domains: [], tags: [], states: ['done'] } })
   assert.equal(byClass(view, 'dkf-row').length, 0, '测试数据全是进行中，按已完成筛就空了')
   assert.match(textOf(byClass(view, 'dkf-empty')[0]), /没有符合筛选/)
+})
+
+check('时间线筛选：按动作名收窄，计数变成「命中 / 总数」', () => {
+  const view = render({ tabId: 'timeline', rowFilters: { actions: ['apply'], domains: [] } })
+  assert.equal(byClass(view, 'dkf-arow').length, 1, '4 条动作里只有 a 的 apply')
+  assert.equal(textOf(byClass(view, 'dkf-count')[0]), '1 / 4 个动作')
+  assert.deepEqual(
+    byClass(view, 'dkf-modebtn').filter((node) => textOf(node).startsWith('筛选')).map(textOf),
+    ['筛选 1'],
+    '按钮上带选中数量',
+  )
+})
+
+check('时间线筛选：筛空时给的是「没有符合筛选条件的动作」', () => {
+  const view = render({ tabId: 'timeline', rowFilters: { actions: ['conclude'], domains: [] } })
+  assert.equal(byClass(view, 'dkf-arow').length, 0)
+  assert.match(textOf(byClass(view, 'dkf-empty')[0]), /没有符合筛选条件的动作/)
 })
 
 check('timeline 全局：4 条 action 一行一条，按时间倒序', () => {
