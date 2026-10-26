@@ -147,18 +147,44 @@ issue 页始终全量；有焦点时在列表上方插一张“焦点卡片”�
 3. **关系页删干净**：`RELATION_MODES`、`relationMode` 的内存字段、列表分支、只服务于它的
    `globalRelationRows` 一并去掉；旧内存里残留的 `relationMode` 必须被忽略而不是报错。
 
-### 落地顺序（下一步 apply）
+### 落地顺序（实际执行）
 
 1. 关系页删列表：分段、状态、列表分支；工具栏只留方向 / 视图 / 跳数。
 2. 抽 `IssueFocusList`（从 `RelationList` 的焦点分支搬）：母 crumb、子组、强关系组、弱关联默认展开。
-3. issue 页：有焦点渲染 `IssueFocusList`，无焦点渲染今天的 `IssuePanel`；页首那条“查看全部 issue”
-   文字链。
-4. 测试：`plugin/test/render.mjs` 里关系页列表相关的用例迁到 issue 页，删掉关系页分段的断言；
-   `run.mjs` 补一条“旧内存里残留 `relationMode` 不报错”的用例。
+3. issue 页：有焦点渲染 `IssueFocusList`，无焦点渲染今天的 `IssuePanel`；退出聚焦只走头部 `焦点：x ×`
+   （讨论后决定不加页内链接）。
+4. 测试：`plugin/test/render.mjs` 里关系页列表相关的用例迁到 issue 页，删掉关系页分段的断言。
+   `run.mjs` 没加“旧 `relationMode`”用例——那个字段只从内存读一次、读到也没人用，
+   删掉 `EMPTY_VIEW_STATE` 里的定义后不会抛错，写用例反而是给不存在的路径加保护。
 5. 观感核对按 `~/kiln` 的量级走（58 issue / 73 边），必须重启桌面应用才能看到新代码。
+
+## 落地（apply）：关系页只剩图，聚焦态归 issue 页
+
+**定案（讨论结论）：A，但不要页内那条文字链。** 退出聚焦就走头部已有的 `焦点：x ×`（和关系页
+一样，`Esc` 也行）——聚焦是一个跨页状态，出口只该有一个，页内再来一条“查看全部 issue”是第二种说法。
+
+弱关联按 collect 的结论**默认展开、不给收起开关**；焦点行动作**默认展开**（独立状态 `focusOpen`，
+换焦点时重置为开）。
+
+代码（`plugin/lib/client.js`）：
+
+- 关系页：`RelationPanel` 只渲染三个分段（方向 / 视图 / 半径）加 `GraphPanel`。删掉
+  `RELATION_MODES`、`relationMode` 状态与内存字段、`RelationList`、`globalRelationRows`，
+  以及只服务于全局边表的 `.dkf-grow` / `.dkf-endpoint` 两条样式。
+- issue 页：有焦点渲染新的 `IssueFocusList`（母 crumb / 子组（>4 折叠）/ `blocks` / `caused-by` /
+  `supersedes` / 弱关联），行内仍带 `→ ←` 与关系名；无焦点还是 `IssuePanel` 的全量列表。
+- 焦点行用独立的 `focusOpen`，没有复用三页共享的 `expanded`——否则在 timeline 里展开同一条 issue
+  会连带改掉 issue 页的手感。
+
+测试：`npm test --prefix plugin` → 28（宿主）+ 26（渲染）。改动是把关系页列表的两例迁成 issue 页
+结构断言（分组表头、行内方向、弱关联默认展开、焦点行默认展开/可收起），再补一例“issue 页不画图”。
+
+**代价（当时确认过，这里记着）**：全局边表的文本读法没有了。没有焦点时，关系只能从图上读线型、
+配合图例；要看“A ← caused-by B”这种句子，得先把焦点落到 A 或 B。
 
 ## 待定（下一轮讨论）
 
-1. 焦点态下“看全量 issue”的入口做成文字链（A）还是分段（B）——推荐 A。
-2. 弱关联默认展开，是否需要再给一个“收起”的开关（collect：最大 9 行，可能不需要）。
-3. 焦点行动作默认展开，用独立状态（推荐）还是复用共享的 `expanded`。
+1. 时间线在焦点时同样收窄，这次没动——要不要也做成“结构优先”，等 issue 页用一阵再说。
+2. 焦点为空的 issue（没有任何关系，`~/kiln` 有 6 个）现在只剩焦点行 + 它的动作；是否补一句
+   “这个 issue 还没有关系”。
+3. 聚焦态下节点标签与边标签（`kiln-graph-label-threshold` deferred 的两项）仍未动。

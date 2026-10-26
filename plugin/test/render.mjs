@@ -124,23 +124,27 @@ function render({
   focusId = null,
   tabId = 'timeline',
   expanded = null,
-  mode = 'graph',
+  children = false,
+  focusOpen = true,
   direction = 'LR',
   view = 'global',
   depth = '1',
 }) {
   const React = makeReact([
-    { phase: 'ready', payload, error: null }, // state：直接给成 ready
-    0, //                        nonce
-    tabId, //                    tabId
-    focusId, //                  focusId
-    expanded, //                 expanded（展开项）
-    false, //                    expandedWeak
-    false, //                    expandedChildren
-    mode, //                     relationMode（关系页取景）
-    direction, //                graphDirection（图方向）
-    view, //                     graphView（全局 / 聚焦）
-    depth, //                    graphDepth（一圈的半径）
+    {
+      phase: 'ready',
+      payload,
+      error: null,
+    }, //                          state：直接给成 ready
+    0, //                          nonce
+    tabId, //                      tabId
+    focusId, //                    focusId
+    expanded, //                   expanded（三页共享的展开项）
+    children, //                   expandedChildren（子 issue 组是否全展开）
+    focusOpen, //                  focusOpen（焦点行是否展开动作）
+    direction, //                  graphDirection（图方向）
+    view, //                       graphView（全局 / 聚焦）
+    depth, //                      graphDepth（一圈的半径）
   ])
   const requireOf = (name) => {
     if (name === 'react') return React
@@ -254,23 +258,31 @@ check('issue 页聚焦：只留焦点与相关 issue，且焦点钉在第一条'
   assert.ok(rows[0].props.className.includes('dkf-focus'))
 })
 
-// ---------------------------------------------------------------- relation 页
+// ---------------------------------------------------------------- issue 页（聚焦态）
 
-check('relation 页全局（列表取景）：按关系分组列出边', () => {
-  const focused = render({ tabId: 'relation', mode: 'list' })
-  const groups = byClass(focused, 'dkf-group-head')
-  assert.equal(groups.length, 2)
-  assert.match(textOf(groups[0]), /caused-by 1/)
-  assert.equal(byClass(focused, 'dkf-grow').length, 2)
+check('issue 页聚焦：按结构分组，行内带关系名与方向', () => {
+  const focused = render({ tabId: 'issue', focusId: 'a' })
+  const heads = byClass(focused, 'dkf-group-head').map(textOf)
+  assert.deepEqual(heads, ['因果 · caused-by 1', '弱关联 · relates-to 1'])
+  const edges = byClass(focused, 'dkf-edge').map((node) => textOf(node).trim())
+  assert.deepEqual(edges, ['← caused-by'], 'b 引发了 a，所以从 a 看是 ←')
 })
 
-check('relation 页聚焦（列表取景）：焦点行 + 一跳邻居行', () => {
-  const focused = render({ tabId: 'relation', focusId: 'b', mode: 'list' })
-  const rows = byClass(focused, 'dkf-row')
-  assert.ok(rows.length >= 2, `期望至少 2 行，实际 ${rows.length}`)
-  assert.equal(textOf(byClass(rows[0], 'dkf-id')[0]), 'b')
-  const edges = byClass(focused, 'dkf-edge').map(textOf).join(' ')
-  assert.match(edges, /caused-by/)
+check('issue 页聚焦：弱关联默认展开，没有「+N 弱关联」按钮', () => {
+  const focused = render({ tabId: 'issue', focusId: 'a' })
+  assert.equal(byClass(focused, 'dkf-toggle').length, 0)
+  const ids = byClass(focused, 'dkf-row').map((row) => textOf(byClass(row, 'dkf-id')[0]))
+  assert.equal(ids.length, 3, '焦点 + 强关系 + 弱关联各一行')
+  assert.match(ids[0], /^a$/)
+  assert.match(ids[1], /caused-by\s+b$/)
+  assert.match(ids[2], /^c$/)
+})
+
+check('issue 页聚焦：焦点行默认展开它的动作，点一下收起', () => {
+  const open = render({ tabId: 'issue', focusId: 'a' })
+  assert.equal(byClass(open, 'dkf-subrow').length, 2, 'a 有两个动作')
+  const closed = render({ tabId: 'issue', focusId: 'a', focusOpen: false })
+  assert.equal(byClass(closed, 'dkf-subrow').length, 0)
 })
 
 // ---------------------------------------------------------------- relation 页（图）
@@ -355,14 +367,12 @@ check('聚焦：只有无向邻居也能画出一圈', () => {
   assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /聚焦：c 与 1 跳内的 1 个邻居/)
 })
 
-check('控件：列表不画图；图里只剩视图与方向，半径只在「聚焦」出现', () => {
+check('控件：关系页只剩方向 / 视图 / 半径三段，半径只在「聚焦」出现', () => {
   const graph = render({ tabId: 'relation' })
-  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), ['图', '列表', '横向', '纵向', '全局', '聚焦'])
+  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), ['横向', '纵向', '全局', '聚焦'])
   const ego = render({ tabId: 'relation', focusId: 'b', view: 'focus' })
   assert.deepEqual(byClass(ego, 'dkf-modebtn').map(textOf).slice(-2), ['1 跳', '2 跳'])
-  const list = render({ tabId: 'relation', mode: 'list' })
-  assert.equal(byClass(list, 'dkf-graph').length, 0)
-  assert.deepEqual(byClass(list, 'dkf-modebtn').map(textOf), ['图', '列表'])
+  assert.equal(byClass(render({ tabId: 'issue' }), 'dkf-graph').length, 0, 'issue 页不画图')
 })
 
 check('聚焦：1 跳只留直接邻居', () => {

@@ -3,13 +3,13 @@
  *
  * 标签内是三个平级页面，共用同一个焦点 issue：
  *   timeline —— 一行一个 action，按时间倒序（只算带 issue: + action: 的提交）
- *   issue    —— 一行一个 issue，按最近动作排序
- *   relation —— 关系；两种取景共用同一个焦点：
- *               图（默认，mermaid + Pele）与列表（分组边表），页内分段切换
+ *   issue    —— 无焦点：一行一个 issue，按最近动作排序；有焦点：读出焦点周围的**结构**
+ *               （母 / 子 / 阻塞 / 因果 / 取代 / 弱关联，行内带关系名与方向）
+ *   relation —— 关系图（mermaid + Pele），全局与聚焦两种取景
  *
  * 交互约定（三页一致）：
  *   · 点行 = 展开（issue 展开它的 action 列表；timeline 展开这条提交的详情）
- *   · 行尾 `⌖ 聚焦` = 切焦点；头部 `焦点：x ×` / Esc = 退出
+ *   · 行尾 `⌖ 聚焦` = 切焦点；头部 `焦点：x ×` / Esc = 退出聚焦
  *   · 列表内方向键走行、Enter 展开、f 聚焦
  *   · 图上点节点 = 聚焦（节点没有“第二层”可展开，这是三页里唯一的手势差异）
  *
@@ -54,11 +54,6 @@ window.__ModuleLoader__.load({
       { id: 'timeline', label: '时间线' },
       { id: 'issue', label: 'issue' },
       { id: 'relation', label: '关系' },
-    ]
-    /** 关系页的两种取景：图看形状，列表读文字；共用同一份数据与焦点。 */
-    const RELATION_MODES = [
-      { id: 'graph', label: '图' },
-      { id: 'list', label: '列表' },
     ]
     /**
      * 边的线型阶梯：结构性强 → 弱，墨越来越轻。
@@ -115,7 +110,6 @@ window.__ModuleLoader__.load({
       tabId: 'timeline',
       focusId: null,
       expanded: null,
-      relationMode: 'graph',
       graphDirection: 'LR',
       graphView: 'global',
       graphDepth: '1',
@@ -252,10 +246,6 @@ window.__ModuleLoader__.load({
 .dkf-achip{font:10px/16px var(--dsw-font-family,inherit);padding:0 5px;border-radius:3px;border:.5px solid currentColor;white-space:nowrap}
 .dkf-atitle{color:var(--dsw-alias-label-primary,#111);font:12px/18px var(--dsw-font-family,inherit);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .dkf-ashort{font:10px/16px var(--dsw-font-family-code,monospace);color:var(--dsw-alias-label-tertiary,#999)}
-.dkf-grow{display:flex;align-items:center;gap:4px;padding:3px 6px;border-radius:4px;flex-wrap:wrap;outline:none}
-.dkf-grow:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
-.dkf-endpoint{all:unset;cursor:pointer;color:var(--dsw-alias-label-secondary,#666);font:12px/18px var(--dsw-font-family-code,monospace);border-radius:4px;padding:0 3px}
-.dkf-endpoint:hover{color:var(--dsw-alias-label-primary,#111);background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
 .dkf-sub{margin:2px 0 6px 30px;border-left:2px solid var(--dsw-alias-border-l2,#e3e3e3);padding:2px 0 2px 10px;display:flex;flex-direction:column;gap:2px}
 .dkf-subrow{display:grid;grid-template-columns:3px auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:2px 4px;border-radius:3px}
 .dkf-subrow:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.04))}
@@ -431,19 +421,6 @@ window.__ModuleLoader__.load({
       for (const id of children) ids.add(id)
       for (const list of groups.values()) for (const entry of list) ids.add(entry.id)
       return { parent, children, groups, ids }
-    }
-
-    /** 全局关系视图：按词表顺序分组；词表外的名字归到“未登记”。 */
-    function globalRelationRows(relations) {
-      const known = new Set(GROUPS.map((group) => group.rel))
-      const rows = []
-      for (const group of GROUPS) {
-        const matched = relations.filter((relation) => relation.rel === group.rel)
-        if (matched.length > 0) rows.push({ rel: group.rel, label: group.label, edge: group.edge, rows: matched })
-      }
-      const unknown = relations.filter((relation) => !known.has(relation.rel))
-      if (unknown.length > 0) rows.push({ rel: 'unknown', label: '未登记', edge: '?', rows: unknown })
-      return rows
     }
 
     /**
@@ -951,7 +928,106 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 关系页的“图”取景。
+     * issue 页的聚焦态：把焦点周围的关系按“结构”分组读出来。
+     *
+     * 这块从关系页的“列表”取景搬来（见 docs/issues/kiln-issue-focus-page.md）：关系页只剩图，
+     * 关系名与方向这些“读得出来”的东西集中在这一页。两处有意和旧版不同：
+     *   · 弱关联默认展开——`~/kiln` 的数据说折叠时 55% 的焦点只剩焦点自己一行；
+     *   · 焦点行默认展开它的动作，让“没有邻居”的焦点也有内容。
+     */
+    function IssueFocusList(props) {
+      const view = props.view
+      const focus = props.focus
+      const children = view.children
+        .map((id) => props.byId.get(id))
+        .filter(Boolean)
+        .sort(byRecency)
+      const visibleChildren = props.expandedChildren || children.length <= 4 ? children : children.slice(0, 4)
+      const weak = (view.groups.get('relates-to') ?? [])
+        .map((entry) => props.byId.get(entry.id))
+        .filter(Boolean)
+        .sort(byRecency)
+      const strongGroups = GROUPS.filter((group) => group.rel !== 'part-of' && group.rel !== 'relates-to')
+
+      const rowProps = (issue, extra) => ({
+        issue,
+        expanded: props.expanded !== null && props.expanded.kind === 'issue' && props.expanded.id === issue.id,
+        onToggle: () => props.onToggle({ kind: 'issue', id: issue.id }),
+        onFocus: () => props.onFocus(issue.id),
+        ...extra,
+      })
+
+      return h(
+        'div',
+        { className: 'dkf-list', tabIndex: 0, onKeyDown: listKeyDown },
+        h(
+          IssueRow,
+          {
+            key: focus.id,
+            ...rowProps(focus, {
+              focus: true,
+              expanded: props.focusOpen,
+              onToggle: props.onToggleFocus,
+            }),
+          },
+        ),
+        view.parent.length > 0
+          ? h(
+              'div',
+              { className: 'dkf-crumb', onClick: () => props.onFocus(view.parent[0]), title: '切到母 issue' },
+              `↑ part-of: ${view.parent[0]}`,
+            )
+          : null,
+        children.length > 0
+          ? h(
+              'div',
+              { className: 'dkf-group' },
+              h(
+                'div',
+                { className: 'dkf-group-head' },
+                `子 issue · part-of ${children.length}`,
+                children.length > 4
+                  ? h(
+                      'button',
+                      { type: 'button', className: 'dkf-toggle', onClick: props.onToggleChildren },
+                      props.expandedChildren ? '收起' : `展开全部 ${children.length}`,
+                    )
+                  : null,
+              ),
+              visibleChildren.map((child) => h(IssueRow, { key: child.id, ...rowProps(child, { indent: true }) })),
+            )
+          : null,
+        strongGroups.map((group) => {
+          const rows = (view.groups.get(group.rel) ?? [])
+            .map((entry) => ({ entry, issue: props.byId.get(entry.id) }))
+            .filter((row) => row.issue !== undefined)
+            .sort((left, right) => byRecency(left.issue, right.issue))
+          if (rows.length === 0) return null
+          return h(
+            'div',
+            { className: 'dkf-group', key: group.rel },
+            h('div', { className: 'dkf-group-head' }, `${group.label} · ${group.edge} ${rows.length}`),
+            rows.map(({ entry, issue }) =>
+              h(IssueRow, {
+                key: `${group.rel}-${issue.id}`,
+                ...rowProps(issue, { edge: `${entry.arrow} ${group.edge}` }),
+              }),
+            ),
+          )
+        }),
+        weak.length > 0
+          ? h(
+              'div',
+              { className: 'dkf-group' },
+              h('div', { className: 'dkf-group-head' }, `弱关联 · relates-to ${weak.length}`),
+              weak.map((issue) => h(IssueRow, { key: `weak-${issue.id}`, ...rowProps(issue, { indent: true }) })),
+            )
+          : null,
+      )
+    }
+
+    /**
+     * 关系页：只有图。
      *
      * 文本在渲染期一次算好、挂到 `data-mermaid` 上（排查也方便）；真正画图放在 effect 里，
      * 因为 render 阶段不能碰 DOM。**文本与焦点无关**，所以切焦点只跑 paintFocus 改 class，
@@ -1167,184 +1243,44 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** 关系页：图上/列表两种取景，共用同一个焦点。 */
+    /** 关系页：只有图。全局 / 聚焦两种取景共用同一个焦点，页内不分“图 / 列表”了。 */
     function RelationPanel(props) {
-      const modes = h(Segmented, {
-        label: '关系取景',
-        options: RELATION_MODES,
-        active: props.mode,
-        onSelect: props.onMode,
-      })
-      if (props.mode === 'graph') {
-        return h(
-          'div',
-          { className: 'dkf-panel' },
-          h(
-            'div',
-            { className: 'dkf-toolbar' },
-            modes,
-            h(Segmented, {
-              label: '图的布局方向',
-              options: GRAPH_DIRECTIONS,
-              active: props.direction === 'TB' ? 'TB' : 'LR',
-              onSelect: props.onDirection,
-            }),
-            h(Segmented, {
-              label: '视图',
-              options: GRAPH_VIEWS,
-              active: props.graphView === 'focus' ? 'focus' : 'global',
-              onSelect: props.onView,
-            }),
-            props.graphView === 'focus'
-              ? h(Segmented, {
-                  label: '聚焦的半径',
-                  options: GRAPH_DEPTHS,
-                  active: props.depth === '2' ? '2' : '1',
-                  onSelect: props.onFocusDepth,
-                })
-              : null,
-          ),
-          h(GraphPanel, {
-            issues: props.issues,
-            relations: props.relations,
-            focusId: props.focusId,
-            direction: props.direction,
-            graphView: props.graphView,
-            depth: props.depth,
-            onFocus: props.onFocus,
-          }),
-        )
-      }
-      return h('div', { className: 'dkf-panel' }, modes, h(RelationList, props))
-    }
-
-    /** 关系页：无焦点看全局边表；有焦点看以焦点为中心的一跳子图。 */
-    function RelationList(props) {
-      if (props.focus === null) {
-        if (props.groups.length === 0) return h('p', { className: 'dkf-empty' }, '还没有声明任何关系。')
-        return h(
-          'div',
-          null,
-          props.groups.map((group) =>
-            h(
-              'div',
-              { className: 'dkf-group', key: group.rel },
-              h('div', { className: 'dkf-group-head' }, `${group.label} · ${group.edge} ${group.rows.length}`),
-              group.rows.map((relation) =>
-                h(
-                  'div',
-                  { className: 'dkf-grow', key: `${relation.rel}-${relation.a}-${relation.b}` },
-                  h(
-                    'button',
-                    {
-                      type: 'button',
-                      className: 'dkf-endpoint',
-                      title: `聚焦 ${relation.a}`,
-                      onClick: () => props.onFocus(relation.a),
-                    },
-                    `⌖ ${relation.a}`,
-                  ),
-                  h('span', { className: 'dkf-edge' }, ` ${relation.rel} `),
-                  h(
-                    'button',
-                    {
-                      type: 'button',
-                      className: 'dkf-endpoint',
-                      title: `聚焦 ${relation.b}`,
-                      onClick: () => props.onFocus(relation.b),
-                    },
-                    `⌖ ${relation.b}`,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        )
-      }
-
-      const view = props.view
-      const children = view.children
-        .map((id) => props.byId.get(id))
-        .filter(Boolean)
-        .sort(byRecency)
-      const visibleChildren = props.expandedChildren || children.length <= 4 ? children : children.slice(0, 4)
-      const weak = view.groups.get('relates-to') ?? []
-      const strongGroups = GROUPS.filter((group) => group.rel !== 'part-of' && group.rel !== 'relates-to')
-
-      const rowProps = (issue, extra) => ({
-        issue,
-        expanded: props.expanded !== null && props.expanded.kind === 'issue' && props.expanded.id === issue.id,
-        onToggle: () => props.onToggle({ kind: 'issue', id: issue.id }),
-        onFocus: () => props.onFocus(issue.id),
-        ...extra,
-      })
-
       return h(
         'div',
-        { className: 'dkf-list', tabIndex: 0, onKeyDown: listKeyDown },
-        h(IssueRow, { key: props.focus.id, ...rowProps(props.focus, { focus: true }) }),
-        view.parent.length > 0
-          ? h(
-              'div',
-              { className: 'dkf-crumb', onClick: () => props.onFocus(view.parent[0]), title: '切到母 issue' },
-              `↑ part-of: ${view.parent[0]}`,
-            )
-          : null,
-        children.length > 0
-          ? h(
-              'div',
-              { className: 'dkf-group' },
-              h(
-                'div',
-                { className: 'dkf-group-head' },
-                `子 issue · part-of ${children.length}`,
-                children.length > 4
-                  ? h(
-                      'button',
-                      { type: 'button', className: 'dkf-toggle', onClick: props.onToggleChildren },
-                      props.expandedChildren ? '收起' : `展开全部 ${children.length}`,
-                    )
-                  : null,
-              ),
-              visibleChildren.map((child) => h(IssueRow, { key: child.id, ...rowProps(child, { indent: true }) })),
-            )
-          : null,
-        strongGroups.map((group) => {
-          const rows = (view.groups.get(group.rel) ?? [])
-            .map((entry) => ({ entry, issue: props.byId.get(entry.id) }))
-            .filter((row) => row.issue !== undefined)
-            .sort((left, right) => byRecency(left.issue, right.issue))
-          if (rows.length === 0) return null
-          return h(
-            'div',
-            { className: 'dkf-group', key: group.rel },
-            h('div', { className: 'dkf-group-head' }, `${group.label} · ${group.edge} ${rows.length}`),
-            rows.map(({ entry, issue }) =>
-              h(IssueRow, {
-                key: `${group.rel}-${issue.id}`,
-                ...rowProps(issue, { edge: `${entry.arrow} ${group.edge}` }),
-              }),
-            ),
-          )
+        { className: 'dkf-panel' },
+        h(
+          'div',
+          { className: 'dkf-toolbar' },
+          h(Segmented, {
+            label: '图的布局方向',
+            options: GRAPH_DIRECTIONS,
+            active: props.direction === 'TB' ? 'TB' : 'LR',
+            onSelect: props.onDirection,
+          }),
+          h(Segmented, {
+            label: '视图',
+            options: GRAPH_VIEWS,
+            active: props.graphView === 'focus' ? 'focus' : 'global',
+            onSelect: props.onView,
+          }),
+          props.graphView === 'focus'
+            ? h(Segmented, {
+                label: '聚焦的半径',
+                options: GRAPH_DEPTHS,
+                active: props.depth === '2' ? '2' : '1',
+                onSelect: props.onFocusDepth,
+              })
+            : null,
+        ),
+        h(GraphPanel, {
+          issues: props.issues,
+          relations: props.relations,
+          focusId: props.focusId,
+          direction: props.direction,
+          graphView: props.graphView,
+          depth: props.depth,
+          onFocus: props.onFocus,
         }),
-        weak.length > 0
-          ? h(
-              'div',
-              { className: 'dkf-group' },
-              h(
-                'button',
-                { type: 'button', className: 'dkf-toggle', onClick: props.onToggleWeak },
-                props.expandedWeak ? '收起弱关联' : `+${weak.length} 弱关联 · relates-to`,
-              ),
-              props.expandedWeak
-                ? weak
-                    .map((entry) => props.byId.get(entry.id))
-                    .filter(Boolean)
-                    .sort(byRecency)
-                    .map((issue) => h(IssueRow, { key: `weak-${issue.id}`, ...rowProps(issue, { indent: true }) }))
-                : null,
-            )
-          : null,
       )
     }
 
@@ -1362,9 +1298,9 @@ window.__ModuleLoader__.load({
       const [tabId, setTabId] = React.useState(memory.tabId)
       const [focusId, setFocusId] = React.useState(memory.focusId)
       const [expanded, setExpanded] = React.useState(memory.expanded)
-      const [expandedWeak, setExpandedWeak] = React.useState(false)
       const [expandedChildren, setExpandedChildren] = React.useState(false)
-      const [relationMode, setRelationMode] = React.useState(memory.relationMode ?? 'graph')
+      /** 焦点行默认展开（issue 页聚焦态读的就是它）；与三页共享的 `expanded` 分开，免得串页。 */
+      const [focusOpen, setFocusOpen] = React.useState(true)
       const [graphDirection, setGraphDirection] = React.useState(memory.graphDirection === 'TB' ? 'TB' : 'LR')
       const [graphView, setGraphView] = React.useState(
         memory.graphView === 'focus' ? 'focus' : 'global',
@@ -1382,10 +1318,6 @@ window.__ModuleLoader__.load({
       const clearFocus = () => {
         setFocusId(null)
         writeViewState(cwd, { focusId: null })
-      }
-      const selectMode = (id) => {
-        setRelationMode(id)
-        writeViewState(cwd, { relationMode: id })
       }
       /** 方向会换掉 mermaid 文本，是唯一允许重排的显式操作（方向本身不跟焦点走）。 */
       const selectDirection = (id) => {
@@ -1452,10 +1384,10 @@ window.__ModuleLoader__.load({
         return () => controller.abort()
       }, [cwd, nonce])
 
-      // 切焦点时收起“展开全部/弱关联”这类附属展开：焦点换了，展开的是另一批邻居
+      // 切焦点时收起附属展开，并把焦点行重新展开：换焦点等于换一批邻居与一份动作
       React.useEffect(() => {
-        setExpandedWeak(false)
         setExpandedChildren(false)
+        setFocusOpen(true)
       }, [focusId])
 
       const payload = state.payload
@@ -1470,7 +1402,6 @@ window.__ModuleLoader__.load({
       const scoped = React.useMemo(() => scopedIssues(issues, view), [issues, view])
       const rows = React.useMemo(() => sortActions(flattenActions(scoped)), [scoped])
       const issueList = React.useMemo(() => sortIssues(scoped, focus === null ? null : focus.id), [scoped, focus])
-      const globalGroups = React.useMemo(() => globalRelationRows(relations), [relations])
 
       const refresh = () => setNonce((value) => value + 1)
       const totalOf = (issueId) => (Array.isArray(byId.get(issueId)?.actions) ? byId.get(issueId).actions.length : 0)
@@ -1553,38 +1484,41 @@ window.__ModuleLoader__.load({
             emptyText: focus === null ? '还没有任何 kiln 动作。' : '焦点与相关 issue 还没有动作。',
           })
         } else if (tabId === 'issue') {
-          content = h(IssuePanel, {
-            issues: issueList,
-            focusId: focus === null ? null : focus.id,
-            expanded,
-            onToggle: toggleExpand,
-            onFocus: focusIssue,
-            emptyText: focus === null ? '这个仓库还没有 issue。' : '焦点与相关 issue 为空。',
-          })
+          // 有焦点 = 读结构（母 / 子 / 强关系 / 弱关联）；没焦点 = 一行一个 issue
+          content =
+            focus === null
+              ? h(IssuePanel, {
+                  issues: issueList,
+                  focusId: null,
+                  expanded,
+                  onToggle: toggleExpand,
+                  onFocus: focusIssue,
+                  emptyText: '这个仓库还没有 issue。',
+                })
+              : h(IssueFocusList, {
+                  focus,
+                  view,
+                  byId,
+                  expanded,
+                  focusOpen,
+                  expandedChildren,
+                  onToggle: toggleExpand,
+                  onToggleFocus: () => setFocusOpen((value) => !value),
+                  onFocus: focusIssue,
+                  onToggleChildren: () => setExpandedChildren((value) => !value),
+                })
         } else {
           content = h(RelationPanel, {
-            focus,
-            view,
-            byId,
-            groups: globalGroups,
-            mode: relationMode,
             direction: graphDirection,
             graphView,
             depth: graphDepth,
             issues,
             relations,
             focusId: focus === null ? null : focus.id,
-            expanded,
-            expandedWeak,
-            expandedChildren,
-            onToggle: toggleExpand,
-            onFocus: focusIssue,
-            onMode: selectMode,
             onDirection: selectDirection,
             onView: selectView,
             onFocusDepth: selectDepth,
-            onToggleWeak: () => setExpandedWeak((value) => !value),
-            onToggleChildren: () => setExpandedChildren((value) => !value),
+            onFocus: focusIssue,
           })
         }
 

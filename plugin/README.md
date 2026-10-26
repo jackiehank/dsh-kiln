@@ -6,8 +6,9 @@ DSH × kiln 的插件初稿：在会话顶部标签排（对话 / 轨迹 / 上�
 - 数据来源：宿主路由 `GET /kiln/flow?cwd=<绝对路径>&focus=<issue>`，宿主进程里跑
   `kiln graph --json` 与 `kiln path <id> --json`。
 - 浏览器半不直接读文件，也不调 CLI；仓库根 = 当前会话的工作区目录。
-- 视图语义：焦点 issue 第一行；part-of 作缩进/面包屑；blocks → supersedes → caused-by
-  按强弱排；relates-to 折叠为“+N 弱关联”。焦点切换只在内存里，不落盘。
+- 视图语义：三页共享一个焦点 issue。issue 页无焦点时一行一个 issue；有焦点时读出结构——
+  part-of 作母/子分组与面包屑，`blocks` → `supersedes` → `caused-by` 按强弱排，弱关联（relates-to）
+  默认展开，行内带方向与关系名。关系页只有图（全局 / 聚焦）。焦点切换只在内存里，不落盘。
 
 ## 文件
 
