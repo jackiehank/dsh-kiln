@@ -121,3 +121,27 @@ div[data-conversation-content][data-conversation-region=chat]
 
 **选 A**：一条规则覆盖三页，行为可一句话解释——“kiln 里不显示调宽的竖线”；切回对话页自动恢复，
 因为我们只是靠 `:has(.dkf-root)` 决定它出不出现，没有改壳的任何状态。
+
+## 落地（apply）：一行带作用域的 CSS
+
+```css
+[data-conversation-content]:has(.dkf-root) [data-width-handle]{display:none}
+```
+
+位置在 `plugin/lib/client.js` 的 `CSS` 里（紧跟说明框样式），上面的注释写清了为什么用 `:has(.dkf-root)`
+限定、而不做全站隐藏。
+
+- 只在我们根节点挂载时命中；切回对话页 `.dkf-root` 卸载，规则自然失效，手柄回来；
+- 不碰壳、不加 JS、不落状态；
+- 壳以后改 DOM 时这条规则最多**静默失效**（退回现在的样子），不会报错、不会白屏。
+
+测试：31（宿主）+ 28（渲染）。新增两例：CSS 里必须有这条带作用域的规则、且不能出现不带作用域的
+`[data-width-handle]{display:none}`；渲染用例里断言根节点确实带 `.dkf-root`（规则的锚点真实存在）。
+
+**已知限制**：视觉验证仍需重启桌面应用；这条规则依赖三个钩子——壳的 `[data-conversation-content]`、
+`[data-width-handle]`，以及我们自己的 `.dkf-root`。壳若改名就静默失效，届时换掉属性名即可。
+
+## 待定（下一轮）
+
+1. 壳若改了这两个 `data-*` 属性，怎么尽早发现（现在只能靠肉眼发现竖线回来了）。
+2. 是否把“kiln 里不显示调宽手柄”写进插件说明，免得以后有人以为是 bug。

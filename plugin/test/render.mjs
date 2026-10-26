@@ -188,6 +188,11 @@ let tree = null
 
 // ---------------------------------------------------------------- 全局态
 
+check('视图根节点带 .dkf-root：藏调宽手柄的规则靠它当锚点', () => {
+  const plain = render({})
+  assert.equal(byClass(plain, 'dkf-root').length, 1)
+})
+
 check('绑定：三段 tablist，默认选中第一段', () => {
   tree = render({})
   const tabs = byClass(tree, 'dkf-tab')

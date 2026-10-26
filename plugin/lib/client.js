@@ -283,6 +283,14 @@ window.__ModuleLoader__.load({
 .dkf-tip-id{font:11px/16px var(--dsw-font-family-code,monospace);color:var(--dsw-alias-label-tertiary,#999);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dkf-tip-meta{margin-left:auto;flex:none;font:11px/16px var(--dsw-font-family,inherit);color:var(--dsw-alias-label-tertiary,#999)}
 .dkf-tip-title{font:12px/18px var(--dsw-font-family,inherit);color:var(--dsw-alias-label-primary,#111);white-space:normal;overflow-wrap:anywhere}
+/*
+ * DSH 的“拖动调宽”手柄（[data-width-handle]，由 dsh-client-ui-conversation 的
+ * ConversationWidthControls 渲染）是对话容器的兄弟节点、绝对定位，会横穿我们的整个视图：
+ * 2px 竖线像一条关系线，10px 命中区还会把横向拖动从“平移图”抢成“改对话宽度”。
+ * 它调的是对话正文宽度，对这三页没有意义，所以只在我们根节点挂载时藏掉——切回对话页
+ * .dkf-root 卸载，:has() 不再命中，手柄自动回来。
+ */
+[data-conversation-content]:has(.dkf-root) [data-width-handle]{display:none}
 .dkf-mermaid{margin:0;padding:8px 10px;max-height:320px;overflow:auto;border-radius:4px;background:var(--dsw-alias-markdown-code-block,#f6f6f6);color:var(--dsw-alias-label-secondary,#666);font:11px/16px var(--dsw-font-family-code,monospace);white-space:pre}
 `
 

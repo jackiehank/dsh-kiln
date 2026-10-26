@@ -10,6 +10,8 @@ DSH × kiln 的插件初稿：在会话顶部标签排（对话 / 轨迹 / 上�
   part-of 作母/子分组与面包屑，`blocks` → `supersedes` → `caused-by` 按强弱排，弱关联（relates-to）
   默认展开，行内带方向与关系名。关系页只有图（全局 / 聚焦），hover 节点弹出该 issue 的 ask 标题。
   焦点切换只在内存里，不落盘。
+- 与壳的关系：kiln 视图挂载期间隐藏 DSH 的“拖动调宽”手柄
+  （`[data-conversation-content]:has(.dkf-root) [data-width-handle]`），切回对话页自动恢复。
 
 ## 文件
 

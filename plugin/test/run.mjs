@@ -553,6 +553,20 @@ await check('说明框定位：靠边翻转，拿不到窗口尺寸时不翻', a
   assert.equal(tipPlacement(1100, 780, 0, 0).transform, 'translate(0, 0)')
 })
 
+await check('调宽手柄：只在 .dkf-root 挂载时藏掉（切回对话页自动恢复）', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const mod = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  })
+  const css = mod.__internals.css
+  assert.ok(
+    css.includes('[data-conversation-content]:has(.dkf-root) [data-width-handle]{display:none}'),
+    '规则必须用 :has(.dkf-root) 限定，切回对话页才能自动恢复',
+  )
+  assert.ok(!/\n\[data-width-handle\]\{display:none\}/.test(css), '不能写不带作用域的规则')
+})
+
 // ---------------------------------------------------------------- 汇总
 
 console.log('')
