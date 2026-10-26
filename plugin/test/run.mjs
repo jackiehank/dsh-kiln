@@ -652,6 +652,16 @@ await check('hover：图里指到淡化的节点，把它拉回正常亮度', as
   assert.ok(css.includes('.dkf-graph .pele-node{cursor:pointer}'), '可点的节点要有可点的光标')
 })
 
+await check('提示框：只有一套 .dkf-tip 样式，多行提示靠 pre-line 换行', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const css = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals.css
+  assert.equal(css.split('.dkf-tip{').length - 1, 1, '提示框样式只能定义一处')
+  assert.match(css, /\.dkf-tip-title\{[^}]*white-space:pre-line/, '多行提示（cwd + 快照）要能换行')
+})
+
 // ---------------------------------------------------------------- 汇总
 console.log('')
 if (failures.length === 0) {

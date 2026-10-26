@@ -75,3 +75,31 @@
 图上的提示是读到 issue 内容的**唯一**途径（ask 摘要），慢一拍就打断阅读；
 列表里的提示只是"这行被截断了，给你看全"，扫过时不该闪。260ms 取自"原生约 1s 太长、即时又太吵"。
 
+## 落地
+
+1. **一个组件**：`Tip`（`.dkf-tip` + `tipPlacement`）。图的节点提示改为 `h(Tip, { head, title })`，
+   文字提示只有 `title`——两者的外观、圆角、阴影、贴边翻转完全同一份代码。
+2. **事件委托**：根节点上 `pointerover` → `closest('[data-hint]')`；`pointerleave` / `pointerdown` /
+   容器 `scroll` 都调 `clearHint()`；260ms 定时器在卸载时清掉。组件里只写 `data-hint="…"`。
+3. **12 个 `title` 全部下线**，改成 `data-hint`（文案一字不改，多行的仍是多行）。
+   顺带补上三处"会被截断却从来没有提示"的文本：issue id（`max-width:220px`）、issue 标题、
+   时间线行里的 issue id（`max-width:22ch`）。
+4. **CSS**：`.dkf-tip` 仍然只有一处定义；`.dkf-tip-title` 从 `white-space:normal` 改成 `pre-line`，
+   这样 `${cwd}\n快照：…` 这种两行提示能正常断行（同时仍然自动折行，因为 `pre-line` 保留换行且允许 wrap）。
+
+### 验证
+
+- `npm test --prefix plugin` → 38 个宿主用例 + 33 个渲染用例全过。新增三条：
+  - 渲染树里 `title` 属性数量为 0，且时间线行/刷新按钮都带 `data-hint`；
+  - 被截断的 id 与标题都有 `data-hint`；
+  - CSS 里 `.dkf-tip{` 只出现一次、`.dkf-tip-title` 用 `pre-line`。
+- 仍然没法实拍（沙箱禁 Chromium 多进程）。重启后确认：悬停行/按钮/仓库名弹出的是**同一种**深色圆角框
+  （不再有系统白框），多行提示（仓库路径 + 快照时间）分两行显示，滚动时提示会消失。
+
+### 已知边界
+
+- 提示不跟随指针（进入时定位一次）；图上的仍跟随指针——这是内容形态的差别，样式是同一套。
+- 触屏没有 hover，这些提示在触屏上不可达（与原生 `title` 一致，没有变差）。
+- 提示是纯展示：不能点、不能选中、不抢指针事件（`pointer-events:none`）。
+
+

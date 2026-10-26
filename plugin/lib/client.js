@@ -346,7 +346,7 @@ window.__ModuleLoader__.load({
 .dkf-tip-head{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
 .dkf-tip-id{font-family:var(--dkf-mono);color:var(--dkf-fg3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-tip-meta{margin-left:auto;flex:none;color:var(--dkf-fg3);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
-.dkf-tip-title{color:var(--dkf-fg);white-space:normal;overflow-wrap:anywhere;font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body)}
+.dkf-tip-title{color:var(--dkf-fg);white-space:pre-line;overflow-wrap:anywhere;font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body)}
 .dkf-mermaid{margin:0;padding:8px 10px;max-height:320px;overflow:auto;border-radius:var(--dkf-r);background:var(--dkf-bg2);color:var(--dkf-fg2);font-family:var(--dkf-mono);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta);white-space:pre}
 /*
  * DSH 的“拖动调宽”手柄（[data-width-handle]，由 dsh-client-ui-conversation 的
@@ -813,14 +813,14 @@ window.__ModuleLoader__.load({
       const extra = actions.length - visible.length
       return h(
         'span',
-        { className: 'dkf-strip', title: actions.map((action) => `${action.ordinal}. ${action.action}`).join('\n') },
+        { className: 'dkf-strip', 'data-hint': actions.map((action) => `${action.ordinal}. ${action.action}`).join('\n') },
         extra > 0 ? h('span', { className: 'dkf-ago' }, `+${extra}`) : null,
         visible.map((action, index) =>
           h('span', {
             key: `${action.ordinal}-${index}`,
             className: cls('dkf-block', index === visible.length - 1 && 'dkf-block-current'),
             style: { background: colorOf(action.action) },
-            title: `${action.ordinal}. ${action.action} · ${action.date} · ${action.title ?? ''}`,
+            'data-hint': `${action.ordinal}. ${action.action} · ${action.date} · ${action.title ?? ''}`,
           }),
         ),
       )
@@ -842,7 +842,7 @@ window.__ModuleLoader__.load({
               { className: 'dkf-subrow', key: `${action.ordinal}-${action.short || ''}`, style: { '--dkf-row-color': colorOf(action.action) } },
               h('span', { className: 'dkf-abar' }),
               h('span', { className: 'dkf-achip' }, action.action || '?'),
-              h('span', { className: 'dkf-atitle', title: action.title }, action.title || '（无标题）'),
+              h('span', { className: 'dkf-atitle', 'data-hint': action.title }, action.title || '（无标题）'),
               h('span', { className: 'dkf-ashort' }, action.short || ''),
               h('span', { className: 'dkf-ago' }, ago(action.date)),
             ),
@@ -894,7 +894,7 @@ window.__ModuleLoader__.load({
           h('span', { className: 'dkf-caret', 'aria-hidden': 'true' }, expanded ? '▾' : '▸'),
           h(
             'span',
-            { className: 'dkf-id' },
+            { className: 'dkf-id', 'data-hint': issue.id },
             props.edge !== undefined ? h('span', { className: 'dkf-edge' }, ` ${props.edge} `) : null,
             issue.id,
           ),
@@ -905,7 +905,7 @@ window.__ModuleLoader__.load({
             h('span', { className: 'dkf-chip dkf-chip-action' }, issue.action || '?'),
             issue.done ? h('span', { className: 'dkf-chip dkf-chip-done' }, 'done') : null,
           ),
-          h('span', { className: 'dkf-title' }, last?.title || issue.title || '（无标题）'),
+          h('span', { className: 'dkf-title', 'data-hint': last?.title || issue.title || '（无标题）' }, last?.title || issue.title || '（无标题）'),
           h('span', { className: 'dkf-ago' }, ago(last?.date)),
           h(
             'button',
@@ -913,7 +913,7 @@ window.__ModuleLoader__.load({
               type: 'button',
               className: 'dkf-focusbtn',
               tabIndex: -1,
-              title: `聚焦 ${issue.id}（快捷键 f）`,
+              'data-hint': `聚焦 ${issue.id}（快捷键 f）`,
               onClick: (event) => {
                 event.stopPropagation()
                 props.onFocus()
@@ -941,12 +941,12 @@ window.__ModuleLoader__.load({
             style: { '--dkf-row-color': colorOf(row.action) },
             onClick: props.onToggle,
             onKeyDown: (event) => rowKeyDown(event, props),
-            title: '点开看这条提交的详情',
+            'data-hint': '点开看这条提交的详情',
           },
           h('span', { className: 'dkf-abar' }),
-          h('span', { className: 'dkf-aissue' }, row.issueId),
+          h('span', { className: 'dkf-aissue', 'data-hint': row.issueId }, row.issueId),
           h('span', { className: 'dkf-achip' }, row.action || '?'),
-          h('span', { className: 'dkf-atitle', title: row.title }, row.title || '（无标题）'),
+          h('span', { className: 'dkf-atitle', 'data-hint': row.title }, row.title || '（无标题）'),
           h('span', { className: 'dkf-ashort' }, row.short || ''),
           h('span', { className: 'dkf-ago' }, ago(row.date)),
           h(
@@ -955,7 +955,7 @@ window.__ModuleLoader__.load({
               type: 'button',
               className: 'dkf-focusbtn',
               tabIndex: -1,
-              title: `聚焦 ${row.issueId}（快捷键 f）`,
+              'data-hint': `聚焦 ${row.issueId}（快捷键 f）`,
               onClick: (event) => {
                 event.stopPropagation()
                 props.onFocus()
@@ -1099,7 +1099,7 @@ window.__ModuleLoader__.load({
         view.parent.length > 0
           ? h(
               'div',
-              { className: 'dkf-crumb', onClick: () => props.onFocus(view.parent[0]), title: '切到母 issue' },
+              { className: 'dkf-crumb', onClick: () => props.onFocus(view.parent[0]), 'data-hint': '切到母 issue' },
               `↑ part-of: ${view.parent[0]}`,
             )
           : null,
@@ -1148,6 +1148,24 @@ window.__ModuleLoader__.load({
               weak.map((issue) => h(IssueRow, { key: `weak-${issue.id}`, ...rowProps(issue, { indent: true }) })),
             )
           : null,
+      )
+    }
+
+    /**
+     * 唯一的提示框：图上的节点提示与页面里的文字提示共用一个组件、一套样式、一个定位函数。
+     * 图那边多一个 head（issue id + ask/最后动作），文字提示只有正文。
+     */
+    function Tip(props) {
+      const head = props.head === undefined || props.head === null ? null : h('div', { className: 'dkf-tip-head' }, props.head)
+      return h(
+        'div',
+        {
+          className: 'dkf-tip',
+          role: 'tooltip',
+          style: tipPlacement(props.x, props.y, props.w, props.h),
+        },
+        head,
+        h('div', { className: 'dkf-tip-title' }, props.title),
       )
     }
 
@@ -1309,25 +1327,25 @@ window.__ModuleLoader__.load({
       const tip =
         summary === null || hover === null || hover === undefined
           ? null
-          : h(
-              'div',
-              { className: 'dkf-tip', role: 'tooltip', style: tipPlacement(hover.x, hover.y, hover.w, hover.h) },
-              h(
-                'div',
-                { className: 'dkf-tip-head' },
-                h('span', { className: 'dkf-tip-id' }, hoverId),
+          : h(Tip, {
+              x: hover.x,
+              y: hover.y,
+              w: hover.w,
+              h: hover.h,
+              head: [
+                h('span', { key: 'id', className: 'dkf-tip-id' }, hoverId),
                 h(
                   'span',
-                  { className: 'dkf-tip-meta' },
+                  { key: 'meta', className: 'dkf-tip-meta' },
                   summary.kind === 'ask'
                     ? `ask · ${summary.date.slice(0, 10)}`
                     : summary.kind === 'last'
                       ? `最后一条动作 · ${summary.date.slice(0, 10)}`
                       : '快照里没有这条 issue',
                 ),
-              ),
-              h('div', { className: 'dkf-tip-title' }, summary.title || '（还没有标题）'),
-            )
+              ],
+              title: summary.title || '（还没有标题）',
+            })
 
       const notice =
         phase === 'ready'
@@ -1412,7 +1430,7 @@ window.__ModuleLoader__.load({
               key: entry.rel,
               role: 'listitem',
               className: `dkf-legend-row${active ? '' : ' dkf-legend-off'}`,
-              title: active ? entry.rel : `${entry.rel}（当前视图没画这类关系）`,
+              'data-hint': active ? entry.rel : `${entry.rel}（当前视图没画这类关系）`,
             },
             h('span', { className: 'dkf-legend-end' }, 'A'),
             h(
@@ -1485,6 +1503,53 @@ window.__ModuleLoader__.load({
         memory.graphView === 'focus' ? 'focus' : 'global',
       )
       const [graphDepth, setGraphDepth] = React.useState(memory.graphDepth === '2' ? '2' : '1')
+
+      /**
+       * 提示框：元素上只写 `data-hint`，机制收在这里（根节点监听 pointerover 做委托）。
+       * 12 个提示点因此不用把 hint 状态穿过组件链；图的节点提示另有一套状态（内容更富、跟随指针），
+       * 但样式与定位共用同一个 Tip / tipPlacement。
+       * 延迟取 260ms：原生 title 约 1s 太慢，即时又会在扫过列表时闪。
+       */
+      const HINT_DELAY = 260
+      const [hint, setHint] = React.useState(null)
+      const hintTimer = React.useRef(null)
+      const hintNode = React.useRef(null)
+
+      const clearHint = () => {
+        if (hintTimer.current !== null) {
+          clearTimeout(hintTimer.current)
+          hintTimer.current = null
+        }
+        hintNode.current = null
+        setHint(null)
+      }
+
+      const onHintOver = (event) => {
+        const target = event.target
+        const node =
+          target === null || target === undefined || typeof target.closest !== 'function'
+            ? null
+            : target.closest('[data-hint]')
+        if (node === hintNode.current) return
+        clearHint()
+        hintNode.current = node
+        if (node === null || typeof node.getAttribute !== 'function') return
+        const text = node.getAttribute('data-hint')
+        if (text === null || text === '') return
+        const x = event.clientX
+        const y = event.clientY
+        hintTimer.current = setTimeout(() => {
+          hintTimer.current = null
+          setHint({ x, y, text })
+        }, HINT_DELAY)
+      }
+
+      React.useEffect(
+        () => () => {
+          if (hintTimer.current !== null) clearTimeout(hintTimer.current)
+        },
+        [],
+      )
 
       const selectTab = (id) => {
         setTabId(id)
@@ -1592,7 +1657,7 @@ window.__ModuleLoader__.load({
           'span',
           {
             className: 'dkf-repo',
-            title:
+            'data-hint':
               payload?.ok === true
                 ? `${cwd}\n快照：${payload.cache?.action ?? 'unknown'} · ${payload.generatedAt ?? ''}`
                 : cwd,
@@ -1607,12 +1672,12 @@ window.__ModuleLoader__.load({
                 type: 'button',
                 className: 'dkf-focuschip',
                 onClick: clearFocus,
-                title: '退出聚焦，回到全局（Esc）',
+                'data-hint': '退出聚焦，回到全局（Esc）',
               },
               `焦点：${focus.id} ×`,
             )
           : null,
-        h('button', { type: 'button', className: 'dkf-refresh', onClick: refresh, title: '重新读取 kiln 快照' }, '刷新'),
+        h('button', { type: 'button', className: 'dkf-refresh', onClick: refresh, 'data-hint': '重新读取 kiln 快照' }, '刷新'),
       )
 
       /**
@@ -1775,10 +1840,25 @@ window.__ModuleLoader__.load({
         )
       }
 
+      const hintTip =
+        hint === null || hint === undefined
+          ? null
+          : h(Tip, {
+              x: hint.x,
+              y: hint.y,
+              w: typeof window === 'undefined' ? 0 : window.innerWidth,
+              h: typeof window === 'undefined' ? 0 : window.innerHeight,
+              title: hint.text,
+            })
+
       return h(
         'div',
         {
           className: 'dkf-root',
+          // 提示走委托：进入/离开/按下都从这里收口，元素上只留 data-hint
+          onPointerOver: onHintOver,
+          onPointerLeave: clearHint,
+          onPointerDown: clearHint,
           onKeyDown: (event) => {
             if (event.key === 'Escape' && focus !== null) {
               event.preventDefault()
@@ -1788,7 +1868,9 @@ window.__ModuleLoader__.load({
         },
         header,
         bar,
-        h('div', { className: 'dkf-scroll' }, body),
+        // 滚动时内容从提示框底下走，必须收起来
+        h('div', { className: 'dkf-scroll', onScroll: clearHint }, body),
+        hintTip,
       )
     }
 

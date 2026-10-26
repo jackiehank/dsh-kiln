@@ -229,6 +229,29 @@ check('时间线：列表带竖脊，行的动作色走行级 CSS 变量', () =>
   assert.equal(byClass(row, 'dkf-achip')[0].props.style, undefined, '动作名不再内联 color')
 })
 
+check('提示框：渲染树里没有原生 title，提示一律走 data-hint', () => {
+  const view = render({ tabId: 'timeline' })
+  const withTitle = []
+  const hints = []
+  walk(view, (node) => {
+    const props = node.props
+    if (props === undefined || props === null || typeof props !== 'object') return
+    if ('title' in props) withTitle.push(props.title)
+    if (typeof props['data-hint'] === 'string') hints.push(props['data-hint'])
+  })
+  assert.deepEqual(withTitle, [], '原生 title 会弹出第二个提示框（系统样式）')
+  assert.ok(hints.includes('点开看这条提交的详情'), '时间线行要带提示')
+  assert.ok(hints.includes('重新读取 kiln 快照'), '刷新按钮要带提示')
+})
+
+check('提示框：被截断的 id / 标题也有提示', () => {
+  const view = render({ tabId: 'issue' })
+  const id = byClass(view, 'dkf-id')[0]
+  const title = byClass(view, 'dkf-title')[0]
+  assert.ok(String(id.props['data-hint'] ?? '').length > 0, 'id 有 max-width，截断后要能看全')
+  assert.ok(String(title.props['data-hint'] ?? '').length > 0, '标题有省略号，同样要有提示')
+})
+
 check('timeline 全局：4 条 action 一行一条，按时间倒序', () => {
   const rows = byClass(tree, 'dkf-arow')
   assert.equal(rows.length, 4)
@@ -357,8 +380,9 @@ check('图例：五句话 + 带箭头的样条，没画的那类压到 15%', () 
 
   const off = byClass(tree, 'dkf-legend-off').map((row) => textOf(byClass(row, 'dkf-legend-text')[0]))
   assert.deepEqual(off, ['A 是 B 的一部分', 'A 阻塞 B', 'A 取代 B', 'A 与 B 相关'], '只有 caused-by 在当前视图里')
-  const titles = rows.map((row) => String(row.props.title ?? ''))
-  assert.ok(titles.some((title) => title.includes('当前视图没画')), '未画的类别还要有 title 提示')
+  const titles = rows.map((row) => String(row.props['data-hint'] ?? ''))
+  assert.ok(titles.some((title) => title.includes('当前视图没画')), '未画的类别还要有提示（走 data-hint）')
+  assert.deepEqual(rows.map((row) => row.props.title), rows.map(() => undefined), '不再用原生 title')
 
   const swatches = byClass(tree, 'dkf-legend-svg').map((svg) => svg.children.filter(Boolean))
   assert.equal(swatches.length, 5)

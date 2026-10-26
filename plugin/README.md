@@ -17,6 +17,9 @@ DSH × kiln 的插件初稿：在会话顶部标签排（对话 / 轨迹 / 上�
 - 状态只有一套：hover 是"在当前底色上叠一层 `--dkf-hover`"（用 `background-image` 叠，
   所以焦点行的底色不会被顶掉）；图里没有底色可叠，就把淡化的节点临时拉回正常亮度。
   选中是 bg-layer-2 + 600 字重，键盘焦点是 2px accent 内环。
+- 提示框也只有一套（`docs/issues/kiln-hint-style.md`）：`.dkf-tip`。元素上写 `data-hint="…"`，
+  根节点用事件委托统一弹（260ms 延迟、滚动/拖动/离开即收）；不再用原生 `title`
+  （系统样式 + 会和自绘提示同时出现）。图节点的提示内容更富（ask 摘要），但共用同一个 `Tip`。
 - 关系图跟着主题走：Pele 不认主题（默认白底深字），所以 `.dkf-graph` 把它的 8 个 `--pele-*` 钩子
   接到同一套 `--dkf-*` 角色上，淡化色也改成向画布混（`docs/issues/kiln-graph-dark-theme.md`）。
   图里的字体同样接进这套角色：字族/等宽走 `--pele-font(-mono)`，字号作为 `fontSize` 传给
