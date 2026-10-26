@@ -3,7 +3,8 @@
 DSH（DeepSeek Harness）与 [kiln](https://github.com/jackiehank/kiln) 的接入仓。
 
 **形态：DSH profile bundle（插件）。** 一个只读的 kiln 镜头：把 Git 里 `issue:` / `action:` trailer
-投影成会话内的 Flow 视图——焦点 issue 的关系子图与动作条。不写 trailer、不造提交、不装 git 钩子。
+投影成会话内的三页视图——时间线、issue、关系（全局 / 聚焦），三页共享一个焦点 issue。
+不写 trailer、不造提交、不装 git 钩子。
 代码在 `plugin/`，形态结论见[第一份 issue 文档](docs/issues/kiln-dsh-integration.md)。
 
 ## 这个仓库怎么管 issue
