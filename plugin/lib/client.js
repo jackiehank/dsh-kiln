@@ -60,14 +60,26 @@ window.__ModuleLoader__.load({
       { id: 'graph', label: '图' },
       { id: 'list', label: '列表' },
     ]
-    /** 边的线型：ordering 槽实线、lineage 槽虚线、对称关系一条无箭头的线。 */
-    const EDGE_STYLE = {
-      'part-of': 'solid',
-      blocks: 'solid',
-      supersedes: 'dashed',
-      'caused-by': 'dashed',
-      'relates-to': 'plain',
+    /**
+     * 边的线型阶梯：结构性强 → 弱，墨越来越轻。
+     * 用 \`linkStyle\` 写死 dasharray / 线宽，而不是靠端点标识——多条线汇到一个节点时，
+     * 端点标识会叠在一起（见 docs/issues/kiln-graph-label-threshold.md）。
+     */
+    const EDGE_STROKE = {
+      'part-of': 'stroke-width:2.6px',
+      blocks: 'stroke-width:1.6px',
+      'caused-by': 'stroke-width:1.6px,stroke-dasharray:10 5',
+      supersedes: 'stroke-width:1.6px,stroke-dasharray:9 3 2 3',
+      'relates-to': 'stroke-width:1.3px,stroke-dasharray:2 5',
     }
+    /** 图例里每类关系的解释（与 GROUPS 的 label 同源，这里只补一句“它是什么”）。 */
+    const EDGE_LEGEND = [
+      { rel: 'part-of', note: '属于谁 · 实线粗' },
+      { rel: 'blocks', note: '阻塞谁 · 实线' },
+      { rel: 'caused-by', note: '谁引发我 · 长虚' },
+      { rel: 'supersedes', note: '取代谁 · 点划' },
+      { rel: 'relates-to', note: '无向关联 · 点线' },
+    ]
     /** 布局方向：侧栏是竖的，`TB` 常常比 `LR` 更省横向空间。 */
     const GRAPH_DIRECTIONS = [
       { id: 'LR', label: '横向' },
@@ -265,6 +277,12 @@ window.__ModuleLoader__.load({
 .dkf-gedge-label-dim text{fill:var(--dkf-dim-label-color);transition:fill .12s ease}
 .dkf-graph{--dkf-focus-glow:2px;--dkf-focus-color:var(--dsw-alias-state-business-primary,#4176e6)}
 .dkf-gnode-focus{filter:drop-shadow(0 0 var(--dkf-focus-glow) var(--dkf-focus-color)) drop-shadow(0 0 calc(var(--dkf-focus-glow) * 2) var(--dkf-focus-color))}
+.dkf-legend{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;padding:2px 0 0}
+.dkf-legend-row{display:inline-flex;align-items:center;gap:6px;color:var(--dsw-alias-label-secondary,#666);font:11px/16px var(--dsw-font-family,inherit)}
+.dkf-legend-off{opacity:.4}
+.dkf-legend-svg{flex:none;color:var(--dsw-alias-label-primary,#111)}
+.dkf-legend-name{font:11px/16px var(--dsw-font-family-code,monospace);color:var(--dsw-alias-label-primary,#111)}
+.dkf-legend-note{color:var(--dsw-alias-label-tertiary,#999)}
 .dkf-mermaid{margin:0;padding:8px 10px;max-height:320px;overflow:auto;border-radius:4px;background:var(--dsw-alias-markdown-code-block,#f6f6f6);color:var(--dsw-alias-label-secondary,#666);font:11px/16px var(--dsw-font-family-code,monospace);white-space:pre}
 `
 
@@ -492,6 +510,7 @@ window.__ModuleLoader__.load({
       }
 
       let dropped = 0
+      let edgeIndex = 0
       for (const relation of kept) {
         const from = nodeOf.get(relation.a)
         const to = nodeOf.get(relation.b)
@@ -501,8 +520,11 @@ window.__ModuleLoader__.load({
         }
         const label = `|${relation.rel}|`
         if (relation.directed === false) lines.push(`  ${from} ---${label} ${to}`)
-        else if (EDGE_STYLE[relation.rel] === 'dashed') lines.push(`  ${from} -.->${label} ${to}`)
         else lines.push(`  ${from} -->${label} ${to}`)
+        // 线型统一走 linkStyle：序号就是上面的声明顺序，稳定可控
+        const stroke = EDGE_STROKE[relation.rel]
+        if (stroke !== undefined) lines.push(`  linkStyle ${edgeIndex} ${stroke}`)
+        edgeIndex += 1
       }
 
       for (const [action, nodes] of byAction) lines.push(`  class ${nodes.join(',')} act_${action}`)
@@ -1017,6 +1039,12 @@ window.__ModuleLoader__.load({
                   : '正在准备图渲染器…',
             )
 
+      const drawnRelations = new Set()
+      for (const line of built.source.split('\n')) {
+        const matched = /\|([a-z-]+)\|/.exec(line)
+        if (matched !== null) drawnRelations.add(matched[1])
+      }
+
       return h(
         'div',
         { className: 'dkf-graphwrap' },
@@ -1029,6 +1057,7 @@ window.__ModuleLoader__.load({
           onClick,
         }),
         phase === 'ready' ? null : h('pre', { className: 'dkf-mermaid' }, built.source),
+        h(EdgeLegend, { drawn: drawnRelations }),
         built.ego && props.focusId !== null
           ? h(
               'p',
@@ -1054,6 +1083,52 @@ window.__ModuleLoader__.load({
             ? '点节点聚焦；图出来后可用滚轮/拖动缩放平移。'
             : '点别的节点换焦点；头部「×」或 Esc 回到全局。',
         ),
+      )
+    }
+
+    /** 把 EDGE_STROKE 里的宽度与虚线拆出来，供图例画样条。 */
+    function strokeOf(rel) {
+      const decl = EDGE_STROKE[rel] ?? ''
+      const width = Number(/stroke-width:([\d.]+)px/.exec(decl)?.[1] ?? 1.5)
+      const dash = /stroke-dasharray:([^,;]+)/.exec(decl)?.[1]
+      return { width, dash }
+    }
+
+    /** 图例：用与图上完全相同的 dasharray 画样条，让人能对上号。 */
+    function EdgeLegend(props) {
+      const drawn = props.drawn ?? new Set()
+      return h(
+        'div',
+        { className: 'dkf-legend', role: 'list', 'aria-label': '关系线型图例' },
+        EDGE_LEGEND.map((entry) => {
+          const { width, dash } = strokeOf(entry.rel)
+          const active = drawn.has(entry.rel)
+          return h(
+            'div',
+            {
+              key: entry.rel,
+              role: 'listitem',
+              className: `dkf-legend-row${active ? '' : ' dkf-legend-off'}`,
+              title: active ? entry.rel : `${entry.rel}（当前视图没画）`,
+            },
+            h(
+              'svg',
+              { width: 46, height: 10, className: 'dkf-legend-svg', 'aria-hidden': 'true' },
+              h('line', {
+                x1: 0,
+                y1: 5,
+                x2: 46,
+                y2: 5,
+                stroke: 'currentColor',
+                strokeWidth: width,
+                strokeDasharray: dash === undefined ? undefined : dash,
+                strokeLinecap: 'round',
+              }),
+            ),
+            h('span', { className: 'dkf-legend-name' }, entry.rel),
+            h('span', { className: 'dkf-legend-note' }, entry.note),
+          )
+        }),
       )
     }
 

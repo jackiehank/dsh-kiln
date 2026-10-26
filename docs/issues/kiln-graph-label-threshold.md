@@ -271,3 +271,30 @@ linkStyle 1 stroke:#00aa00,stroke-width:3px
 
 > 配图约定：图放 `docs/issues/assets/`，文档里用 `assets/<file>.png` 引用——相对路径最短，
 > 也不会因为移动文档目录而失效。
+
+## 落地（apply）：线型阶梯 + 图例
+
+按上一节的阶梯实装，**没有引入端点标识**：
+
+| 关系 | linkStyle | 箭头 |
+| --- | --- | --- |
+| `part-of` | `stroke-width:2.6px` | 有 |
+| `blocks` | `stroke-width:1.6px` | 有 |
+| `caused-by` | `stroke-width:1.6px,stroke-dasharray:10 5` | 有 |
+| `supersedes` | `stroke-width:1.6px,stroke-dasharray:9 3 2 3` | 有 |
+| `relates-to` | `stroke-width:1.3px,stroke-dasharray:2 5` | 无 |
+
+做法：生成 mermaid 时，**每条边后面紧跟一条 `linkStyle <序号>`**（序号 = 边的声明顺序，稳定）。
+文本里所有有向边统一写 `-->`，线型完全由 `linkStyle` 决定——这样虚线与实线不必依赖 mermaid 的
+`-.->` 语法，也能精确控制 dasharray 与线宽。
+
+**图例**：图下方一行五条样条，用与图上**同一份** `EDGE_STROKE` 生成（同一个解析函数，
+不存在“图例和实际画的不一样”）；当前视图没画出来的那几类自动淡出（例如全局视图里 `relates-to`
+是淡的，因为无向关系只在「聚焦」里出现）。
+
+验证：
+
+- `plugin/test/render.mjs` **25 例**：新增图例行数 / 名称顺序 / 未画类淡出 / 样条的
+  `strokeWidth` 与 `strokeDasharray` 逐条比对；
+- 真数据：`~/kiln` 26 节点 / 20 条边全部带上样式，画布仍是 **2578×468**——
+  线型只改外观，不影响布局。

@@ -288,9 +288,26 @@ check('relation 页默认（全局、无焦点）：只画有向关系', () => {
   assert.match(source, /^flowchart LR/)
   const nodes = source.split('\n').filter((line) => /^ {2}n_\w+\["/.test(line))
   assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b'], 'c 只挂在无向关联上，没焦点时不画')
-  assert.ok(source.includes('n_b -.->|caused-by| n_a'), source)
+  assert.ok(source.includes('n_b -->|caused-by| n_a'), source)
+  assert.ok(source.includes('linkStyle 0 stroke-width:1.6px,stroke-dasharray:10 5'), 'caused-by 应是长虚线')
   assert.ok(!source.includes('---'), '无焦点时不含无向边')
   assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /只画有向关系：另 1 条无向关联/)
+})
+
+check('图例：五类关系各一条样条，没画的那类淡出', () => {
+  const tree = render({ tabId: 'relation' })
+  const rows = byClass(tree, 'dkf-legend-row')
+  assert.equal(rows.length, 5)
+  const names = byClass(tree, 'dkf-legend-name').map(textOf)
+  assert.deepEqual(names, ['part-of', 'blocks', 'caused-by', 'supersedes', 'relates-to'])
+  const off = byClass(tree, 'dkf-legend-off').map((row) => textOf(byClass(row, 'dkf-legend-name')[0]))
+  assert.deepEqual(off.sort(), ['blocks', 'part-of', 'relates-to', 'supersedes'], '只有 caused-by 在当前视图里')
+  // part-of 是粗实线、caused-by 是长虚：图例样条必须带同样的 dasharray
+  const lines = byClass(tree, 'dkf-legend-svg').map((svg) => svg.children[0].props)
+  assert.equal(lines[0].strokeWidth, 2.6)
+  assert.equal(lines[2].strokeDasharray, '10 5')
+  assert.equal(lines[4].strokeDasharray, '2 5')
+  assert.equal(lines[4].strokeWidth, 1.3)
 })
 
 check('全局 + 有焦点：布局不变，只把焦点挂在 data-focus 上', () => {
