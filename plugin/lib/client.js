@@ -938,6 +938,7 @@ window.__ModuleLoader__.load({
         [props.focusId, props.relations, view],
       )
       const hostRef = React.useRef(null)
+      const paintState = React.useRef({ tiers: null, built: null })
       const [phase, setPhase] = React.useState('idle')
       const [edgeDimLost, setEdgeDimLost] = React.useState(false)
 
@@ -954,8 +955,14 @@ window.__ModuleLoader__.load({
             return
           }
           try {
-            handle = pele.mount(host, built.source, { zoom: 'auto' })
+            handle = pele.mount(host, built.source, {
+              zoom: 'auto',
+              // Pele 会在容器宽度变化时**自己重画**，重画后 SVG 是新的、我们加的 class 全没了。
+              // 所以每次渲染完都重涂一遍——这是“切回全局后焦点样式消失”的根因。
+              onRender: () => repaint(),
+            })
             setPhase('ready')
+            repaint()
           } catch {
             setPhase('failed')
           }
@@ -972,12 +979,22 @@ window.__ModuleLoader__.load({
         }
       }, [built.source])
 
+      // 每次渲染都把“当前该涂什么”更新到 ref：onRender 回调里读到的必须是最新一份
+      paintState.current = { tiers, built }
+      const repaint = (retried = false) => {
+        const stats = paintFocus(hostRef.current, paintState.current.tiers, paintState.current.built)
+        // mount 之后 SVG 可能还没进 DOM（等字体/量宽度），这一帧一个节点都没找到就下一帧再涂一次
+        if (stats.nodes === 0 && !retried && typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => repaint(true))
+        }
+        // Pele 改了 id 形态就会走到这里：一条边都没认出来 → 说明淡化没生效，别静默
+        setEdgeDimLost(paintState.current.tiers !== null && stats.edges === 0)
+      }
+
       React.useEffect(() => {
         if (phase !== 'ready') return
-        const stats = paintFocus(hostRef.current, tiers, built)
-        // Pele 改了 id 形态就会走到这里：一条边都没认出来 → 说明淡化没生效，别静默
-        setEdgeDimLost(tiers !== null && stats.edges === 0)
-      }, [phase, built, tiers])
+        repaint()
+      }, [phase, built, tiers, props.focusId])
 
       const onClick = (event) => {
         const target = event?.target
