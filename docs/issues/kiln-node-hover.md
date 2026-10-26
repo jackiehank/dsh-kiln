@@ -37,6 +37,21 @@ hover 节点 → 出现一块说明：**这条 issue 是谁（id）+ 它 ask 了
 - 图的文本与布局不变。
 - `npm test --prefix plugin` 通过，且覆盖“ask 不在首位”“没有 ask”两种情况。
 
+## collect：ask 标题有多长，Pele 能怎么挂说明
+
+1. **每条 issue 都有 ask，标题长度差得很大。** 对 `~/kiln` 的 58 条 issue 各跑一次
+   `kiln path <id> --json`，取第一条 `action: ask`：58 / 58 都有；标题长度 min 17、中位 39、
+   p90 81、最长 119（中文按字计）。最短的是 `action 词表硬编码、不可配置`，最长的是
+   `relations-impl` 那条一口气 119 字的。**p90 就有 81 字，单行放不下**——这个数字直接决定下面的选型。
+2. **Pele 的节点结构**：`<g class="pele-node pele-shape-<shape>…" data-id="n_<issue>">`，里面是
+   `<rect>` + `<text class="pele-label">`。所以 `pointermove` 的 `event.target` 是内层元素，
+   `closest('[data-id]')` 能拿到节点——和现在 click 的做法一致，不用另建索引。
+3. **Pele 原生支持 `<title>`**：渲染时 `Q.tooltip && (…'<title>…')`。但 `tooltip` 只来自 mermaid 的
+   `click` 语句（`setTooltip`），而我们的图文本是自己拼的、没有这条语句。要用原生方案，得么在图文本里
+   补 `click`（会连带生成 `<a>`，改变光标与点击行为），要么在 paint 阶段往每个 `<g>` 里插 `<title>` 子节点。
+4. **原生 tooltip 的形态不适合这批标题**：约 1 秒延迟、单行、由操作系统画（样式与页面无关）。
+   81 字的中文在 Windows 上会是一条很长的单行，读起来费劲。要“能换行、宽度可控”，只能自绘。
+
 ## 待定
 
 1. 用原生 `<title>`（零 JS）还是自绘说明框。
