@@ -64,3 +64,59 @@
 2. 节点标签截断的规则：截前 12 字符、还是只留最后一段（`…-shared-focus`）；
 3. 档位阈值定在哪（当前是先看 0.7 / 1.0 两个点）；
 4. hover 在触屏上不可用，是否退化为“点选边”。
+
+## collect：Pele 的边能调什么
+
+用仓库里 vendored 的 `client.pele.js` 逐项试（`render()` 不需要浏览器），结论按“能改什么”归类：
+
+### 1. 内置 mermaid 语法（写文本时就能定）
+
+| 写法 | 渲染结果 |
+| --- | --- |
+| `a --> b` | `<path>` 无额外属性，取父级的 `stroke="var(--_l)"` |
+| `a -.-> b` | 同上（Pele 把虚线也画成实线路径，线型由 mermaid 语义决定） |
+| `a ===> b` | path 上直接带 `stroke-width="2.5"` |
+| `a --- b` | 无箭头（没有 `.pele-marker`） |
+
+### 2. `linkStyle <序号> …`：**可用**，而且能改颜色
+
+```mermaid
+linkStyle 1 stroke:#00aa00,stroke-width:3px
+```
+
+渲染成边组上的内联样式：
+
+```html
+<g class="pele-edge" data-id="L_n_b_n_c_0" style="stroke:#00aa00;stroke-width:3px;">
+```
+
+三个要点：
+
+- **序号 = 文本里边的声明顺序**（第 0 条、第 1 条…），实测对得上；
+- **箭头会自动跟随**：设了 `stroke:#ff0000` 之后，`.pele-marker` 的 `fill` 也变成 `#ff0000`；
+- `display:none` 这类非描边属性**不生效**（被忽略，边照画）——想隐藏要自己用 CSS。
+
+### 3. CSS：可以在渲染后按类 / 按 `data-id` 调
+
+| 选择器 | 控制什么 |
+| --- | --- |
+| `.pele-edges` | 所有边的父组（`stroke`、`fill:none` 在这层） |
+| `.pele-edge[data-id]` | 单条边（线 + 箭头） |
+| `.pele-edge-label[data-id]` | 单条边的标签（**与边同 id 的兄弟节点**） |
+| `.pele-marker` | 箭头（`fill`） |
+| `--pele-line` | 全体边的默认色（主题变量） |
+
+### 4. 几个坑
+
+1. **平行边的 `data-id` 序号不连续**：同一对起止的两条边是 `L_n_a_n_b_0` 与 `L_n_a_n_b_2`（不是 0、1）。
+   所以 `data-id` 只适合**前缀匹配**（我们已经在用），别去猜序号；
+2. `linkStyle` 的序号与 `data-id` 的序号**不是同一套**，别混用；
+3. `config.flowchart.curve`（basis/linear/stepBefore）在这张小图上**看不出差异**，路径 `d` 相同——
+   想改曲线形状大概得靠 CSS `stroke-linejoin`（只影响拐角），Pele 不暴露曲线类型；
+4. 箭头颜色跟着线的 `stroke` 走，但**不跟随 `stroke-dasharray`**；虚线的箭头仍是实心三角。
+
+### 对本 issue 的直接用处
+
+- **藏边标签**：`.pele-edge-label{display:none}` 或按 `data-id` 摘除——纯视觉，不重排，正是第一版要的；
+- **强调某条边**：不必用 `linkStyle` 重生成文本，CSS 直接改 `stroke` / `stroke-width` 就行（也和边淡化同一套 id 配对）；
+- **hover 单独显示**：`.pele-edge-label[data-id="…"]` 精确到条，靠 `data-id` 配对即可，无需重画。
