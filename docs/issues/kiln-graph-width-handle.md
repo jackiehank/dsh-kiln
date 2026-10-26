@@ -94,3 +94,30 @@ div[data-conversation-content][data-conversation-region=chat]
 ### 结论（交给 hypothesize）
 
 能藏，成本是一行 CSS，且不依赖 JS。真正要定的是范围（三页 / 只关系页）和锚点写在哪。
+
+## hypothesize：藏的范围
+
+### A. 三页都藏（选中）
+
+规则不区分“哪一页”，只看 `.dkf-root` 在不在：
+
+```css
+[data-conversation-content]:has(.dkf-root) [data-width-handle] { display: none }
+```
+
+理由是**命中区的问题三页都有**：手柄的 10px 命中区会一直抢“横向拖动”这个手势，列表页里虽然不
+容易把线误读成关系线，但划过它时光标会变成 `col-resize`，在列表上想选字/拖动也会撞上。而调宽这
+件事本身就是对话页的偏好——在 kiln 里调完也看不到对话，切回去调才合理。
+
+### B. 只藏关系页
+
+用 `:has(.dkf-graph)` 限定，只保留“图上才误读”这个理由。代价是两条规则、两套解释，且列表页仍会
+被 `col-resize` 撞一下。
+
+### C. 只禁指针、保留可调宽
+
+`pointer-events:none` 只能挡住命中区，2px 竖线的 hover 效果也就不会再出现；但“调到一半的隐藏”
+意义有限：既然看不见也拖不动，不如彻底 `display:none`，省得解释“为什么这里有个看不见的控件”。
+
+**选 A**：一条规则覆盖三页，行为可一句话解释——“kiln 里不显示调宽的竖线”；切回对话页自动恢复，
+因为我们只是靠 `:has(.dkf-root)` 决定它出不出现，没有改壳的任何状态。
