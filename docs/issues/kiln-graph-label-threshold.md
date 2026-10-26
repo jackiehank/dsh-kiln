@@ -268,3 +268,6 @@ linkStyle 1 stroke:#00aa00,stroke-width:3px
 - 五类里 `part-of` 与 `supersedes` 在 `~/kiln` 一次都没出现（见上一张表），
   所以这套阶梯当前的“实际可用性”主要是前三类；
 - `linkStyle` 按**声明顺序**生效，所以生成文本时必须能稳定复现边的顺序（我们现在就是有序的）。
+
+> 配图约定：图放 `docs/issues/assets/`，文档里用 `assets/<file>.png` 引用——相对路径最短，
+> 也不会因为移动文档目录而失效。

@@ -4,7 +4,7 @@
 都由带 `issue:` + `action:` 的提交记录。代码在 diff 里，**为什么这么做只能在提交历史里找到**。
 
 - kiln 手册：本机 `~/kiln/README.md`（v0.1.1，已发布）；上游 <https://github.com/jackiehank/kiln>
-- issue 文档：[`docs/issues/`](docs/issues/)
+- issue 文档：[`docs/issues/`](docs/issues/)；配图放 `docs/issues/assets/`，文档里用 `assets/<file>.png` 引用
 - 配置：[`.kilnconfig.jsonc`](.kilnconfig.jsonc)
 
 ---
