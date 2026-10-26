@@ -66,7 +66,7 @@ window.__ModuleLoader__.load({
      * 端点标识会叠在一起（见 docs/issues/kiln-graph-label-threshold.md）。
      */
     const EDGE_STROKE = {
-      'part-of': 'stroke-width:2.6px',
+      'part-of': 'stroke-width:3.4px',
       blocks: 'stroke-width:1.6px',
       'caused-by': 'stroke-width:1.6px,stroke-dasharray:10 5',
       supersedes: 'stroke-width:1.6px,stroke-dasharray:9 3 2 3',

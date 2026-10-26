@@ -244,7 +244,7 @@ linkStyle 1 stroke:#00aa00,stroke-width:3px
 
 | 关系 | dasharray | 线宽 | 箭头 |
 | --- | --- | --- | --- |
-| `part-of` | 实线 | 2.6 | 有 |
+| `part-of` | 实线 | 3.4 | 有 |
 | `blocks` | 实线 | 1.5 | 有 |
 | `caused-by` | `10 5` | 1.5 | 有 |
 | `supersedes` | `9 3 2 3`（点划） | 1.5 | 有 |
@@ -278,7 +278,7 @@ linkStyle 1 stroke:#00aa00,stroke-width:3px
 
 | 关系 | linkStyle | 箭头 |
 | --- | --- | --- |
-| `part-of` | `stroke-width:2.6px` | 有 |
+| `part-of` | `stroke-width:3.4px` | 有 |
 | `blocks` | `stroke-width:1.6px` | 有 |
 | `caused-by` | `stroke-width:1.6px,stroke-dasharray:10 5` | 有 |
 | `supersedes` | `stroke-width:1.6px,stroke-dasharray:9 3 2 3` | 有 |
@@ -351,3 +351,6 @@ linkStyle 1 stroke:#00aa00,stroke-width:3px
 淡出规则删掉，只在行的 `title` 里保留一句“当前视图没画这类关系”（鼠标悬停才出现）。
 
 用例相应改成断言：图例里**不存在**淡出行，且未画的类别靠 `title` 提示。
+
+（线宽微调：`part-of` 2.6px → **3.4px**。实测 2.6 与 1.6 的差别在图上看不出来，加粗到 3.4 之后
+“结构最硬的那类”一眼能分出来；`blocks` 保持 1.6。附带把 `assets/` 里的阶梯图与应用示意图按新线宽重新生成。）

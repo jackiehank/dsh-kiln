@@ -327,7 +327,7 @@ check('图例：五句话 + 带箭头的样条，五类一律同样深', () => {
 
   // 线型与图上完全一致：粗实线 / 长虚 / 点划 / 点线
   const lines = swatches.map((children) => children.find((child) => child.type === 'line').props)
-  assert.equal(lines[0].strokeWidth, 2.6)
+  assert.equal(lines[0].strokeWidth, 3.4)
   assert.equal(lines[2].strokeDasharray, '10 5')
   assert.equal(lines[3].strokeDasharray, '9 3 2 3')
   assert.equal(lines[4].strokeDasharray, '2 5')
