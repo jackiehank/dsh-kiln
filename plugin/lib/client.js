@@ -250,16 +250,18 @@ window.__ModuleLoader__.load({
  */
 .dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-row:hover,.dkf-focus:hover,.dkf-crumb:hover,.dkf-subrow:hover,.dkf-arow:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover,.dkf-hit:hover{background-image:linear-gradient(var(--dkf-hover),var(--dkf-hover))}
 .dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-crumb:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover,.dkf-hit:hover{color:var(--dkf-fg)}
-/* 页头第一层：只放身份与全局动作 */
-.dkf-head{display:flex;align-items:center;gap:8px;padding:0 12px;min-height:34px;border-bottom:.5px solid var(--dkf-line);flex:none}
-.dkf-repo{font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body);font-weight:600;color:var(--dkf-fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:0 1 auto;max-width:180px}
-/* 搜索框：占掉原来的弹性空白，窄宽度下先缩仓库名与焦点 chip，不缩它 */
-.dkf-search{flex:1 1 160px;min-width:96px;max-width:360px;height:22px;margin:0 8px;padding:0 8px;border:0;border-radius:var(--dkf-r);background:var(--dkf-bg2);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line);font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+/* 页头第一层：三栏网格——左右两栏等宽，搜索框因此是**真居中**（不是"剩下的空白居中"） */
+.dkf-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(96px,min(360px,40%)) minmax(0,1fr);align-items:center;gap:8px;padding:0 12px;min-height:34px;border-bottom:.5px solid var(--dkf-line);flex:none}
+.dkf-repo{font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body);font-weight:600;color:var(--dkf-fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.dkf-head-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
+/* 搜索框：占满中间那栏；左右两栏等宽，所以它在页头里居中 */
+.dkf-search{width:100%;min-width:0;height:22px;padding:0 8px;border:0;border-radius:var(--dkf-r);background:var(--dkf-bg2);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line);font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-search::placeholder{color:var(--dkf-fg3)}
 .dkf-search:focus{outline:none;box-shadow:inset 0 0 0 2px var(--dkf-accent)}
 /* 搜索结果：一行一条 issue，命中片段高亮 */
 .dkf-hit{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:4px 6px;border-radius:var(--dkf-r);cursor:pointer;min-width:0}
-.dkf-hit-on{background:var(--dkf-bg2);box-shadow:inset 0 0 0 .5px var(--dkf-line)}
+/* 选中一行：搜索结果的 ↑↓ 选中与 issue 页的焦点行共用同一条规则（左侧 2px 强调条） */
+.dkf-hit-on,.dkf-focus{background:var(--dkf-bg2);box-shadow:inset 2px 0 0 var(--dkf-accent),inset 0 0 0 .5px var(--dkf-line)}
 .dkf-hit-go{color:var(--dkf-fg3);flex:none;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-hl{color:var(--dkf-fg);border-radius:var(--dkf-r);background:color-mix(in srgb,var(--dkf-accent) 18%,transparent)}
 .dkf-refresh,.dkf-focuschip{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:var(--dkf-r);color:var(--dkf-fg2);white-space:nowrap;font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
@@ -298,7 +300,6 @@ window.__ModuleLoader__.load({
 .dkf-rail::before{content:'';position:absolute;left:12px;top:12px;bottom:12px;width:1px;background:var(--dkf-line)}
 .dkf-row{display:grid;grid-template-columns:auto 10px auto auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:4px 6px;border-radius:var(--dkf-r);min-width:0;outline:none}
 .dkf-row:focus-visible,.dkf-arow:focus-visible{box-shadow:inset 0 0 0 2px var(--dkf-accent)}
-.dkf-focus{background:var(--dkf-bg2);box-shadow:inset 0 0 0 .5px var(--dkf-line)}
 .dkf-clickable{cursor:pointer}
 .dkf-indent{margin-left:18px}
 .dkf-crumb{color:var(--dkf-fg2);cursor:pointer;padding:2px 6px;width:max-content;border-radius:var(--dkf-r);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
@@ -2036,19 +2037,23 @@ window.__ModuleLoader__.load({
             composing.current = false
           },
         }),
-        focus !== null
-          ? h(
-              'button',
-              {
-                type: 'button',
-                className: 'dkf-focuschip',
-                onClick: clearFocus,
-                'data-hint': '退出聚焦，回到全局（Esc）',
-              },
-              `焦点：${focus.id} ×`,
-            )
-          : null,
-        h('button', { type: 'button', className: 'dkf-refresh', onClick: refresh, 'data-hint': '重新读取 kiln 快照' }, '刷新'),
+        h(
+          'div',
+          { className: 'dkf-head-actions' },
+          focus !== null
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dkf-focuschip',
+                  onClick: clearFocus,
+                  'data-hint': '退出聚焦，回到全局（Esc）',
+                },
+                `焦点：${focus.id} ×`,
+              )
+            : null,
+          h('button', { type: 'button', className: 'dkf-refresh', onClick: refresh, 'data-hint': '重新读取 kiln 快照' }, '刷新'),
+        ),
       )
 
       /**

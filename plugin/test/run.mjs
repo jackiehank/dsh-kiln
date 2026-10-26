@@ -771,6 +771,29 @@ await check('搜索：切词、AND、排序与高亮区间', async () => {
   assert.deepEqual(searchIssues(issues, 'nonexistent'), [])
 })
 
+await check('搜索框真居中：页头是左右等宽的三栏网格，输入框占中间那栏', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const css = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals.css
+  assert.match(
+    css,
+    /\.dkf-head\{display:grid;grid-template-columns:minmax\(0,1fr\) minmax\(96px,min\(360px,40%\)\) minmax\(0,1fr\)/,
+    '左右两栏必须等宽，否则"剩下的空白居中"不是真居中',
+  )
+  assert.ok(css.includes('.dkf-head-actions{'), '右侧动作要单独成一栏（否则栏宽由内容决定，居中会偏）')
+})
+
+await check('选中一行：搜索选中与 issue 焦点行共用同一条规则（左侧 2px 强调条）', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const css = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals.css
+  assert.ok(css.includes('.dkf-hit-on,.dkf-focus{'), '两种"选中"必须同一条规则，否则又会各长各的')
+  assert.match(css, /\.dkf-hit-on,\.dkf-focus\{[^}]*inset 2px 0 0 var\(--dkf-accent\)/, '选中要有可见的强调条（浅色主题下 bg-layer-2 等于底色）')
+})
 await check('标签已不作为筛选维度：组清单里只剩领域与状态', async () => {
   const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
   const { filterGroups } = loaded.factory((name) => {
