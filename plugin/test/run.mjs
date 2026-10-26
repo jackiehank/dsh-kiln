@@ -775,14 +775,19 @@ await check('搜索：切词、AND、排序与高亮区间', async () => {
     {
       id: 'kiln-search',
       title: '撤掉 accent 强调条',
-      actions: [{ title: '三页都只能按属性收窄' }, { title: '落地：页头中间常驻搜索框' }],
+      actions: [
+        { action: 'ask', id: 'sha-ask', ordinal: 1, title: '三页都只能按属性收窄' },
+        { action: 'apply', id: 'sha-apply', ordinal: 2, title: '落地：页头中间常驻搜索框' },
+      ],
       last: { date: '2026-10-02' },
     },
   ]
   const found = searchIssues(deep, '搜索')
   assert.equal(found.length, 1, '只出现在早期动作标题里的词也要命中')
   assert.equal(found[0].title, '落地：页头中间常驻搜索框', '展示命中的那条标题，否则高亮看不见')
-  assert.equal(found[0].history, true, '要标出这是历史标题')
+  assert.equal(found[0].action, 'apply', '命中来自动作时要说清是哪条动作')
+  assert.equal(found[0].ordinal, 2, '以及它在路径里的位置')
+  assert.equal(found[0].total, 2)
   assert.deepEqual(found[0].titleRanges, [[9, 11]], '高亮落在展示的那条标题上')
 })
 

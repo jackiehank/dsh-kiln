@@ -279,14 +279,24 @@ check('搜索：有输入就换成结果列表，页栏显示命中数', () => {
   assert.equal(byClass(hits[0], 'dkf-hl').length > 0, true, '命中片段要能高亮')
 })
 
-check('搜索：命中早期动作标题时，行里显示那条标题并标「历史标题」', () => {
+check('搜索：命中动作标题时，第二行是动作 + 那条标题，并标「历史动作 n/m」', () => {
   const view = render({ tabId: 'issue', query: '动作 1' })
   const hits = byClass(view, 'dkf-hit')
   assert.equal(hits.length, 3, '三个 issue 的第 1 条动作标题都含「动作 1」')
-  const chips = byClass(hits[0], 'dkf-chip').map(textOf)
-  assert.ok(chips.includes('历史标题'), '要标出命中的不是当前标题')
-  assert.match(textOf(byClass(hits[0], 'dkf-title')[0]), /动作 1/, '显示的是命中的那条标题')
+  const body = byClass(hits[0], 'dkf-hit-body')[0]
+  assert.ok(body !== undefined, '结果分两行：第一行是 issue，第二行是命中的动作')
+  assert.match(textOf(byClass(hits[0], 'dkf-hit-title')[0]), /动作 1/, '第二行显示命中的那条标题')
+  assert.match(textOf(byClass(hits[0], 'dkf-hit-meta')[0]), /历史动作 1\/2/, '标出动作位置')
+  assert.ok(byClass(hits[0], 'dkf-chip-action').length > 0, '动作名用动作用色的小标签')
   assert.equal(byClass(hits[0], 'dkf-hl').length > 0, true, '高亮落在显示的标题上')
+})
+
+check('搜索：命中 issue 名时，第二行只是当前标题（不做高亮主角）', () => {
+  const view = render({ tabId: 'issue', query: 'b' })
+  const hit = byClass(view, 'dkf-hit')[0]
+  assert.equal(byClass(hit, 'dkf-hit-meta').length, 0, '没有"历史动作"标记')
+  assert.equal(byClass(hit, 'dkf-hit-title-quiet').length, 1, '第二行是背景标题，弱化显示')
+  assert.equal(byClass(hit, 'dkf-chip-action').length, 0, '没有动作标签')
 })
 check('搜索：没有命中时给明确空态', () => {
   const view = render({ tabId: 'issue', query: 'zzz' })

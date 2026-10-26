@@ -260,8 +260,15 @@ window.__ModuleLoader__.load({
 .dkf-search{width:100%;min-width:0;height:22px;padding:0 8px;border:0;border-radius:var(--dkf-r);background:var(--dkf-bg2);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line);font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-search::placeholder{color:var(--dkf-fg3)}
 .dkf-search:focus{outline:none;box-shadow:inset 0 0 0 2px var(--dkf-accent)}
-/* 搜索结果：一行一条 issue，命中片段高亮 */
-.dkf-hit{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:4px 6px;border-radius:var(--dkf-r);cursor:pointer;min-width:0}
+/* 搜索结果：两行——第一行是"哪个 issue"，第二行是"为什么命中"（issue 名 or 某条动作的标题） */
+.dkf-hit{display:flex;flex-direction:column;gap:2px;padding:4px 6px;border-radius:var(--dkf-r);cursor:pointer;min-width:0}
+.dkf-hit-head{display:flex;align-items:center;gap:6px;min-width:0}
+.dkf-hit-head .dkf-hit-go{margin-left:auto}
+.dkf-hit-body{display:flex;align-items:baseline;gap:6px;min-width:0}
+.dkf-hit-title{color:var(--dkf-fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+/* 命中 issue 名时，第二行是"这条 issue 现在在干什么"，只作背景，不做高亮主角 */
+.dkf-hit-title-quiet{color:var(--dkf-fg2)}
+.dkf-hit-meta{color:var(--dkf-fg3);margin-left:auto;flex:none;white-space:nowrap;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 /* 选中一行：就是"鼠标经过"那层底色常驻，和 issue 行同一套观感，不加额外强调 */
 .dkf-hit-on{background-image:var(--dkf-hover-layer)}
 .dkf-hit-go{color:var(--dkf-fg3);flex:none;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
@@ -1010,15 +1017,21 @@ window.__ModuleLoader__.load({
         const hasAll = (text) => terms.every((term) => text.toLowerCase().includes(term))
         const idHit = hasAll(id)
         const titleHit = hasAll(title)
-        const historyTitle = titleHit ? null : (actionTitles.find(hasAll) ?? null)
-        const rank = id.toLowerCase().startsWith(terms[0]) ? 0 : idHit ? 1 : titleHit ? 2 : historyTitle !== null ? 3 : 4
-        // 展示能看见命中的那条标题：当前标题优先，否则用命中的历史动作标题
-        const shown = titleHit ? title : (historyTitle ?? title)
+        const actionHit = titleHit
+          ? null
+          : (actions.find((action) => hasAll(String(action?.title ?? ''))) ?? null)
+        const rank = id.toLowerCase().startsWith(terms[0]) ? 0 : idHit ? 1 : titleHit ? 2 : actionHit !== null ? 3 : 4
+        // 展示能看见命中的那条标题：当前标题优先，否则用命中的那条动作标题
+        const shown = titleHit ? title : (actionHit === null ? title : String(actionHit.title ?? ''))
         rows.push({
           issue,
           rank,
           title: shown,
-          history: historyTitle !== null,
+          /** 命中来自动作标题时带上"哪条动作"——结果行要能区分"找到的是 issue 名"还是"动作里的词"。 */
+          action: actionHit === null ? null : String(actionHit.action ?? ''),
+          actionId: actionHit === null ? null : String(actionHit.id ?? ''),
+          ordinal: actionHit === null ? null : actionHit.ordinal,
+          total: actions.length,
           idRanges: matchRanges(id, terms),
           titleRanges: matchRanges(shown, terms),
         })
@@ -1158,6 +1171,7 @@ window.__ModuleLoader__.load({
           {
             className: 'dkf-arow',
             'data-row': '',
+            'data-key': actionKey(row),
             tabIndex: -1,
             style: { '--dkf-row-color': colorOf(row.action) },
             onClick: props.onToggle,
@@ -1312,18 +1326,30 @@ window.__ModuleLoader__.load({
               className: cls('dkf-hit', index === props.selected && 'dkf-hit-on'),
               role: 'option',
               'aria-selected': index === props.selected,
-              onClick: () => props.onPick(row.issue.id),
+              onClick: () => props.onPick(row),
+              style: row.action === null ? undefined : { '--dkf-row-color': colorOf(row.action) },
             },
-            h('span', { className: 'dkf-id' }, highlightParts(String(row.issue.id), row.idRanges)),
-            h('span', { className: 'dkf-title' }, highlightParts(String(row.title ?? ''), row.titleRanges)),
             h(
-              'span',
-              { className: 'dkf-badges' },
-              row.history ? h('span', { className: 'dkf-chip', 'data-hint': '命中的是这条 issue 早期动作的标题' }, '历史标题') : null,
+              'div',
+              { className: 'dkf-hit-head' },
+              h('span', { className: 'dkf-id' }, highlightParts(String(row.issue.id), row.idRanges)),
               row.issue.domain ? h('span', { className: 'dkf-chip' }, row.issue.domain) : null,
               h('span', { className: 'dkf-chip' }, row.issue.done === true ? '已完成' : '进行中'),
+              h('span', { className: 'dkf-hit-go', 'aria-hidden': 'true' }, '⏎'),
             ),
-            h('span', { className: 'dkf-hit-go', 'aria-hidden': 'true' }, '⏎'),
+            h(
+              'div',
+              { className: 'dkf-hit-body' },
+              row.action === null ? null : h('span', { className: 'dkf-chip dkf-chip-action' }, row.action),
+              h(
+                'span',
+                { className: cls('dkf-hit-title', row.action === null && 'dkf-hit-title-quiet') },
+                highlightParts(String(row.title ?? ''), row.titleRanges),
+              ),
+              row.action === null
+                ? null
+                : h('span', { className: 'dkf-hit-meta' }, `历史动作 ${row.ordinal ?? '?'}/${row.total ?? '?'}`),
+            ),
           ),
         ),
       )
@@ -1822,6 +1848,9 @@ window.__ModuleLoader__.load({
       /** 搜索：查询串与结果里被选中的下标都只活在本次挂载（切页/卸载即清空）。 */
       const [query, setQuery] = React.useState('')
       const [searchIndex, setSearchIndex] = React.useState(-1)
+      /** 选中一条"动作命中"的结果后要滚到的那一行（值 = 动作的提交 sha）。 */
+      const [scrollTo, setScrollTo] = React.useState(null)
+      const rootRef = React.useRef(null)
       const searchRef = React.useRef(null)
       /** 中文输入法组合期间，回车是"上屏"不是"确认"，别让键盘处理抢先。 */
       const composing = React.useRef(false)
@@ -1983,10 +2012,26 @@ window.__ModuleLoader__.load({
         setQuery('')
         setSearchIndex(-1)
       }
-      const pickSearch = (id) => {
+      /**
+       * 选中一条结果：
+       *   · 命中 issue 名 / 当前标题 → 聚焦 + issue 页（看结构）；
+       *   · 命中某条动作的标题 → 聚焦 + 时间线 + 展开那条动作 + 滚到它（"找到的是那句话，就带你到那句话"）。
+       */
+      const pickSearch = (row) => {
+        const id = row === null || row === undefined ? '' : String(row.issue?.id ?? '')
+        if (id === '') return
+        const hitAction = typeof row.actionId === 'string' && row.actionId !== '' ? row.actionId : null
         clearSearch()
         focusIssue(id)
-        selectTab('issue')
+        if (hitAction === null) {
+          selectTab('issue')
+          return
+        }
+        const expanded = { kind: 'action', id: hitAction }
+        selectTab('timeline')
+        setExpanded(expanded)
+        writeViewState(cwd, { expanded })
+        setScrollTo(hitAction)
       }
       const onSearchKeyDown = (event) => {
         if (composing.current) return
@@ -2012,7 +2057,7 @@ window.__ModuleLoader__.load({
           const row = searchRows[index]
           if (row !== undefined) {
             event.preventDefault()
-            pickSearch(row.issue.id)
+            pickSearch(row)
           }
         }
       }
@@ -2020,6 +2065,20 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         setSearchIndex(-1)
       }, [query])
+
+      // 从搜索结果跳到某条动作：滚到那一行（展开已经由 pickSearch 设好）
+      React.useEffect(() => {
+        if (scrollTo === null) return
+        const root = rootRef.current
+        const node =
+          root === null || root === undefined || typeof root.querySelector !== 'function'
+            ? null
+            : root.querySelector(`[data-key="${scrollTo}"]`)
+        if (node !== null && node !== undefined && typeof node.scrollIntoView === 'function') {
+          node.scrollIntoView({ block: 'center' })
+        }
+        setScrollTo(null)
+      }, [scrollTo])
 
       const refresh = () => setNonce((value) => value + 1)
       const totalOf = (issueId) => (Array.isArray(byId.get(issueId)?.actions) ? byId.get(issueId).actions.length : 0)
@@ -2364,6 +2423,7 @@ window.__ModuleLoader__.load({
         'div',
         {
           className: 'dkf-root',
+          ref: rootRef,
           // 提示走委托：进入/离开/按下都从这里收口，元素上只留 data-hint
           onPointerOver: onHintOver,
           onPointerLeave: clearHint,
