@@ -567,6 +567,38 @@ await check('调宽手柄：只在 .dkf-root 挂载时藏掉（切回对话页�
   assert.ok(!/\n\[data-width-handle\]\{display:none\}/.test(css), '不能写不带作用域的规则')
 })
 
+await check('深色主题：Pele 的 8 个主题变量都接到 --dkf-* 上（不接就永远是白底深字）', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const css = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals.css
+  const pairs = [
+    ['--pele-line', '--dkf-fg2'],
+    ['--pele-surface', '--dkf-raise'],
+    ['--pele-fg', '--dkf-fg'],
+    ['--pele-muted', '--dkf-fg3'],
+    ['--pele-bg', '--dkf-raise'],
+    ['--pele-border', '--dkf-line-2'],
+    ['--pele-accent', '--dkf-accent'],
+  ]
+  for (const [pele, ours] of pairs) {
+    assert.ok(css.includes(`${pele}:var(${ours})`), `${pele} 必须接到 ${ours}`)
+  }
+})
+
+await check('深色主题：淡化色向画布混，不再混白底（否则越淡越亮）', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const css = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals.css
+  assert.ok(css.includes('--dkf-canvas:var(--dkf-bg2)'), '画布色要有自己的名字')
+  assert.match(css, /--dkf-dim-edge-color:color-mix\(in srgb,var\(--dkf-fg2\)[^;]*var\(--dkf-canvas\)\)/)
+  assert.ok(!css.includes('var(--_fg,'), '不能再拿 Pele 的浅色默认值当混色起点')
+  assert.ok(!css.includes('var(--_bg)'), '也不能再拿白底当混色终点')
+})
+
 // ---------------------------------------------------------------- 汇总
 
 console.log('')

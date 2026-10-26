@@ -102,3 +102,52 @@
 - 节点填充 ← `--dkf-bg`（layer-1，深色下比画布暗一档）/ 画布 ← `--dkf-bg2`；
 - 淡化色 ← `color-mix(边色 20%, 画布色)`，按定义永远比正常边更靠近画布，**任何主题都不会反**。
 
+## 落地
+
+三处改动，都在 `plugin/lib/client.js` 的 CSS 块里（另加两条宿主测试）：
+
+1. `.dkf-root` 新增一个角色 `--dkf-raise:var(--dsw-alias-bg-layer-3,#fff)`
+   —— 深色下 `#353638`，比画布 `#2c2c2e` 亮一档，用来画"抬起来"的节点；浅色下与 layer-1 同为 `#fff`。
+2. `.dkf-graph` 接上 Pele 的全部主题钩子：
+
+   | Pele | 接到 | 深色实际值 |
+   | --- | --- | --- |
+   | `--pele-line` | `--dkf-fg2` | `#cfd3d6` |
+   | `--pele-surface` | `--dkf-raise` | `#353638` |
+   | `--pele-fg` | `--dkf-fg` | `label-primary` |
+   | `--pele-muted` | `--dkf-fg3` | `label-tertiary` |
+   | `--pele-bg` | `--dkf-raise` | `#353638` |
+   | `--pele-surface-alt` | `--dkf-bg` | `#232324` |
+   | `--pele-border` | `--dkf-line-2` | `#ffffff29` |
+   | `--pele-accent` | `--dkf-accent` | `state-business-primary` |
+
+3. 淡化混色改成"向画布"：`color-mix(in srgb, var(--dkf-fg2) 20%, var(--dkf-canvas))`，
+   其中 `--dkf-canvas: var(--dkf-bg2)`；淡化标签的底板也一起退回画布（`.dkf-gedge-label-dim rect`），
+   否则会变成"暗字压亮板"。
+
+### 与 collect 结论的偏差
+
+collect 里写"节点填充 ← layer-1"，落地时改成 **layer-3**：深色下 layer-1（`#232324`）
+比画布（`#2c2c2e`）更暗，节点会像"洞"；layer-3 亮一档才像画布上的一层卡片。
+浅色下两者都是 `#fff`，观感不变。
+
+### 预期结果（按宿主深色 token 值算出来的，不是拍的）
+
+| | 正常边 | 淡化边 | 节点 |
+| --- | --- | --- | --- |
+| 深色 | `#cfd3d6` on `#2c2c2e` = **9.25:1** | `#4d4e50` = **1.65:1** | `#353638`（对比度 1.15:1，靠动作色描边成形） |
+| 浅色 | `#61666b` on `#fff` = **5.8:1** | `#dfdfdf` = **1.32:1** | `#fff`（不变） |
+
+改前的 `1.18:1 / 9.22:1` 一对，现在是 `9.25:1 / 1.65:1`——顺序正过来了。
+
+### 验证
+
+- `npm test --prefix plugin` → 33 个宿主用例 + 31 个渲染用例全过；新增两条：
+  8 个 `--pele-*` 映射齐全、淡化色必须以 `--dkf-fg2` 为起点、以 `--dkf-canvas` 为终点，
+  并且 CSS 里不再出现 `var(--_fg,` / `var(--_bg)`。
+- 静态审计：CSS 里仍然 0 处裸 hex（新增值全部来自 `--dkf-*` / `--dsw-*`）。
+- **没验证到的**：实拍。沙箱禁掉 Chromium 的多进程管道，截不了图；这次能给的证据是对比度换算
+  与像素取色的闭合链（`#d2d2d2` 与公式逐位吻合）。重启桌面应用后确认：深色下边看得清、
+  焦点圈外的线明显更弱、节点不再是白贴纸。
+
+

@@ -208,6 +208,7 @@ window.__ModuleLoader__.load({
   --dkf-line-2:var(--dsw-alias-border-l3,#00000029);
   --dkf-bg:var(--dsw-alias-bg-layer-1,#fff);
   --dkf-bg2:var(--dsw-alias-bg-layer-2,#f7f7f7);
+  --dkf-raise:var(--dsw-alias-bg-layer-3,#fff);
   --dkf-hover:var(--dsw-alias-interactive-bg-hover,#2631480f);
   --dkf-accent:var(--dsw-alias-state-business-primary,#4176e6);
   --dkf-ok:var(--dsw-alias-state-success-primary,#35a35f);
@@ -303,12 +304,26 @@ window.__ModuleLoader__.load({
 .dkf-graph{border-radius:var(--dkf-r-box);background:var(--dkf-bg2);box-shadow:inset 0 0 0 .5px var(--dkf-line);padding:8px;overflow:hidden;min-height:260px}
 .dkf-graph svg{display:block;max-width:100%;height:auto}
 .dkf-graph{--dkf-dim-node:.2;--dkf-dim-edge-mix:20%;--dkf-dim-label-mix:20%}
-.dkf-graph svg{--dkf-dim-edge-color:color-mix(in srgb,var(--_fg,#1f1f1f) var(--dkf-dim-edge-mix),var(--_bg,#fff));--dkf-dim-label-color:color-mix(in srgb,var(--_fg,#1f1f1f) var(--dkf-dim-label-mix),var(--_bg,#fff))}
+/*
+ * Pele 在自己生成的 SVG 上写死了一套浅色默认值（白底、近黑的线），且不看主题。
+ * 不把 --pele-* 接过来，深色下就是“近黑压深灰”（1.18:1）、节点还是白卡片。
+ * 这里全部接到 --dkf-* 角色上：线用次级文字色，节点用抬起的一层，淡化的终点是画布。
+ */
+.dkf-graph{
+  --pele-bg:var(--dkf-raise);--pele-fg:var(--dkf-fg);--pele-muted:var(--dkf-fg3);
+  --pele-line:var(--dkf-fg2);--pele-surface:var(--dkf-raise);--pele-surface-alt:var(--dkf-bg);
+  --pele-border:var(--dkf-line-2);--pele-accent:var(--dkf-accent);
+  --dkf-canvas:var(--dkf-bg2);
+}
+/* 淡化向画布色混，而不是向白底混：按定义永远比正常边更靠近画布，换主题也不会反过来 */
+.dkf-graph svg{--dkf-dim-edge-color:color-mix(in srgb,var(--dkf-fg2) var(--dkf-dim-edge-mix),var(--dkf-canvas));--dkf-dim-label-color:color-mix(in srgb,var(--dkf-fg2) var(--dkf-dim-label-mix),var(--dkf-canvas))}
 .dkf-gnode-dim{opacity:var(--dkf-dim-node);transition:opacity .12s ease}
 /* 边用“换颜色”而不是整体透明度：多条箭头叠在一起时，透明度会累加出更深的块 */
 .dkf-gedge-dim path{stroke:var(--dkf-dim-edge-color);transition:stroke .12s ease}
 .dkf-gedge-dim .pele-marker{fill:var(--dkf-dim-edge-color)}
 .dkf-gedge-label-dim text{fill:var(--dkf-dim-label-color);transition:fill .12s ease}
+/* 淡化的边标签连底板一起退回画布，否则“暗字压亮板”会糊成一团 */
+.dkf-gedge-label-dim rect{fill:var(--dkf-canvas)}
 .dkf-graph{--dkf-focus-glow:2px;--dkf-focus-color:var(--dkf-accent)}
 .dkf-gnode-focus{filter:drop-shadow(0 0 var(--dkf-focus-glow) var(--dkf-focus-color)) drop-shadow(0 0 calc(var(--dkf-focus-glow) * 2) var(--dkf-focus-color))}
 .dkf-legend{display:flex;flex-wrap:wrap;gap:4px 16px;padding:0 4px}
