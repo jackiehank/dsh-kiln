@@ -283,7 +283,6 @@ window.__ModuleLoader__.load({
 .dkf-gnode-focus{filter:drop-shadow(0 0 var(--dkf-focus-glow) var(--dkf-focus-color)) drop-shadow(0 0 calc(var(--dkf-focus-glow) * 2) var(--dkf-focus-color))}
 .dkf-legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:2px 18px;padding:6px 2px 0}
 .dkf-legend-row{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary,#666);font:12px/20px var(--dsw-font-family,inherit)}
-.dkf-legend-off{opacity:.35}
 .dkf-legend-svg{flex:none;color:var(--dsw-alias-label-primary,#111)}
 .dkf-legend-end{font:10px/16px var(--dsw-font-family-code,monospace);color:var(--dsw-alias-label-primary,#111);flex:none}
 .dkf-legend-text{color:var(--dsw-alias-label-secondary,#666)}
@@ -1115,8 +1114,8 @@ window.__ModuleLoader__.load({
             {
               key: entry.rel,
               role: 'listitem',
-              className: `dkf-legend-row${active ? '' : ' dkf-legend-off'}`,
-              title: active ? entry.rel : `${entry.rel}（当前视图没画）`,
+              className: 'dkf-legend-row',
+              title: active ? entry.rel : `${entry.rel}（当前视图没画这类关系）`,
             },
             h('span', { className: 'dkf-legend-end' }, 'A'),
             h(
