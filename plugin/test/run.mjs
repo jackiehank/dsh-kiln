@@ -599,8 +599,33 @@ await check('深色主题：淡化色向画布混，不再混白底（否则越�
   assert.ok(!css.includes('var(--_bg)'), '也不能再拿白底当混色终点')
 })
 
-// ---------------------------------------------------------------- 汇总
+await check('图的字体：字号读容器计算值并夹在 8–24，异常退回 12', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const { graphFontSize } = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals ?? {}
+  assert.equal(typeof graphFontSize, 'function', '需要 __DSH_KILN_TEST__ 暴露 graphFontSize')
+  assert.equal(graphFontSize({ fontSize: '12px' }), 12, '与 .dkf-root 的正文同号')
+  assert.equal(graphFontSize({ fontSize: '13.4px' }), 13)
+  assert.equal(graphFontSize({ fontSize: '2px' }), 8, '太小要夹住')
+  assert.equal(graphFontSize({ fontSize: '40px' }), 24, '太大要夹住')
+  assert.equal(graphFontSize({}), 12, '读不到字号时退回 12')
+  assert.equal(graphFontSize(null), 12, '没有计算样式时退回 12')
+  assert.equal(graphFontSize(undefined), 12)
+})
 
+await check('图的字体：字族/等宽接到 --dkf-sans / --dkf-mono', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const css = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals.css
+  assert.ok(css.includes('--pele-font:var(--dkf-sans)'), 'Pele 的字族要走统一角色')
+  assert.ok(css.includes('--pele-font-mono:var(--dkf-mono)'), '等宽要走宿主的代码字体')
+})
+
+// ---------------------------------------------------------------- 汇总
 console.log('')
 if (failures.length === 0) {
   console.log(`全部通过：${passed} 个用例`)

@@ -16,6 +16,8 @@ DSH × kiln 的插件初稿：在会话顶部标签排（对话 / 轨迹 / 上�
   变量集中在 `.dkf-root` 的 `--dkf-*` 上，改皮肤只动那一处。
 - 关系图跟着主题走：Pele 不认主题（默认白底深字），所以 `.dkf-graph` 把它的 8 个 `--pele-*` 钩子
   接到同一套 `--dkf-*` 角色上，淡化色也改成向画布混（`docs/issues/kiln-graph-dark-theme.md`）。
+  图里的字体同样接进这套角色：字族/等宽走 `--pele-font(-mono)`，字号作为 `fontSize` 传给
+  `pele.mount()`（Pele 没有字号变量，只改 CSS 会“字小框不变”，见 `docs/issues/kiln-graph-typography.md`）。
 - 与壳的关系：kiln 视图挂载期间隐藏 DSH 的“拖动调宽”手柄
   （`[data-conversation-content]:has(.dkf-root) [data-width-handle]`），切回对话页自动恢复。
 

@@ -312,6 +312,7 @@ window.__ModuleLoader__.load({
   --pele-bg:var(--dkf-raise);--pele-fg:var(--dkf-fg);--pele-muted:var(--dkf-fg3);
   --pele-line:var(--dkf-fg2);--pele-surface:var(--dkf-raise);--pele-surface-alt:var(--dkf-bg);
   --pele-border:var(--dkf-line-2);--pele-accent:var(--dkf-accent);
+  --pele-font:var(--dkf-sans);--pele-font-mono:var(--dkf-mono);
   --dkf-canvas:var(--dkf-bg2);
   --dkf-dim-node:.2;--dkf-dim-edge-mix:20%;--dkf-dim-label-mix:20%;
   --dkf-focus-glow:2px;--dkf-focus-color:var(--dkf-accent);
@@ -401,9 +402,22 @@ window.__ModuleLoader__.load({
     }
 
     /** 说明框的宽度上限：`.dkf-tip` 的 max-width 与这个数必须一致，靠边翻转靠它算。 */
-    const TIP_MAX_WIDTH = 340
+    const TIP_MAX_WIDTH = 320
     /** 下边缘的判断留一点余量：标题可能一两行，量真实高度要额外一次 layout，不值。 */
     const TIP_FLIP_HEIGHT = 120
+
+    /**
+     * 图的字号：Pele 只认 mount 选项里的 `fontSize`（它没有对应的 CSS 变量），
+     * 而且这个数同时决定**测量**——只改 CSS 会变成“字缩小、框不变”。
+     * 所以从容器算出来的字号里取，夹到 8–24；拿不到就退回 12（与 `.dkf-root` 的正文同号）。
+     */
+    const GRAPH_FONT_FALLBACK = 12
+
+    function graphFontSize(computed) {
+      const raw = computed === null || computed === undefined ? Number.NaN : Number.parseFloat(computed.fontSize)
+      if (!Number.isFinite(raw) || raw <= 0) return GRAPH_FONT_FALLBACK
+      return Math.max(8, Math.min(24, Math.round(raw)))
+    }
 
     /**
      * 说明框位置：默认在光标右下；贴近窗口右边 / 下边就翻到另一侧。
@@ -1175,8 +1189,14 @@ window.__ModuleLoader__.load({
             return
           }
           try {
+            const computed =
+              typeof window !== 'undefined' && typeof window.getComputedStyle === 'function'
+                ? window.getComputedStyle(host)
+                : null
             handle = pele.mount(host, built.source, {
               zoom: 'auto',
+              // 字号进 Pele 的布局参数（不是 CSS）：节点框宽度是拿这个字号量出来的
+              fontSize: graphFontSize(computed),
               // Pele 会在容器宽度变化时**自己重画**，重画后 SVG 是新的、我们加的 class 全没了。
               // 所以每次渲染完都重涂一遍——这是“切回全局后焦点样式消失”的根因。
               onRender: () => repaint(),
@@ -1785,6 +1805,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, css: CSS } } : {}) }
   },
 })

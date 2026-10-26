@@ -88,3 +88,33 @@ node -e "
 - 字号：把容器的计算字号（`.dkf-root` 的 12px）作为 `fontSize` 传给 `pele.mount()`，
   测量与渲染一起变；拿不到计算样式时退回 12。
 
+## 落地
+
+三处，都在客户端半：
+
+1. `.dkf-graph` 加两行：`--pele-font:var(--dkf-sans)`、`--pele-font-mono:var(--dkf-mono)`。
+2. 新函数 `graphFontSize(computed)`：从 `getComputedStyle(容器)` 取 `font-size`，
+   夹在 8–24，读不到就退回 12（`GRAPH_FONT_FALLBACK`）。
+3. `pele.mount(host, source, { zoom, fontSize: graphFontSize(computed), onRender })`
+   —— 字号进的是**布局参数**，不是 CSS。
+
+顺带修掉一处不一致：`TIP_MAX_WIDTH` 常量是 340，而改版后的 `.dkf-tip` 是 `max-width:320px`
+（说明框靠右时会多翻 20px）。统一成 320，与"位置由常量算、宽度由 CSS 画"的约定对齐。
+
+### 验证
+
+- `npm test --prefix plugin` → 35 个宿主用例 + 31 个渲染用例全过。新增两条：
+  `graphFontSize` 的读取/夹取/退回（12、13.4→13、2→8、40→24、空→12），
+  以及 CSS 里 `--pele-font` / `--pele-font-mono` 的接线。
+- 测量是否真的跟着字号走：用 Node 直接跑 vendored 的 `render()`，`fontSize:16` 时最宽节点
+  `171.15×48`、整图 `391`；`fontSize:12` 时 `137.36×42`、整图 `327`。框缩了 20%，
+  说明不是"只换字体"。
+- **没验证到的**：实拍（沙箱里起不了 Chromium）。重启后应看到：节点/边标签的字与行标题同号，
+  长标签的图整体变窄、更适合侧栏。
+
+### 已知边界
+
+- 字号在 mount 时读一次：改宿主字号设置后，切一次页（视图重挂载）就会跟上；
+  不切页时图会保持旧字号，直到下一次重画。
+- 换主题不用重挂载：颜色与字族都是 CSS 变量，实时生效；只有"测量"用的是挂载时的字号。
+
