@@ -503,6 +503,56 @@ await check('边淡化：认不出边元素时返回 0（上层据此提示，�
   assert.equal(stats.labels, 0)
 })
 
+await check('节点说明：优先 ask 的标题，没有 ask 退到最后一条动作', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const { issueSummary } = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals ?? {}
+  assert.equal(typeof issueSummary, 'function', '需要 __DSH_KILN_TEST__ 暴露 issueSummary')
+
+  const withAsk = {
+    actions: [
+      { action: 'ask', title: 'Agent 手握 git 时，CLI 还有多少必要性', date: '2026-10-14T20:40:07+08:00' },
+      { action: 'collect', title: '收到的数字', date: '2026-10-15T09:00:00+08:00' },
+    ],
+  }
+  assert.deepEqual(issueSummary(withAsk), {
+    kind: 'ask',
+    date: '2026-10-14T20:40:07+08:00',
+    title: 'Agent 手握 git 时，CLI 还有多少必要性',
+  })
+
+  // ask 不在首位也要认出来（快照里动作按 ordinal 升序，但不能靠“第一条就是 ask”这个假设）
+  const askLater = { actions: [{ action: 'collect', title: '先收集' }, { action: 'ask', title: '后问的' }] }
+  assert.equal(issueSummary(askLater).title, '后问的')
+
+  const noAsk = { actions: [{ action: 'collect', title: '收到的数字', date: '2026-10-02' }] }
+  assert.deepEqual(issueSummary(noAsk), { kind: 'last', date: '2026-10-02', title: '收到的数字' })
+  assert.deepEqual(issueSummary({}), { kind: 'none', date: '', title: '' })
+})
+
+await check('说明框定位：靠边翻转，拿不到窗口尺寸时不翻', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const { tipPlacement } = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals ?? {}
+  assert.equal(typeof tipPlacement, 'function', '需要 __DSH_KILN_TEST__ 暴露 tipPlacement')
+
+  assert.deepEqual(tipPlacement(100, 100, 1200, 800), {
+    left: '114px',
+    top: '118px',
+    transform: 'translate(0, 0)',
+  })
+  assert.deepEqual(tipPlacement(1100, 780, 1200, 800), {
+    left: '1086px',
+    top: '768px',
+    transform: 'translate(-100%, -100%)',
+  })
+  assert.equal(tipPlacement(1100, 780, 0, 0).transform, 'translate(0, 0)')
+})
+
 // ---------------------------------------------------------------- 汇总
 
 console.log('')

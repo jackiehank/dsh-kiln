@@ -419,6 +419,15 @@ check('图方向：默认横向，切纵向只换 flowchart 的方向词', () =>
   assert.ok(active.includes('纵向'), active.join(','))
 })
 
+check('hover 说明框：默认不出现，图文本里也不带 tooltip 指令', () => {
+  const tree = render({ tabId: 'relation' })
+  assert.equal(byClass(tree, 'dkf-tip').length, 0, '没有 hover 就不该有说明框')
+  const host = byClass(tree, 'dkf-graph')[0]
+  assert.equal(typeof host.props.onPointerMove, 'function', '图容器要接 pointermove')
+  assert.equal(typeof host.props.onPointerLeave, 'function')
+  assert.ok(!mermaidOf(tree).includes('tooltip'), '说明框是自绘的，不该往图文本里塞 tooltip 指令')
+})
+
 // ---------------------------------------------------------------- 展开与聚焦控件
 
 check('每行都有 `⌖ 聚焦` 控件，行本身是 roving（tabIndex -1）', () => {

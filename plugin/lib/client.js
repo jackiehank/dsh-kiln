@@ -277,6 +277,12 @@ window.__ModuleLoader__.load({
 .dkf-legend-svg{flex:none;color:var(--dsw-alias-label-primary,#111)}
 .dkf-legend-end{font:10px/16px var(--dsw-font-family-code,monospace);color:var(--dsw-alias-label-primary,#111);flex:none}
 .dkf-legend-text{color:var(--dsw-alias-label-secondary,#666)}
+/* 节点说明框：定位用 left/top + transform（翻转），所以不必量高度；不接指针，免得自己挡自己 */
+.dkf-tip{position:fixed;z-index:40;pointer-events:none;max-width:340px;padding:6px 9px;border-radius:6px;border:.5px solid var(--dsw-alias-border-l2,#e3e3e3);background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:0 4px 14px rgba(0,0,0,.14)}
+.dkf-tip-head{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
+.dkf-tip-id{font:11px/16px var(--dsw-font-family-code,monospace);color:var(--dsw-alias-label-tertiary,#999);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dkf-tip-meta{margin-left:auto;flex:none;font:11px/16px var(--dsw-font-family,inherit);color:var(--dsw-alias-label-tertiary,#999)}
+.dkf-tip-title{font:12px/18px var(--dsw-font-family,inherit);color:var(--dsw-alias-label-primary,#111);white-space:normal;overflow-wrap:anywhere}
 .dkf-mermaid{margin:0;padding:8px 10px;max-height:320px;overflow:auto;border-radius:4px;background:var(--dsw-alias-markdown-code-block,#f6f6f6);color:var(--dsw-alias-label-secondary,#666);font:11px/16px var(--dsw-font-family-code,monospace);white-space:pre}
 `
 
@@ -316,6 +322,38 @@ window.__ModuleLoader__.load({
 
     function colorOf(action) {
       return ACTION_COLOR[action] ?? NEUTRAL
+    }
+
+    /**
+     * 节点说明里“这条 issue 在问什么”：优先 ask 的标题，没有 ask 就退到最后一条动作。
+     * 标题在宿主侧已截到 200 字（`MAX_TITLE`），这里不再截，交给 CSS 换行。
+     */
+    function issueSummary(issue) {
+      const actions = Array.isArray(issue?.actions) ? issue.actions : []
+      const ask = actions.find((action) => action.action === 'ask')
+      if (ask !== undefined) return { kind: 'ask', date: String(ask.date ?? ''), title: String(ask.title ?? '') }
+      const last = actions.length > 0 ? actions[actions.length - 1] : null
+      if (last !== null) return { kind: 'last', date: String(last.date ?? ''), title: String(last.title ?? '') }
+      return { kind: 'none', date: '', title: '' }
+    }
+
+    /** 说明框的宽度上限：`.dkf-tip` 的 max-width 与这个数必须一致，靠边翻转靠它算。 */
+    const TIP_MAX_WIDTH = 340
+    /** 下边缘的判断留一点余量：标题可能一两行，量真实高度要额外一次 layout，不值。 */
+    const TIP_FLIP_HEIGHT = 120
+
+    /**
+     * 说明框位置：默认在光标右下；贴近窗口右边 / 下边就翻到另一侧。
+     * 翻转用 `transform`，所以不必知道说明框到底多高。
+     */
+    function tipPlacement(x, y, width, height) {
+      const flipX = Number.isFinite(width) && width > 0 && x + 14 + TIP_MAX_WIDTH > width
+      const flipY = Number.isFinite(height) && height > 0 && y + 18 + TIP_FLIP_HEIGHT > height
+      return {
+        left: `${flipX ? x - 14 : x + 14}px`,
+        top: `${flipY ? y - 12 : y + 18}px`,
+        transform: `translate(${flipX ? '-100%' : '0'}, ${flipY ? '-100%' : '0'})`,
+      }
     }
 
     /** 行内按键：Enter / Space 展开，f 聚焦；方向键交给列表容器。 */
@@ -1050,6 +1088,14 @@ window.__ModuleLoader__.load({
       const paintState = React.useRef({ tiers: null, built: null })
       const [phase, setPhase] = React.useState('idle')
       const [edgeDimLost, setEdgeDimLost] = React.useState(false)
+      /** 当前 hover 的节点（id + 光标位置）；null = 没在节点上。 */
+      const [hover, setHover] = React.useState(null)
+      /** id → “这条 issue 在问什么”。每份快照算一次，hover 时只查表。 */
+      const askOf = React.useMemo(() => {
+        const map = new Map()
+        for (const issue of props.issues) map.set(issue.id, issueSummary(issue))
+        return map
+      }, [props.issues])
 
       React.useEffect(() => {
         const host = hostRef.current
@@ -1113,6 +1159,52 @@ window.__ModuleLoader__.load({
         if (typeof id === 'string') props.onFocus(id)
       }
 
+      /** 与 click 同一套反查：光标压到节点上就记下它的 issue，压到边/空白就收掉说明框。 */
+      const onPointerMove = (event) => {
+        const target = event?.target
+        const node = typeof target?.closest === 'function' ? target.closest('[data-id]') : null
+        const id = node === null ? null : built.byNode.get(node.getAttribute('data-id'))
+        if (typeof id !== 'string') {
+          if (hover !== null && hover !== undefined) setHover(null)
+          return
+        }
+        setHover({
+          id,
+          x: Number(event.clientX) || 0,
+          y: Number(event.clientY) || 0,
+          w: typeof window === 'undefined' ? 0 : window.innerWidth,
+          h: typeof window === 'undefined' ? 0 : window.innerHeight,
+        })
+      }
+      const onPointerLeave = () => {
+        if (hover !== null && hover !== undefined) setHover(null)
+      }
+
+      const hoverId = hover === null || hover === undefined ? null : hover.id
+      const summary = hoverId === null ? null : (askOf.get(hoverId) ?? { kind: 'none', date: '', title: '' })
+      const tip =
+        summary === null || hover === null || hover === undefined
+          ? null
+          : h(
+              'div',
+              { className: 'dkf-tip', role: 'tooltip', style: tipPlacement(hover.x, hover.y, hover.w, hover.h) },
+              h(
+                'div',
+                { className: 'dkf-tip-head' },
+                h('span', { className: 'dkf-tip-id' }, hoverId),
+                h(
+                  'span',
+                  { className: 'dkf-tip-meta' },
+                  summary.kind === 'ask'
+                    ? `ask · ${summary.date.slice(0, 10)}`
+                    : summary.kind === 'last'
+                      ? `最后一条动作 · ${summary.date.slice(0, 10)}`
+                      : '快照里没有这条 issue',
+                ),
+              ),
+              h('div', { className: 'dkf-tip-title' }, summary.title || '（还没有标题）'),
+            )
+
       const notice =
         phase === 'ready'
           ? null
@@ -1137,7 +1229,10 @@ window.__ModuleLoader__.load({
           'data-mermaid': built.source,
           'data-focus': props.focusId ?? '',
           onClick,
+          onPointerMove,
+          onPointerLeave,
         }),
+        tip,
         phase === 'ready' ? null : h('pre', { className: 'dkf-mermaid' }, built.source),
         h(EdgeLegend, { drawn: built.drawn }),
         built.ego && props.focusId !== null
@@ -1587,6 +1682,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, css: CSS } } : {}) }
   },
 })

@@ -93,8 +93,29 @@ hover 时给节点加一圈描边，想看内容点一下切焦点、去 issue �
 - 立即出现（不延迟），移开即消失；不做 hover 高亮（先只加信息，不同时改视觉）；
 - 位置：光标右下 14 / 18px；靠近右边缘 `translate(-100%, 0)`，靠近下边缘 `translate(0, -100%)`。
 
-## 待定
+## 落地（apply）：hover 出说明框，读 ask 那句话
 
-1. 用原生 `<title>`（零 JS）还是自绘说明框。
-2. 说明框里除了 ask 标题还放什么（domain / 当前动作 / 邻居数 / 日期）。
-3. 出现时机：立即 / 300ms 延迟；要不要同时给 hover 的节点一个高亮。
+代码（`plugin/lib/client.js`）：
+
+- `issueSummary(issue)`：优先第一条 `action: ask` 的标题；没有就退到最后一条动作的标题。返回
+  `{ kind, date, title }`，纯函数，测试直接打它（测试缝 `__internals` 里加了 `issueSummary`、`tipPlacement`）。
+- `tipPlacement(x, y, width, height)`：光标右下 14 / 18px；`x + 14 + 340 > width` 时 `translate(-100%, 0)`，
+  `y + 18 + 120 > height` 时 `translate(0, -100%)`。用 transform 翻转，所以不必量说明框高度。
+- `GraphPanel`：`pointermove` 里用和 click 完全相同的一套反查（`closest('[data-id]')` → `built.byNode`），
+  拿到 issue id 才渲染说明框；`pointerleave` 收掉。说明框（`.dkf-tip`）是 React 元素、`position:fixed`、
+  `pointer-events:none`，**不在 SVG 里**——Pele 重绘不会把它冲掉。
+- 反查失败（边、边标签、空白）时立刻收起，所以只有节点会弹。
+
+测试：`npm test --prefix plugin` → 30（宿主）+ 27（渲染）。新增的三例：ask 优先 / ask 不在首位也认得出 /
+没有 ask 退到最后一条且空 issue 不炸；定位的靠边翻转与“拿不到窗口尺寸时不翻”；以及“默认没有说明框、
+图文本里不带 tooltip 指令”。
+
+**已知代价**：`pointermove` 每次移动都 setState（只重渲染这一层，`buildMermaid` 的 memo 不重算）；
+拖动平移时指针划过节点也会弹框；键盘 / 触屏还读不到这块信息（下一轮）。
+
+## 待定（下一轮）
+
+1. 出现延迟：现在立即弹，密集区快速划过会闪；要不要 150–300ms 停留才出现。
+2. 拖动平移时是否压住说明框（现在会跟着弹）。
+3. 说明框要不要再补一行信息（domain / 当前动作 / 邻居数）——先看实际用起来缺不缺。
+4. 键盘 / 触屏可达：节点能否聚焦并朗读 ask 标题（现在只有鼠标能读到）。
