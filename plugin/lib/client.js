@@ -76,14 +76,12 @@ window.__ModuleLoader__.load({
     /**
      * 三种**视图**（不是两个可自由组合的维度）——参考 Obsidian 的“全局图 / 局部图”与
      * Gephi 的 ego 过滤：工具给的是一组有名字的视图，而不是旋钮的笛卡尔积。
-     *   · `global`  整张图，不淡化；
-     *   · `dim`     整张图 + 淡化焦点圈外（用户实测最好用的一档）；
-     *   · `ego`     只画焦点邻域（`depth` 跳），换视图即重排。
+     *   · `global`  整张图 + 淡化焦点圈外（无焦点时就是整张图）；
+     *   · `focus`   以焦点为中心重画，只画 `depth` 跳内的邻域，换焦点即重排。
      */
     const GRAPH_VIEWS = [
       { id: 'global', label: '全局' },
-      { id: 'dim', label: '全局+焦点' },
-      { id: 'ego', label: '焦点一圈' },
+      { id: 'focus', label: '聚焦' },
     ]
     /** ego 视图的半径。Obsidian 的实践是局部图设 2 跳，1 跳往往只剩一个点。 */
     const GRAPH_DEPTHS = [
@@ -103,7 +101,7 @@ window.__ModuleLoader__.load({
       expanded: null,
       relationMode: 'graph',
       graphDirection: 'LR',
-      graphView: 'dim',
+      graphView: 'global',
       graphUndirected: false,
       graphDepth: '1',
     }
@@ -439,7 +437,7 @@ window.__ModuleLoader__.load({
     function buildMermaid(issues, relations, options = {}) {
       const direction = options.direction === 'TB' ? 'TB' : 'LR'
       const undirected = options.undirected === true
-      const view = options.view ?? 'global'
+      const view = options.view === 'focus' ? 'focus' : 'global'
       const focusId = options.focusId ?? null
       const depth = options.depth === 2 ? 2 : 1
 
@@ -448,7 +446,7 @@ window.__ModuleLoader__.load({
       let ego = false
       let widened = false
 
-      if (view === 'ego' && focusId !== null) {
+      if (view === 'focus' && focusId !== null) {
         ego = true
         const within = egoNodes(focusId, base, depth)
         if (within.size > 1) {
@@ -917,7 +915,7 @@ window.__ModuleLoader__.load({
      */
     function GraphPanel(props) {
       const direction = props.direction === 'TB' ? 'TB' : 'LR'
-      const view = props.graphView === 'global' || props.graphView === 'ego' ? props.graphView : 'dim'
+      const view = props.graphView === 'focus' ? 'focus' : 'global'
       const undirected = props.undirected === true
       const depth = props.depth === '2' ? 2 : 1
       const built = React.useMemo(
@@ -926,7 +924,7 @@ window.__ModuleLoader__.load({
       )
       // 只有「全局+焦点」需要分档；ego 画出来的本来就是一圈，global 不淡化
       const tiers = React.useMemo(
-        () => (props.focusId === null || view !== 'dim' ? null : graphTiers(props.focusId, props.relations)),
+        () => (props.focusId === null || view !== 'global' ? null : graphTiers(props.focusId, props.relations)),
         [props.focusId, props.relations, view],
       )
       const hostRef = React.useRef(null)
@@ -1005,7 +1003,7 @@ window.__ModuleLoader__.load({
           ? h(
               'p',
               { className: 'dkf-note' },
-              `焦点一圈：${props.focusId} 与 ${depth} 跳内的 ${Math.max(0, built.byNode.size - 1)} 个邻居。`,
+              `聚焦：${props.focusId} 与 ${depth} 跳内的 ${Math.max(0, built.byNode.size - 1)} 个邻居。`,
             )
           : null,
         built.widened
@@ -1084,7 +1082,7 @@ window.__ModuleLoader__.load({
             h(Segmented, {
               label: '视图',
               options: GRAPH_VIEWS,
-              active: props.graphView === 'global' || props.graphView === 'ego' ? props.graphView : 'dim',
+              active: props.graphView === 'focus' ? 'focus' : 'global',
               onSelect: props.onView,
             }),
             h(
@@ -1098,9 +1096,9 @@ window.__ModuleLoader__.load({
               },
               '无向关联',
             ),
-            props.graphView === 'ego'
+            props.graphView === 'focus'
               ? h(Segmented, {
-                  label: '焦点一圈的半径',
+                  label: '聚焦的半径',
                   options: GRAPH_DEPTHS,
                   active: props.depth === '2' ? '2' : '1',
                   onSelect: props.onFocusDepth,
@@ -1272,7 +1270,7 @@ window.__ModuleLoader__.load({
       const [relationMode, setRelationMode] = React.useState(memory.relationMode ?? 'graph')
       const [graphDirection, setGraphDirection] = React.useState(memory.graphDirection === 'TB' ? 'TB' : 'LR')
       const [graphView, setGraphView] = React.useState(
-        memory.graphView === 'global' || memory.graphView === 'ego' ? memory.graphView : 'dim',
+        memory.graphView === 'focus' ? 'focus' : 'global',
       )
       const [graphUndirected, setGraphUndirected] = React.useState(memory.graphUndirected === true)
       const [graphDepth, setGraphDepth] = React.useState(memory.graphDepth === '2' ? '2' : '1')
@@ -1301,7 +1299,7 @@ window.__ModuleLoader__.load({
       }
       /** 视图 / 无向关联 / 半径：都按仓库记忆。视图与半径会重排，无向开关也会（边的集合变了）。 */
       const selectView = (id) => {
-        const value = id === 'global' || id === 'ego' ? id : 'dim'
+        const value = id === 'focus' ? 'focus' : 'global'
         setGraphView(value)
         writeViewState(cwd, { graphView: value })
       }

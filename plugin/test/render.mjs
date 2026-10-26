@@ -126,7 +126,7 @@ function render({
   expanded = null,
   mode = 'graph',
   direction = 'LR',
-  view = 'dim',
+  view = 'global',
   undirected = false,
   depth = '1',
 }) {
@@ -309,42 +309,33 @@ check('节点 id 能反查回 issue：data-id = n_<issue>', () => {
   for (const id of ['a', 'b', 'c']) assert.ok(source.includes(`  n_${id}["${id}"]`), source)
 })
 
-check('焦点一圈：焦点只挂无向关联时临时放开并说明', () => {
-  const tree = render({ tabId: 'relation', focusId: 'c', view: 'ego' })
+check('聚焦：焦点只挂无向关联时临时放开并说明', () => {
+  const tree = render({ tabId: 'relation', focusId: 'c', view: 'focus' })
   const source = mermaidOf(tree)
   assert.ok(source.includes('n_c["c"]'), `焦点 c 被藏掉了：\n${source}`)
   assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /只挂在无向关联上/)
 })
 
-check('控件：列表不画图；图里有视图与无向开关，半径只在「焦点一圈」出现', () => {
+check('控件：列表不画图；图里有视图与无向开关，半径只在「聚焦」出现', () => {
   const graph = render({ tabId: 'relation' })
-  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), [
-    '图',
-    '列表',
-    '横向',
-    '纵向',
-    '全局',
-    '全局+焦点',
-    '焦点一圈',
-    '无向关联',
-  ])
-  const ego = render({ tabId: 'relation', focusId: 'b', view: 'ego' })
+  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), ['图', '列表', '横向', '纵向', '全局', '聚焦', '无向关联'])
+  const ego = render({ tabId: 'relation', focusId: 'b', view: 'focus' })
   assert.deepEqual(byClass(ego, 'dkf-modebtn').map(textOf).slice(-2), ['1 跳', '2 跳'])
   const list = render({ tabId: 'relation', mode: 'list' })
   assert.equal(byClass(list, 'dkf-graph').length, 0)
   assert.deepEqual(byClass(list, 'dkf-modebtn').map(textOf), ['图', '列表'])
 })
 
-check('焦点一圈：1 跳只留直接邻居', () => {
-  const tree = render({ tabId: 'relation', focusId: 'b', view: 'ego' })
+check('聚焦：1 跳只留直接邻居', () => {
+  const tree = render({ tabId: 'relation', focusId: 'b', view: 'focus' })
   const nodes = mermaidOf(tree).split('\n').filter((line) => /^ {2}n_\w+\["/.test(line))
   assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b'])
-  assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /焦点一圈：b 与 1 跳内的 1 个邻居/)
+  assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /聚焦：b 与 1 跳内的 1 个邻居/)
 })
 
-check('焦点一圈：2 跳多出第二层（b→a→c）', () => {
-  const one = render({ tabId: 'relation', focusId: 'b', view: 'ego', depth: '1', undirected: true })
-  const two = render({ tabId: 'relation', focusId: 'b', view: 'ego', depth: '2', undirected: true })
+check('聚焦：2 跳多出第二层（b→a→c）', () => {
+  const one = render({ tabId: 'relation', focusId: 'b', view: 'focus', depth: '1', undirected: true })
+  const two = render({ tabId: 'relation', focusId: 'b', view: 'focus', depth: '2', undirected: true })
   const nodesOf = (tree) =>
     mermaidOf(tree)
       .split('\n')
@@ -354,25 +345,25 @@ check('焦点一圈：2 跳多出第二层（b→a→c）', () => {
   assert.deepEqual(nodesOf(two), ['n_a', 'n_b', 'n_c'], 'c 在 a 的另一侧，只有 2 跳才够得到')
 })
 
-check('全局+焦点：文本不动，只把焦点挂在 data-focus 上', () => {
-  const plain = render({ tabId: 'relation', view: 'dim' })
-  const focused = render({ tabId: 'relation', view: 'dim', focusId: 'b' })
+check('全局：文本不动，只把焦点挂在 data-focus 上', () => {
+  const plain = render({ tabId: 'relation', view: 'global' })
+  const focused = render({ tabId: 'relation', view: 'global', focusId: 'b' })
   assert.equal(mermaidOf(plain), mermaidOf(focused), '淡化档不重排')
   assert.equal(byClass(focused, 'dkf-graph')[0].props['data-focus'], 'b')
 })
 
-check('全局（不淡化）：与无焦点同一张图', () => {
+check('无焦点时：全局与有焦点同一张图', () => {
   const plain = render({ tabId: 'relation', view: 'global' })
   const focused = render({ tabId: 'relation', view: 'global', focusId: 'b' })
   assert.equal(mermaidOf(plain), mermaidOf(focused))
 })
 
-check('切焦点：全局/全局+焦点不变文本，焦点一圈必须重画', () => {
-  const dimA = render({ tabId: 'relation', focusId: 'a', view: 'dim' })
-  const dimB = render({ tabId: 'relation', focusId: 'b', view: 'dim' })
+check('切焦点：全局不变文本，聚焦必须重画', () => {
+  const dimA = render({ tabId: 'relation', focusId: 'a', view: 'global' })
+  const dimB = render({ tabId: 'relation', focusId: 'b', view: 'global' })
   assert.equal(mermaidOf(dimA), mermaidOf(dimB), '淡化档切焦点不重排')
-  const egoA = render({ tabId: 'relation', focusId: 'a', view: 'ego' })
-  const egoC = render({ tabId: 'relation', focusId: 'c', view: 'ego', undirected: true })
+  const egoA = render({ tabId: 'relation', focusId: 'a', view: 'focus' })
+  const egoC = render({ tabId: 'relation', focusId: 'c', view: 'focus', undirected: true })
   assert.notEqual(mermaidOf(egoA), mermaidOf(egoC), '焦点一圈换焦点就是要重画')
 })
 
