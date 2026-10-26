@@ -306,8 +306,9 @@ await check('缓存：读不到 HEAD 时不缓存，但功能不降级', async (
   assert.ok(state.calls.includes('graph'), '无 HEAD 时每次都重建')
 })
 
+let loaded = null
+
 await check('client：能加载、导出形态正确、注册 id=kiln 的 conversation.view', async () => {
-  let loaded = null
   globalThis.window = {
     __ModuleLoader__: {
       load: (definition) => {
@@ -320,6 +321,8 @@ await check('client：能加载、导出形态正确、注册 id=kiln 的 conver
     getElementById: () => ({}),
     createElement: () => ({}),
   }
+  // 打开测试缝，后面要直接调用 paintFocus（只在测试里开）
+  globalThis.__DSH_KILN_TEST__ = true
   await import('../lib/client.js?wiring=1')
   assert.equal(loaded?.id, '@local/dsh-kiln')
 
@@ -383,6 +386,106 @@ await check('Pele chunk：名字合法、自注册、导出 mount', async () => 
   assert.equal(typeof exported?.render, 'function')
   const { svg } = exported.render('flowchart LR\n  a["a"] -->|caused-by| b["b"]')
   assert.match(svg, /^<svg/)
+})
+
+// ---------------------------------------------------------------- 边淡化
+
+await check('边淡化：线、箭头、标签按同一个 data-id 一起淡，节点走自己的档', async () => {
+  // Pele 的边标签是 .pele-edge 的兄弟节点，但 data-id 相同——这里是这条契约的回归用例。
+  class FakeClassList {
+    constructor(initial) {
+      this.set = new Set(String(initial).split(' ').filter(Boolean))
+    }
+    contains(name) {
+      return this.set.has(name)
+    }
+    toggle(name, on) {
+      if (on) this.set.add(name)
+      else this.set.delete(name)
+    }
+  }
+  const element = (dataId, className) => ({
+    attrs: { 'data-id': dataId },
+    classList: new FakeClassList(className),
+    getAttribute(name) {
+      return this.attrs[name] ?? null
+    },
+  })
+  const nodes = [element('n_a', 'pele-node'), element('n_b', 'pele-node'), element('n_c', 'pele-node')]
+  const edges = [element('L_n_a_n_b_0', 'pele-edge'), element('L_n_b_n_c_0', 'pele-edge')]
+  const labels = [element('L_n_a_n_b_0', 'pele-edge-label'), element('L_n_b_n_c_0', 'pele-edge-label')]
+  const everything = [...nodes, ...edges, ...labels]
+  const host = {
+    querySelectorAll: (selector) => {
+      if (selector === '.pele-node') return nodes
+      if (selector === '.pele-edge, .pele-edge-label') return [...edges, ...labels]
+      return []
+    },
+  }
+
+  const built = {
+    byNode: new Map([
+      ['n_a', 'a'],
+      ['n_b', 'b'],
+      ['n_c', 'c'],
+    ]),
+    nodeOf: new Map([
+      ['a', 'n_a'],
+      ['b', 'n_b'],
+      ['c', 'n_c'],
+    ]),
+  }
+  const relations = [
+    { a: 'b', b: 'a', rel: 'caused-by' },
+    { a: 'b', b: 'c', rel: 'relates-to' },
+  ]
+  const reactStubForInternals = {
+    createElement: () => null,
+    Fragment: 'fragment',
+    useRef: (value) => ({ current: value }),
+    useState: (value) => [value, () => {}],
+    useEffect: () => {},
+    useMemo: (fn) => fn(),
+  }
+  const modForInternals = loaded.factory((name) => {
+    if (name === 'react') return reactStubForInternals
+    throw new Error('unexpected require: ' + name)
+  })
+  const { paintFocus, graphTiers } = modForInternals.__internals ?? {}
+  assert.equal(typeof paintFocus, 'function', '需要 __DSH_KILN_TEST__ 暴露内部函数')
+
+  // 焦点 b：a、c 都是一跳 → 两条边都该亮
+  const stats = paintFocus(host, graphTiers('b', relations), built)
+  assert.equal(stats.edges, 2)
+  assert.equal(stats.labels, 2)
+  assert.equal(stats.matched, 2, '两条边都该被认出来')
+  assert.ok(!edges[0].classList.contains('dkf-gedge-dim'))
+  assert.ok(!labels[0].classList.contains('dkf-gedge-label-dim'))
+
+  // 焦点 a：b 是一跳，c 不在圈内 → b-c 那条线的线与标签一起淡
+  paintFocus(host, graphTiers('a', relations), built)
+  assert.ok(!edges[0].classList.contains('dkf-gedge-dim'), 'a-b 与焦点有关')
+  assert.ok(edges[1].classList.contains('dkf-gedge-dim'), 'b-c 与焦点无关，线要淡')
+  assert.ok(labels[1].classList.contains('dkf-gedge-label-dim'), 'b-c 的标签要一起淡')
+  assert.ok(!labels[0].classList.contains('dkf-gedge-label-dim'))
+  assert.ok(nodes[2].classList.contains('dkf-gnode-dim'), 'c 不在圈内，节点要淡')
+
+  // 焦点清空：全部恢复
+  paintFocus(host, null, built)
+  for (const item of everything) {
+    assert.ok(!item.classList.contains('dkf-gedge-dim'))
+    assert.ok(!item.classList.contains('dkf-gedge-label-dim'))
+    assert.ok(!item.classList.contains('dkf-gnode-dim'))
+  }
+})
+
+await check('边淡化：认不出边元素时返回 0（上层据此提示，不静默）', async () => {
+  const reactStubForInternals = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const { paintFocus } = loaded.factory((name) => { if (name === 'react') return reactStubForInternals; throw new Error('unexpected require: ' + name) }).__internals ?? {}
+  const bare = { querySelectorAll: () => [] }
+  const stats = paintFocus(bare, { focus: 'a', related: new Set(['a']), relations: [] }, { byNode: new Map(), nodeOf: new Map() })
+  assert.equal(stats.edges, 0)
+  assert.equal(stats.labels, 0)
 })
 
 // ---------------------------------------------------------------- 汇总

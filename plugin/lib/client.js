@@ -257,8 +257,10 @@ window.__ModuleLoader__.load({
 .dkf-graphwrap{display:flex;flex-direction:column;gap:6px;min-width:0}
 .dkf-graph{border:.5px solid var(--dsw-alias-border-l2,#e3e3e3);border-radius:6px;min-height:260px;padding:6px;overflow:hidden;background:var(--dsw-alias-bg-layer-2,#fafafa)}
 .dkf-graph svg{display:block;max-width:100%;height:auto}
-.dkf-gnode-dim{opacity:.22;transition:opacity .12s ease}
-.dkf-gedge-dim{opacity:.18;transition:opacity .12s ease}
+.dkf-graph{--dkf-dim-node:.2;--dkf-dim-edge:.2;--dkf-dim-label:.2}
+.dkf-gnode-dim{opacity:var(--dkf-dim-node);transition:opacity .12s ease}
+.dkf-gedge-dim{opacity:var(--dkf-dim-edge);transition:opacity .12s ease}
+.dkf-gedge-label-dim{opacity:var(--dkf-dim-label);transition:opacity .12s ease}
 .dkf-gnode-focus{filter:drop-shadow(0 0 2px var(--dsw-alias-state-business-primary,#4176e6))}
 .dkf-mermaid{margin:0;padding:8px 10px;max-height:320px;overflow:auto;border-radius:4px;background:var(--dsw-alias-markdown-code-block,#f6f6f6);color:var(--dsw-alias-label-secondary,#666);font:11px/16px var(--dsw-font-family-code,monospace);white-space:pre}
 `
@@ -574,13 +576,20 @@ window.__ModuleLoader__.load({
 
     /**
      * 把聚焦画到已经渲染好的 SVG 上：只动 class 与透明度，节点位置一律不碰。
-     * Pele 的节点组带 `data-id`（等于 mermaid 源里的节点 id），边也带
-     * `data-id="L_<from>_<to>_<序号>"`，所以边也能逐条淡化——不然会出现“亮线连着暗节点”。
+     *
+     * Pele 的元素都带 `data-id`：节点是 `n_<id>`，边是 `L_<from>_<to>_<序号>`，
+     * 而**边的标签是兄弟节点**（`.pele-edge-label`），不在 `.pele-edge` 里，但 `data-id` 相同。
+     * 所以淡化按“边 id 集合”来，线和标签一起处理，不依赖它们各自的层级。
+     *
+     * 返回统计，供上层在“一条边都没认出来”时兜底说明（Pele 升级改了 id 形态会走到这里）。
      */
     function paintFocus(host, tiers, built) {
-      if (host === null || typeof host.querySelectorAll !== 'function') return
+      const stats = { nodes: 0, edges: 0, labels: 0, matched: 0 }
+      if (host === null || typeof host.querySelectorAll !== 'function') return stats
       const { byNode, nodeOf } = built
+
       for (const element of host.querySelectorAll('.pele-node')) {
+        stats.nodes += 1
         const id = byNode.get(element.getAttribute('data-id')) ?? null
         const related = tiers !== null && id !== null && tiers.related.has(id)
         element.classList.toggle('dkf-gnode-dim', tiers !== null && !related)
@@ -599,13 +608,24 @@ window.__ModuleLoader__.load({
         const from = nodeOf.get(relation.a)
         const to = nodeOf.get(relation.b)
         if (from === undefined || to === undefined) continue
-        if (bright.has(from) || bright.has(to)) prefixes.push(`L_${from}_${to}_`)
+        // 两端都在圈里才亮：一端在圈里、另一端在圈外的边，就是“亮线连暗节点”的元凶
+        if (!bright.has(from) || !bright.has(to)) continue
+        // 两个方向都认：renders 的顺序由 Pele 决定，不该由我们猜
+        prefixes.push(`L_${from}_${to}_`, `L_${to}_${from}_`)
       }
-      for (const element of host.querySelectorAll('.pele-edge')) {
+
+      for (const element of host.querySelectorAll('.pele-edge, .pele-edge-label')) {
+        const isLabel = element.classList.contains('pele-edge-label')
         const dataId = element.getAttribute('data-id') ?? ''
         const incident = prefixes.some((prefix) => dataId.startsWith(prefix))
-        element.classList.toggle('dkf-gedge-dim', tiers !== null && !incident)
+        if (isLabel) stats.labels += 1
+        else {
+          stats.edges += 1
+          if (dataId !== '' && incident) stats.matched += 1
+        }
+        element.classList.toggle(isLabel ? 'dkf-gedge-label-dim' : 'dkf-gedge-dim', tiers !== null && !incident)
       }
+      return stats
     }
 
     /** 三页共用的“相关集”：焦点 + 一跳邻居。 */
@@ -929,6 +949,7 @@ window.__ModuleLoader__.load({
       )
       const hostRef = React.useRef(null)
       const [phase, setPhase] = React.useState('idle')
+      const [edgeDimLost, setEdgeDimLost] = React.useState(false)
 
       React.useEffect(() => {
         const host = hostRef.current
@@ -963,7 +984,9 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         if (phase !== 'ready') return
-        paintFocus(hostRef.current, tiers, built)
+        const stats = paintFocus(hostRef.current, tiers, built)
+        // Pele 改了 id 形态就会走到这里：一条边都没认出来 → 说明淡化没生效，别静默
+        setEdgeDimLost(tiers !== null && stats.edges === 0)
       }, [phase, built, tiers])
 
       const onClick = (event) => {
@@ -1024,6 +1047,9 @@ window.__ModuleLoader__.load({
                 ' 显示无向',
               ),
             )
+          : null,
+        edgeDimLost
+          ? h('p', { className: 'dkf-note' }, '没在 SVG 里认出任何边元素，这一轮不做边淡化（Pele 可能改了 data-id 形态）。')
           : null,
         built.dropped > 0 ? h('p', { className: 'dkf-note' }, `${built.dropped} 条边指向快照外的 issue，未画。`) : null,
         h(
@@ -1564,6 +1590,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers } } : {}) }
   },
 })
