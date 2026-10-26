@@ -738,6 +738,17 @@ await check('时间线筛选：动作与领域两组，过滤的是动作行', a
   assert.equal(filterRows(rows, readRowFilters(undefined), byId).length, 3, '没筛选就是原样')
 })
 
+await check('标签筛选的语义：组名上挂「并集」提示（tag 是动作级的）', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const { filterGroups } = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals ?? {}
+  const tags = (filterGroups ?? []).find((group) => group.id === 'tags')
+  assert.ok(tags !== undefined, '标签必须是一组')
+  assert.match(String(tags.hint ?? ''), /并集/, 'tag 源在动作的 trailer 上，筛选是"任一动作带过"，要在提示里说清')
+})
+
 // ---------------------------------------------------------------- 汇总
 console.log('')
 if (failures.length === 0) {

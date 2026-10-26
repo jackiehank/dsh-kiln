@@ -62,7 +62,11 @@ window.__ModuleLoader__.load({
     const FILTER_GROUPS = [
       { id: 'domains', label: '领域' },
       { id: 'states', label: '状态' },
-      { id: 'tags', label: '标签' },
+      {
+        id: 'tags',
+        label: '标签',
+        hint: '任一条动作的提交带过这个标签（kiln 的 tag 写在动作的 trailer 上，这里筛的是并集）',
+      },
     ]
     /** 时间线的筛选组：动作名 + 算在动作头上的领域。 */
     const ROW_FILTER_GROUPS = [
@@ -2198,6 +2202,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, css: CSS } } : {}) }
   },
 })
