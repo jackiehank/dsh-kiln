@@ -1001,12 +1001,27 @@ window.__ModuleLoader__.load({
       for (const issue of issues) {
         const id = String(issue?.id ?? '')
         const title = String(issue?.title ?? '')
-        const haystack = `${id.toLowerCase()} ${title.toLowerCase()}`
+        // 快照里已经带着每个动作的标题：一起当检索面，否则"我记得这条 issue 讨论过 X、
+        // 但 X 只出现在早期动作里"就搜不到（见 docs/issues/kiln-search.md 的"为什么搜『搜索』没结果"）
+        const actions = Array.isArray(issue?.actions) ? issue.actions : []
+        const actionTitles = actions.map((action) => String(action?.title ?? '')).filter((text) => text !== '')
+        const haystack = [id, title, ...actionTitles].map((text) => text.toLowerCase()).join(' \u0000 ')
         if (!terms.every((term) => haystack.includes(term))) continue
-        const idHit = terms.every((term) => id.toLowerCase().includes(term))
-        const titleHit = terms.every((term) => title.toLowerCase().includes(term))
-        const rank = id.toLowerCase().startsWith(terms[0]) ? 0 : idHit ? 1 : titleHit ? 2 : 3
-        rows.push({ issue, rank, idRanges: matchRanges(id, terms), titleRanges: matchRanges(title, terms) })
+        const hasAll = (text) => terms.every((term) => text.toLowerCase().includes(term))
+        const idHit = hasAll(id)
+        const titleHit = hasAll(title)
+        const historyTitle = titleHit ? null : (actionTitles.find(hasAll) ?? null)
+        const rank = id.toLowerCase().startsWith(terms[0]) ? 0 : idHit ? 1 : titleHit ? 2 : historyTitle !== null ? 3 : 4
+        // 展示能看见命中的那条标题：当前标题优先，否则用命中的历史动作标题
+        const shown = titleHit ? title : (historyTitle ?? title)
+        rows.push({
+          issue,
+          rank,
+          title: shown,
+          history: historyTitle !== null,
+          idRanges: matchRanges(id, terms),
+          titleRanges: matchRanges(shown, terms),
+        })
       }
       rows.sort((left, right) => left.rank - right.rank || byRecency(left.issue, right.issue))
       return rows
@@ -1300,10 +1315,11 @@ window.__ModuleLoader__.load({
               onClick: () => props.onPick(row.issue.id),
             },
             h('span', { className: 'dkf-id' }, highlightParts(String(row.issue.id), row.idRanges)),
-            h('span', { className: 'dkf-title' }, highlightParts(String(row.issue.title ?? ''), row.titleRanges)),
+            h('span', { className: 'dkf-title' }, highlightParts(String(row.title ?? ''), row.titleRanges)),
             h(
               'span',
               { className: 'dkf-badges' },
+              row.history ? h('span', { className: 'dkf-chip', 'data-hint': '命中的是这条 issue 早期动作的标题' }, '历史标题') : null,
               row.issue.domain ? h('span', { className: 'dkf-chip' }, row.issue.domain) : null,
               h('span', { className: 'dkf-chip' }, row.issue.done === true ? '已完成' : '进行中'),
             ),

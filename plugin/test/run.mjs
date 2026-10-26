@@ -769,6 +769,21 @@ await check('搜索：切词、AND、排序与高亮区间', async () => {
   assert.deepEqual(searchIssues(issues, 'SEARCH').map((row) => row.issue.id), ['kiln-search'], '大小写不敏感')
   assert.deepEqual(searchIssues(issues, '  '), [], '空查询不出结果')
   assert.deepEqual(searchIssues(issues, 'nonexistent'), [])
+
+  // 早期动作标题也要能搜到（契约见 docs/issues/kiln-search.md「为什么搜『搜索』没结果」）
+  const deep = [
+    {
+      id: 'kiln-search',
+      title: '撤掉 accent 强调条',
+      actions: [{ title: '三页都只能按属性收窄' }, { title: '落地：页头中间常驻搜索框' }],
+      last: { date: '2026-10-02' },
+    },
+  ]
+  const found = searchIssues(deep, '搜索')
+  assert.equal(found.length, 1, '只出现在早期动作标题里的词也要命中')
+  assert.equal(found[0].title, '落地：页头中间常驻搜索框', '展示命中的那条标题，否则高亮看不见')
+  assert.equal(found[0].history, true, '要标出这是历史标题')
+  assert.deepEqual(found[0].titleRanges, [[9, 11]], '高亮落在展示的那条标题上')
 })
 
 await check('搜索框真居中：页头是左右等宽的三栏网格，输入框占中间那栏', async () => {

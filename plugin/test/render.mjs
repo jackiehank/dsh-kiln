@@ -279,6 +279,15 @@ check('搜索：有输入就换成结果列表，页栏显示命中数', () => {
   assert.equal(byClass(hits[0], 'dkf-hl').length > 0, true, '命中片段要能高亮')
 })
 
+check('搜索：命中早期动作标题时，行里显示那条标题并标「历史标题」', () => {
+  const view = render({ tabId: 'issue', query: '动作 1' })
+  const hits = byClass(view, 'dkf-hit')
+  assert.equal(hits.length, 3, '三个 issue 的第 1 条动作标题都含「动作 1」')
+  const chips = byClass(hits[0], 'dkf-chip').map(textOf)
+  assert.ok(chips.includes('历史标题'), '要标出命中的不是当前标题')
+  assert.match(textOf(byClass(hits[0], 'dkf-title')[0]), /动作 1/, '显示的是命中的那条标题')
+  assert.equal(byClass(hits[0], 'dkf-hl').length > 0, true, '高亮落在显示的标题上')
+})
 check('搜索：没有命中时给明确空态', () => {
   const view = render({ tabId: 'issue', query: 'zzz' })
   assert.equal(byClass(view, 'dkf-hit').length, 0)
