@@ -288,9 +288,10 @@ check('relation 页默认（全局、无焦点）：只画有向关系', () => {
   assert.match(source, /^flowchart LR/)
   const nodes = source.split('\n').filter((line) => /^ {2}n_\w+\["/.test(line))
   assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b'], 'c 只挂在无向关联上，没焦点时不画')
-  assert.ok(source.includes('n_b -->|caused-by| n_a'), source)
+  assert.ok(source.includes('n_b --> n_a'), source)
   assert.ok(source.includes('linkStyle 0 stroke-width:1.6px,stroke-dasharray:10 5'), 'caused-by 应是长虚线')
   assert.ok(!source.includes('---'), '无焦点时不含无向边')
+  assert.ok(!source.includes('|'), '边上不该再有标签')
   assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /只画有向关系：另 1 条无向关联/)
 })
 

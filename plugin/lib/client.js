@@ -511,6 +511,7 @@ window.__ModuleLoader__.load({
 
       let dropped = 0
       let edgeIndex = 0
+      const drawn = new Set()
       for (const relation of kept) {
         const from = nodeOf.get(relation.a)
         const to = nodeOf.get(relation.b)
@@ -518,9 +519,10 @@ window.__ModuleLoader__.load({
           dropped += 1
           continue
         }
-        const label = `|${relation.rel}|`
-        if (relation.directed === false) lines.push(`  ${from} ---${label} ${to}`)
-        else lines.push(`  ${from} -->${label} ${to}`)
+        drawn.add(relation.rel)
+        // 不要边标签：关系类型由线型 + 图例表达，标签会重复几十遍（见本 issue 的 collect）
+        if (relation.directed === false) lines.push(`  ${from} --- ${to}`)
+        else lines.push(`  ${from} --> ${to}`)
         // 线型统一走 linkStyle：序号就是上面的声明顺序，稳定可控
         const stroke = EDGE_STROKE[relation.rel]
         if (stroke !== undefined) lines.push(`  linkStyle ${edgeIndex} ${stroke}`)
@@ -536,6 +538,7 @@ window.__ModuleLoader__.load({
         dropped,
         ego,
         focusId,
+        drawn,
         hidden: { edges: relations.length - kept.length, nodes: issues.length - visible.length },
       }
     }
@@ -1039,11 +1042,6 @@ window.__ModuleLoader__.load({
                   : '正在准备图渲染器…',
             )
 
-      const drawnRelations = new Set()
-      for (const line of built.source.split('\n')) {
-        const matched = /\|([a-z-]+)\|/.exec(line)
-        if (matched !== null) drawnRelations.add(matched[1])
-      }
 
       return h(
         'div',
@@ -1057,7 +1055,7 @@ window.__ModuleLoader__.load({
           onClick,
         }),
         phase === 'ready' ? null : h('pre', { className: 'dkf-mermaid' }, built.source),
-        h(EdgeLegend, { drawn: drawnRelations }),
+        h(EdgeLegend, { drawn: built.drawn }),
         built.ego && props.focusId !== null
           ? h(
               'p',
