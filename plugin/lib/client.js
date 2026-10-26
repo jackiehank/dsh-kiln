@@ -102,7 +102,6 @@ window.__ModuleLoader__.load({
       relationMode: 'graph',
       graphDirection: 'LR',
       graphView: 'global',
-      graphUndirected: false,
       graphDepth: '1',
     }
 
@@ -433,41 +432,35 @@ window.__ModuleLoader__.load({
      *
      * 三个输入决定文本：
      *   · `direction` —— `LR` / `TB`；
-     *   · `undirected` —— 要不要把无向的 `relates-to` 也画进来（默认不画：58 节点里 53 条边是它，
-     *     去掉后交叉 112 → 0，见 docs/issues/kiln-graph-readability.md）；
+     *   · 无向的 `relates-to` 平时不画（58 节点里 53 条边是它，去掉后交叉 112 → 0）；
+     *     但**有焦点时**会把焦点的无向邻居一起带出来——它们正是“相关但没方向”的那一圈；
      *   · `view` —— `global` 全图 / `dim` 全图+淡化（文本同 global）/ `ego` 只画焦点邻域（`depth` 跳）。
      *
      * 只有后两者会改文本，所以「全局 / 全局+焦点」两档切焦点不重排，只有 `ego` 会重画。
      */
     function buildMermaid(issues, relations, options = {}) {
       const direction = options.direction === 'TB' ? 'TB' : 'LR'
-      const undirected = options.undirected === true
       const view = options.view === 'focus' ? 'focus' : 'global'
       const focusId = options.focusId ?? null
       const depth = options.depth === 2 ? 2 : 1
 
-      const base = undirected ? relations : relations.filter((relation) => relation.directed !== false)
-      let kept = base
+      const directed = relations.filter((relation) => relation.directed !== false)
+      let kept = directed
       let ego = false
-      let widened = false
 
       if (view === 'focus' && focusId !== null) {
+        // 聚焦：以焦点为中心，全部关系类型，depth 跳
         ego = true
-        const within = egoNodes(focusId, base, depth)
-        if (within.size > 1) {
-          kept = edgesWithin(base, within)
-        } else if (!undirected) {
-          // 焦点只挂在被藏起来的那一类边上：这一张临时放开，否则画出来是个空图
-          const wider = egoNodes(focusId, relations, depth)
-          if (wider.size > 1) {
-            widened = true
-            kept = edgesWithin(relations, wider)
-          } else {
-            kept = []
-          }
-        } else {
-          kept = []
-        }
+        const within = egoNodes(focusId, relations, depth)
+        kept = within.size > 1 ? edgesWithin(relations, within) : []
+      } else if (focusId !== null) {
+        // 全局 + 有焦点：有向骨架 + 焦点自己的无向邻居（它们“相关但没有方向”，值得亮着）
+        kept = [
+          ...directed,
+          ...relations.filter(
+            (relation) => relation.directed === false && (relation.a === focusId || relation.b === focusId),
+          ),
+        ]
       }
 
       const touched = new Set()
@@ -476,7 +469,7 @@ window.__ModuleLoader__.load({
         touched.add(relation.b)
       }
       if (ego) touched.add(focusId)
-      const visible = undirected && !ego ? issues : issues.filter((issue) => touched.has(issue.id))
+      const visible = issues.filter((issue) => touched.has(issue.id))
 
       const nodeOf = new Map()
       const byNode = new Map()
@@ -527,7 +520,6 @@ window.__ModuleLoader__.load({
         byNode,
         dropped,
         ego,
-        widened,
         hidden: { edges: relations.length - kept.length, nodes: issues.length - visible.length },
       }
     }
@@ -939,11 +931,10 @@ window.__ModuleLoader__.load({
     function GraphPanel(props) {
       const direction = props.direction === 'TB' ? 'TB' : 'LR'
       const view = props.graphView === 'focus' ? 'focus' : 'global'
-      const undirected = props.undirected === true
       const depth = props.depth === '2' ? 2 : 1
       const built = React.useMemo(
-        () => buildMermaid(props.issues, props.relations, { direction, undirected, view, focusId: props.focusId, depth }),
-        [props.issues, props.relations, direction, undirected, view, props.focusId, depth],
+        () => buildMermaid(props.issues, props.relations, { direction, view, focusId: props.focusId, depth }),
+        [props.issues, props.relations, direction, view, props.focusId, depth],
       )
       // 只有「全局+焦点」需要分档；ego 画出来的本来就是一圈，global 不淡化
       const tiers = React.useMemo(
@@ -1032,23 +1023,13 @@ window.__ModuleLoader__.load({
               `聚焦：${props.focusId} 与 ${depth} 跳内的 ${Math.max(0, built.byNode.size - 1)} 个邻居。`,
             )
           : null,
-        built.widened
+        !built.ego && built.hidden.edges > 0
           ? h(
               'p',
               { className: 'dkf-note' },
-              `焦点 ${props.focusId} 只挂在无向关联上，这一张临时把它们也画了。`,
-            )
-          : null,
-        !undirected && !built.ego && built.hidden.edges > 0
-          ? h(
-              'p',
-              { className: 'dkf-note' },
-              `已隐藏 ${built.hidden.edges} 条无向关联、${built.hidden.nodes} 个只挂在它们上面的 issue。`,
-              h(
-                'button',
-                { type: 'button', className: 'dkf-toggle', onClick: () => props.onUndirected(true) },
-                ' 显示无向',
-              ),
+              props.focusId === null
+                ? `只画有向关系：另 ${built.hidden.edges} 条无向关联、${built.hidden.nodes} 个只挂在它们上面的 issue 没画。点一个 issue 就能看到它那一圈。`
+                : `只画有向关系：另 ${built.hidden.edges} 条无向关联没画（焦点的无向邻居已包含在内）。`,
             )
           : null,
         edgeDimLost
@@ -1114,17 +1095,6 @@ window.__ModuleLoader__.load({
               active: props.graphView === 'focus' ? 'focus' : 'global',
               onSelect: props.onView,
             }),
-            h(
-              'button',
-              {
-                type: 'button',
-                className: `dkf-modebtn${props.undirected ? ' dkf-modebtn-active' : ''}`,
-                'aria-pressed': props.undirected,
-                title: '把无向的 relates-to 也画进图里',
-                onClick: () => props.onUndirected(!props.undirected),
-              },
-              '无向关联',
-            ),
             props.graphView === 'focus'
               ? h(Segmented, {
                   label: '聚焦的半径',
@@ -1140,9 +1110,7 @@ window.__ModuleLoader__.load({
             focusId: props.focusId,
             direction: props.direction,
             graphView: props.graphView,
-            undirected: props.undirected,
             depth: props.depth,
-            onUndirected: props.onUndirected,
             onFocus: props.onFocus,
           }),
         )
@@ -1301,7 +1269,6 @@ window.__ModuleLoader__.load({
       const [graphView, setGraphView] = React.useState(
         memory.graphView === 'focus' ? 'focus' : 'global',
       )
-      const [graphUndirected, setGraphUndirected] = React.useState(memory.graphUndirected === true)
       const [graphDepth, setGraphDepth] = React.useState(memory.graphDepth === '2' ? '2' : '1')
 
       const selectTab = (id) => {
@@ -1326,16 +1293,11 @@ window.__ModuleLoader__.load({
         setGraphDirection(value)
         writeViewState(cwd, { graphDirection: value })
       }
-      /** 视图 / 无向关联 / 半径：都按仓库记忆。视图与半径会重排，无向开关也会（边的集合变了）。 */
+      /** 视图 / 半径：都按仓库记忆；两者都会重排。 */
       const selectView = (id) => {
         const value = id === 'focus' ? 'focus' : 'global'
         setGraphView(value)
         writeViewState(cwd, { graphView: value })
-      }
-      const toggleUndirected = (next) => {
-        const value = next === true
-        setGraphUndirected(value)
-        writeViewState(cwd, { graphUndirected: value })
       }
       const selectDepth = (id) => {
         const value = id === '2' ? '2' : '1'
@@ -1508,7 +1470,6 @@ window.__ModuleLoader__.load({
             mode: relationMode,
             direction: graphDirection,
             graphView,
-            undirected: graphUndirected,
             depth: graphDepth,
             issues,
             relations,
@@ -1521,7 +1482,6 @@ window.__ModuleLoader__.load({
             onMode: selectMode,
             onDirection: selectDirection,
             onView: selectView,
-            onUndirected: toggleUndirected,
             onFocusDepth: selectDepth,
             onToggleWeak: () => setExpandedWeak((value) => !value),
             onToggleChildren: () => setExpandedChildren((value) => !value),

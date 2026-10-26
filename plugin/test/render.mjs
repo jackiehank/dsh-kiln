@@ -127,7 +127,6 @@ function render({
   mode = 'graph',
   direction = 'LR',
   view = 'global',
-  undirected = false,
   depth = '1',
 }) {
   const React = makeReact([
@@ -140,8 +139,7 @@ function render({
     false, //                    expandedChildren
     mode, //                     relationMode（关系页取景）
     direction, //                graphDirection（图方向）
-    view, //                     graphView（全局 / 全局+焦点 / 焦点一圈）
-    undirected, //               graphUndirected（画不画 relates-to）
+    view, //                     graphView（全局 / 聚焦）
     depth, //                    graphDepth（一圈的半径）
   ])
   const requireOf = (name) => {
@@ -284,41 +282,42 @@ function mermaidOf(tree) {
   return String(hosts[0].props['data-mermaid'] ?? '')
 }
 
-check('relation 页默认：全局+焦点视图，不画无向关联', () => {
+check('relation 页默认（全局、无焦点）：只画有向关系', () => {
   const tree = render({ tabId: 'relation' })
   const source = mermaidOf(tree)
   assert.match(source, /^flowchart LR/)
   const nodes = source.split('\n').filter((line) => /^ {2}n_\w+\["/.test(line))
-  assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b'], 'c 只挂在无向关联上，默认不画')
+  assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b'], 'c 只挂在无向关联上，没焦点时不画')
   assert.ok(source.includes('n_b -.->|caused-by| n_a'), source)
-  assert.ok(!source.includes('---'), '关掉无向关联时不该出现无向边')
-  assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /已隐藏 1 条无向关联/)
+  assert.ok(!source.includes('---'), '无焦点时不含无向边')
+  assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /只画有向关系：另 1 条无向关联/)
 })
 
-check('打开无向关联：边与只挂它的节点都回来', () => {
-  const tree = render({ tabId: 'relation', undirected: true })
+check('全局 + 有焦点：焦点的无向邻居被带出来（不再需要开关）', () => {
+  const tree = render({ tabId: 'relation', focusId: 'a' })
   const source = mermaidOf(tree)
-  const nodes = source.split('\n').filter((line) => /^ {2}n_\w+\["/.test(line))
-  assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b', 'n_c'])
+  assert.ok(source.includes('n_c["c"]'), source)
   assert.ok(source.includes('n_c ---|relates-to| n_a'), source)
-  assert.ok(!/已隐藏/.test(byClass(tree, 'dkf-note').map(textOf).join('\n')))
+  // b 与 a 有向相连，但不该因此把别的无向边也拖进来
+  assert.equal(source.split('\n').filter((line) => line.includes('---|')).length, 1)
 })
 
 check('节点 id 能反查回 issue：data-id = n_<issue>', () => {
-  const source = mermaidOf(render({ tabId: 'relation', undirected: true }))
+  const source = mermaidOf(render({ tabId: 'relation', focusId: 'a' }))
   for (const id of ['a', 'b', 'c']) assert.ok(source.includes(`  n_${id}["${id}"]`), source)
 })
 
-check('聚焦：焦点只挂无向关联时临时放开并说明', () => {
+check('聚焦：只有无向邻居也能画出一圈', () => {
   const tree = render({ tabId: 'relation', focusId: 'c', view: 'focus' })
   const source = mermaidOf(tree)
-  assert.ok(source.includes('n_c["c"]'), `焦点 c 被藏掉了：\n${source}`)
-  assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /只挂在无向关联上/)
+  assert.ok(source.includes('n_c["c"]'), source)
+  assert.ok(source.includes('n_a["a"]'), source)
+  assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /聚焦：c 与 1 跳内的 1 个邻居/)
 })
 
-check('控件：列表不画图；图里有视图与无向开关，半径只在「聚焦」出现', () => {
+check('控件：列表不画图；图里只剩视图与方向，半径只在「聚焦」出现', () => {
   const graph = render({ tabId: 'relation' })
-  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), ['图', '列表', '横向', '纵向', '全局', '聚焦', '无向关联'])
+  assert.deepEqual(byClass(graph, 'dkf-modebtn').map(textOf), ['图', '列表', '横向', '纵向', '全局', '聚焦'])
   const ego = render({ tabId: 'relation', focusId: 'b', view: 'focus' })
   assert.deepEqual(byClass(ego, 'dkf-modebtn').map(textOf).slice(-2), ['1 跳', '2 跳'])
   const list = render({ tabId: 'relation', mode: 'list' })
@@ -334,37 +333,29 @@ check('聚焦：1 跳只留直接邻居', () => {
 })
 
 check('聚焦：2 跳多出第二层（b→a→c）', () => {
-  const one = render({ tabId: 'relation', focusId: 'b', view: 'focus', depth: '1', undirected: true })
-  const two = render({ tabId: 'relation', focusId: 'b', view: 'focus', depth: '2', undirected: true })
   const nodesOf = (tree) =>
     mermaidOf(tree)
       .split('\n')
       .filter((line) => /^ {2}n_\w+\["/.test(line))
       .map((line) => line.trim().slice(0, 3))
-  assert.deepEqual(nodesOf(one), ['n_a', 'n_b'])
-  assert.deepEqual(nodesOf(two), ['n_a', 'n_b', 'n_c'], 'c 在 a 的另一侧，只有 2 跳才够得到')
+  assert.deepEqual(nodesOf(render({ tabId: 'relation', focusId: 'b', view: 'focus', depth: '1' })), ['n_a', 'n_b'])
+  assert.deepEqual(nodesOf(render({ tabId: 'relation', focusId: 'b', view: 'focus', depth: '2' })), ['n_a', 'n_b', 'n_c'], 'c 在 a 的另一侧，只有 2 跳才够得到')
 })
 
-check('全局：文本不动，只把焦点挂在 data-focus 上', () => {
-  const plain = render({ tabId: 'relation', view: 'global' })
-  const focused = render({ tabId: 'relation', view: 'global', focusId: 'b' })
-  assert.equal(mermaidOf(plain), mermaidOf(focused), '淡化档不重排')
+check('全局：焦点只影响它自己那一圈，有向骨架不动', () => {
+  const plain = render({ tabId: 'relation' })
+  const focused = render({ tabId: 'relation', focusId: 'b' })
+  assert.equal(mermaidOf(plain), mermaidOf(focused), 'b 没有无向邻居，文本不变')
   assert.equal(byClass(focused, 'dkf-graph')[0].props['data-focus'], 'b')
 })
 
-check('无焦点时：全局与有焦点同一张图', () => {
-  const plain = render({ tabId: 'relation', view: 'global' })
-  const focused = render({ tabId: 'relation', view: 'global', focusId: 'b' })
-  assert.equal(mermaidOf(plain), mermaidOf(focused))
-})
-
-check('切焦点：全局不变文本，聚焦必须重画', () => {
-  const dimA = render({ tabId: 'relation', focusId: 'a', view: 'global' })
-  const dimB = render({ tabId: 'relation', focusId: 'b', view: 'global' })
-  assert.equal(mermaidOf(dimA), mermaidOf(dimB), '淡化档切焦点不重排')
+check('切焦点：焦点有无向邻居时全局会补上那几条边，聚焦则整张重画', () => {
+  const withWeak = render({ tabId: 'relation', focusId: 'a' })
+  const withoutWeak = render({ tabId: 'relation', focusId: 'b' })
+  assert.notEqual(mermaidOf(withWeak), mermaidOf(withoutWeak), 'a 有无向邻居，b 没有')
   const egoA = render({ tabId: 'relation', focusId: 'a', view: 'focus' })
-  const egoC = render({ tabId: 'relation', focusId: 'c', view: 'focus', undirected: true })
-  assert.notEqual(mermaidOf(egoA), mermaidOf(egoC), '焦点一圈换焦点就是要重画')
+  const egoC = render({ tabId: 'relation', focusId: 'c', view: 'focus' })
+  assert.notEqual(mermaidOf(egoA), mermaidOf(egoC))
 })
 
 check('图方向：默认横向，切纵向只换 flowchart 的方向词', () => {
