@@ -293,17 +293,17 @@ check('relation 页默认（全局、无焦点）：只画有向关系', () => {
   assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /只画有向关系：另 1 条无向关联/)
 })
 
-check('全局 + 有焦点：焦点的无向邻居被带出来（不再需要开关）', () => {
-  const tree = render({ tabId: 'relation', focusId: 'a' })
-  const source = mermaidOf(tree)
-  assert.ok(source.includes('n_c["c"]'), source)
-  assert.ok(source.includes('n_c ---|relates-to| n_a'), source)
-  // b 与 a 有向相连，但不该因此把别的无向边也拖进来
-  assert.equal(source.split('\n').filter((line) => line.includes('---|')).length, 1)
+check('全局 + 有焦点：布局不变，只把焦点挂在 data-focus 上', () => {
+  const plain = render({ tabId: 'relation' })
+  const focused = render({ tabId: 'relation', focusId: 'a' })
+  assert.equal(mermaidOf(plain), mermaidOf(focused), '全局视图切焦点不重排（无向边不参与绘制）')
+  assert.equal(byClass(focused, 'dkf-graph')[0].props['data-focus'], 'a')
+  assert.ok(!mermaidOf(focused).includes('---'), '无向边不画')
 })
 
 check('节点 id 能反查回 issue：data-id = n_<issue>', () => {
-  const source = mermaidOf(render({ tabId: 'relation', focusId: 'a' }))
+  // 聚焦视图里三种关系都在，三个节点都会出现
+  const source = mermaidOf(render({ tabId: 'relation', focusId: 'a', view: 'focus', depth: '2' }))
   for (const id of ['a', 'b', 'c']) assert.ok(source.includes(`  n_${id}["${id}"]`), source)
 })
 
@@ -349,10 +349,10 @@ check('全局：焦点只影响它自己那一圈，有向骨架不动', () => {
   assert.equal(byClass(focused, 'dkf-graph')[0].props['data-focus'], 'b')
 })
 
-check('切焦点：焦点有无向邻居时全局会补上那几条边，聚焦则整张重画', () => {
-  const withWeak = render({ tabId: 'relation', focusId: 'a' })
-  const withoutWeak = render({ tabId: 'relation', focusId: 'b' })
-  assert.notEqual(mermaidOf(withWeak), mermaidOf(withoutWeak), 'a 有无向邻居，b 没有')
+check('切焦点：全局一律不动文本，聚焦一律重画', () => {
+  const a = render({ tabId: 'relation', focusId: 'a' })
+  const b = render({ tabId: 'relation', focusId: 'b' })
+  assert.equal(mermaidOf(a), mermaidOf(b), '全局视图切焦点不重排')
   const egoA = render({ tabId: 'relation', focusId: 'a', view: 'focus' })
   const egoC = render({ tabId: 'relation', focusId: 'c', view: 'focus' })
   assert.notEqual(mermaidOf(egoA), mermaidOf(egoC))

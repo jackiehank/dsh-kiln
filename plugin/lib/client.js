@@ -453,14 +453,6 @@ window.__ModuleLoader__.load({
         ego = true
         const within = egoNodes(focusId, relations, depth)
         kept = within.size > 1 ? edgesWithin(relations, within) : []
-      } else if (focusId !== null) {
-        // 全局 + 有焦点：有向骨架 + 焦点自己的无向邻居（它们“相关但没有方向”，值得亮着）
-        kept = [
-          ...directed,
-          ...relations.filter(
-            (relation) => relation.directed === false && (relation.a === focusId || relation.b === focusId),
-          ),
-        ]
       }
 
       const touched = new Set()
@@ -1027,9 +1019,7 @@ window.__ModuleLoader__.load({
           ? h(
               'p',
               { className: 'dkf-note' },
-              props.focusId === null
-                ? `只画有向关系：另 ${built.hidden.edges} 条无向关联、${built.hidden.nodes} 个只挂在它们上面的 issue 没画。点一个 issue 就能看到它那一圈。`
-                : `只画有向关系：另 ${built.hidden.edges} 条无向关联没画（焦点的无向邻居已包含在内）。`,
+              `只画有向关系：另 ${built.hidden.edges} 条无向关联、${built.hidden.nodes} 个只挂在它们上面的 issue 没画；它们的关系可以到「聚焦」里看。`,
             )
           : null,
         edgeDimLost
