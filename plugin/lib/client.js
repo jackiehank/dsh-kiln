@@ -263,7 +263,8 @@ window.__ModuleLoader__.load({
 .dkf-gedge-dim path{stroke:var(--dkf-dim-edge-color);transition:stroke .12s ease}
 .dkf-gedge-dim .pele-marker{fill:var(--dkf-dim-edge-color)}
 .dkf-gedge-label-dim text{fill:var(--dkf-dim-label-color);transition:fill .12s ease}
-.dkf-gnode-focus{filter:drop-shadow(0 0 2px var(--dsw-alias-state-business-primary,#4176e6))}
+.dkf-graph{--dkf-focus-glow:2px;--dkf-focus-color:var(--dsw-alias-state-business-primary,#4176e6)}
+.dkf-gnode-focus{filter:drop-shadow(0 0 var(--dkf-focus-glow) var(--dkf-focus-color)) drop-shadow(0 0 calc(var(--dkf-focus-glow) * 2) var(--dkf-focus-color))}
 .dkf-mermaid{margin:0;padding:8px 10px;max-height:320px;overflow:auto;border-radius:4px;background:var(--dsw-alias-markdown-code-block,#f6f6f6);color:var(--dsw-alias-label-secondary,#666);font:11px/16px var(--dsw-font-family-code,monospace);white-space:pre}
 `
 
@@ -512,6 +513,7 @@ window.__ModuleLoader__.load({
         byNode,
         dropped,
         ego,
+        focusId,
         hidden: { edges: relations.length - kept.length, nodes: issues.length - visible.length },
       }
     }
@@ -574,13 +576,15 @@ window.__ModuleLoader__.load({
       const stats = { nodes: 0, edges: 0, labels: 0, matched: 0 }
       if (host === null || typeof host.querySelectorAll !== 'function') return stats
       const { byNode, nodeOf } = built
+      const focus = built.focusId ?? null
 
       for (const element of host.querySelectorAll('.pele-node')) {
         stats.nodes += 1
         const id = byNode.get(element.getAttribute('data-id')) ?? null
         const related = tiers !== null && id !== null && tiers.related.has(id)
         element.classList.toggle('dkf-gnode-dim', tiers !== null && !related)
-        element.classList.toggle('dkf-gnode-focus', tiers !== null && id === tiers.focus)
+        // 焦点高亮与“是否淡化”无关：全局与聚焦两个视图共用这一个 class
+        element.classList.toggle('dkf-gnode-focus', focus !== null && id === focus)
       }
 
       // 一条边只要有一端在焦点圈里就保持原样，两端都在圈外才淡

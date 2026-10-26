@@ -429,3 +429,19 @@ Gephi 是“视图 + 过滤链”。据此可以把我们的两排按钮收敛�
 
 代价只有一条，而它是可接受的：**全局视图里看不到只挂在无向关系上的那 32 个节点**，
 要看就去「聚焦」。图下的说明写了这句。
+
+## 结论（补充）：焦点高亮两个视图共用
+
+用户实测「聚焦」视图里看不出哪个是焦点：那一档没有淡化，而原来的焦点高亮被绑在“有 tier”上（`tiers !== null`），
+所以只有「全局」有。
+
+改法：焦点高亮与淡化**解耦**——`buildMermaid` 把 `focusId` 一起返回，`paintFocus` 只用它判断
+`dkf-gnode-focus`，与有没有 tier 无关。两个视图因此共用同一个 class、同一个样式：
+
+```css
+.dkf-graph{--dkf-focus-glow:2px;--dkf-focus-color:var(--dsw-alias-state-business-primary,#4176e6)}
+.dkf-gnode-focus{filter:drop-shadow(0 0 var(--dkf-focus-glow) var(--dkf-focus-color))
+                        drop-shadow(0 0 calc(var(--dkf-focus-glow) * 2) var(--dkf-focus-color))}
+```
+
+以后要调“焦点怎么突出”，只改这两个变量（或这一个 class），不用碰两个视图各自的逻辑。

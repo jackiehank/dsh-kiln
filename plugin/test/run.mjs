@@ -470,6 +470,12 @@ await check('边淡化：线、箭头、标签按同一个 data-id 一起淡，�
   assert.ok(!labels[0].classList.contains('dkf-gedge-label-dim'))
   assert.ok(nodes[2].classList.contains('dkf-gnode-dim'), 'c 不在圈内，节点要淡')
 
+  // 聚焦视图（没有 tier）：焦点高亮仍然在，两个视图共用同一个 class
+  paintFocus(host, null, { ...built, focusId: 'b' })
+  assert.ok(nodes[1].classList.contains('dkf-gnode-focus'), '聚焦视图里焦点必须被标出来')
+  assert.ok(!nodes[0].classList.contains('dkf-gnode-focus'))
+  assert.ok(!nodes[1].classList.contains('dkf-gnode-dim'), '聚焦视图不做淡化')
+
   // 焦点清空：全部恢复
   paintFocus(host, null, built)
   for (const item of everything) {
