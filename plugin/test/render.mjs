@@ -288,25 +288,41 @@ check('relation 页默认（全局、无焦点）：只画有向关系', () => {
   assert.match(source, /^flowchart LR/)
   const nodes = source.split('\n').filter((line) => /^ {2}n_\w+\["/.test(line))
   assert.deepEqual(nodes.map((line) => line.trim().slice(0, 3)), ['n_a', 'n_b'], 'c 只挂在无向关联上，没焦点时不画')
-  assert.ok(source.includes('n_b --> n_a'), source)
+  assert.ok(source.includes('n_a --> n_b'), 'caused-by 按“因 → 果”画：a 引发 b，所以箭头 a→b')
   assert.ok(source.includes('linkStyle 0 stroke-width:1.6px,stroke-dasharray:10 5'), 'caused-by 应是长虚线')
   assert.ok(!source.includes('---'), '无焦点时不含无向边')
   assert.ok(!source.includes('|'), '边上不该再有标签')
   assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /只画有向关系：另 1 条无向关联/)
 })
 
-check('图例：五类关系各一条样条，没画的那类淡出', () => {
+check('图例：五句话 + 带箭头的样条，没画的那类淡出', () => {
   const tree = render({ tabId: 'relation' })
   const rows = byClass(tree, 'dkf-legend-row')
   assert.equal(rows.length, 5)
-  const names = byClass(tree, 'dkf-legend-name').map(textOf)
-  assert.deepEqual(names, ['part-of', 'blocks', 'caused-by', 'supersedes', 'relates-to'])
-  const off = byClass(tree, 'dkf-legend-off').map((row) => textOf(byClass(row, 'dkf-legend-name')[0]))
-  assert.deepEqual(off.sort(), ['blocks', 'part-of', 'relates-to', 'supersedes'], '只有 caused-by 在当前视图里')
-  // part-of 是粗实线、caused-by 是长虚：图例样条必须带同样的 dasharray
-  const lines = byClass(tree, 'dkf-legend-svg').map((svg) => svg.children[0].props)
+  assert.deepEqual(byClass(tree, 'dkf-legend-text').map(textOf), [
+    'A 是 B 的一部分',
+    'A 阻塞 B',
+    'A 引发 B',
+    'A 取代 B',
+    'A 与 B 相关',
+  ])
+
+  const off = byClass(tree, 'dkf-legend-off').map((row) => textOf(byClass(row, 'dkf-legend-text')[0]))
+  assert.deepEqual(off, ['A 是 B 的一部分', 'A 阻塞 B', 'A 取代 B', 'A 与 B 相关'], '只有 caused-by 在当前视图里')
+
+  const swatches = byClass(tree, 'dkf-legend-svg').map((svg) => svg.children.filter(Boolean))
+  assert.equal(swatches.length, 5)
+  // 有向的四条都画箭头，relates-to 不画
+  for (let index = 0; index < 4; index += 1) {
+    assert.equal(swatches[index].filter((child) => child.type === 'polygon').length, 1, `第 ${index} 条要有箭头`)
+  }
+  assert.equal(swatches[4].filter((child) => child.type === 'polygon').length, 0, 'relates-to 没有箭头')
+
+  // 线型与图上完全一致：粗实线 / 长虚 / 点划 / 点线
+  const lines = swatches.map((children) => children.find((child) => child.type === 'line').props)
   assert.equal(lines[0].strokeWidth, 2.6)
   assert.equal(lines[2].strokeDasharray, '10 5')
+  assert.equal(lines[3].strokeDasharray, '9 3 2 3')
   assert.equal(lines[4].strokeDasharray, '2 5')
   assert.equal(lines[4].strokeWidth, 1.3)
 })
@@ -320,7 +336,6 @@ check('全局 + 有焦点：布局不变，只把焦点挂在 data-focus 上', (
 })
 
 check('节点 id 能反查回 issue：data-id = n_<issue>', () => {
-  // 聚焦视图里三种关系都在，三个节点都会出现
   const source = mermaidOf(render({ tabId: 'relation', focusId: 'a', view: 'focus', depth: '2' }))
   for (const id of ['a', 'b', 'c']) assert.ok(source.includes(`  n_${id}["${id}"]`), source)
 })

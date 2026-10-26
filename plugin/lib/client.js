@@ -72,13 +72,17 @@ window.__ModuleLoader__.load({
       supersedes: 'stroke-width:1.6px,stroke-dasharray:9 3 2 3',
       'relates-to': 'stroke-width:1.3px,stroke-dasharray:2 5',
     }
-    /** 图例里每类关系的解释（与 GROUPS 的 label 同源，这里只补一句“它是什么”）。 */
+    /**
+     * 图例的文案一律写成「A 动词 B」——箭头从 A 指向 B。
+     * 注意 caused-by：数据里是“A 由 B 引发”，为了让箭头和句子同向（因果图惯例：因 → 果），
+     * 画的时候反过来（B → A），于是图例这句就是「A 引发 B」。
+     */
     const EDGE_LEGEND = [
-      { rel: 'part-of', note: '属于谁 · 实线粗' },
-      { rel: 'blocks', note: '阻塞谁 · 实线' },
-      { rel: 'caused-by', note: '谁引发我 · 长虚' },
-      { rel: 'supersedes', note: '取代谁 · 点划' },
-      { rel: 'relates-to', note: '无向关联 · 点线' },
+      { rel: 'part-of', sentence: 'A 是 B 的一部分' },
+      { rel: 'blocks', sentence: 'A 阻塞 B' },
+      { rel: 'caused-by', sentence: 'A 引发 B' },
+      { rel: 'supersedes', sentence: 'A 取代 B' },
+      { rel: 'relates-to', sentence: 'A 与 B 相关' },
     ]
     /** 布局方向：侧栏是竖的，`TB` 常常比 `LR` 更省横向空间。 */
     const GRAPH_DIRECTIONS = [
@@ -277,12 +281,11 @@ window.__ModuleLoader__.load({
 .dkf-gedge-label-dim text{fill:var(--dkf-dim-label-color);transition:fill .12s ease}
 .dkf-graph{--dkf-focus-glow:2px;--dkf-focus-color:var(--dsw-alias-state-business-primary,#4176e6)}
 .dkf-gnode-focus{filter:drop-shadow(0 0 var(--dkf-focus-glow) var(--dkf-focus-color)) drop-shadow(0 0 calc(var(--dkf-focus-glow) * 2) var(--dkf-focus-color))}
-.dkf-legend{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;padding:2px 0 0}
-.dkf-legend-row{display:inline-flex;align-items:center;gap:6px;color:var(--dsw-alias-label-secondary,#666);font:11px/16px var(--dsw-font-family,inherit)}
-.dkf-legend-off{opacity:.4}
+.dkf-legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:2px 18px;padding:6px 2px 0}
+.dkf-legend-row{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary,#666);font:12px/20px var(--dsw-font-family,inherit)}
+.dkf-legend-off{opacity:.35}
 .dkf-legend-svg{flex:none;color:var(--dsw-alias-label-primary,#111)}
-.dkf-legend-name{font:11px/16px var(--dsw-font-family-code,monospace);color:var(--dsw-alias-label-primary,#111)}
-.dkf-legend-note{color:var(--dsw-alias-label-tertiary,#999)}
+.dkf-legend-text{color:var(--dsw-alias-label-secondary,#666)}
 .dkf-mermaid{margin:0;padding:8px 10px;max-height:320px;overflow:auto;border-radius:4px;background:var(--dsw-alias-markdown-code-block,#f6f6f6);color:var(--dsw-alias-label-secondary,#666);font:11px/16px var(--dsw-font-family-code,monospace);white-space:pre}
 `
 
@@ -521,8 +524,12 @@ window.__ModuleLoader__.load({
         }
         drawn.add(relation.rel)
         // 不要边标签：关系类型由线型 + 图例表达，标签会重复几十遍（见本 issue 的 collect）
-        if (relation.directed === false) lines.push(`  ${from} --- ${to}`)
-        else lines.push(`  ${from} --> ${to}`)
+        // caused-by 按“因 → 果”画，好让箭头与图例里的「A 引发 B」同向
+        const flipped = relation.rel === 'caused-by'
+        const tail = flipped ? to : from
+        const head = flipped ? from : to
+        if (relation.directed === false) lines.push(`  ${tail} --- ${head}`)
+        else lines.push(`  ${tail} --> ${head}`)
         // 线型统一走 linkStyle：序号就是上面的声明顺序，稳定可控
         const stroke = EDGE_STROKE[relation.rel]
         if (stroke !== undefined) lines.push(`  linkStyle ${edgeIndex} ${stroke}`)
@@ -1100,6 +1107,7 @@ window.__ModuleLoader__.load({
         { className: 'dkf-legend', role: 'list', 'aria-label': '关系线型图例' },
         EDGE_LEGEND.map((entry) => {
           const { width, dash } = strokeOf(entry.rel)
+          const directed = entry.rel !== 'relates-to'
           const active = drawn.has(entry.rel)
           return h(
             'div',
@@ -1111,20 +1119,25 @@ window.__ModuleLoader__.load({
             },
             h(
               'svg',
-              { width: 46, height: 10, className: 'dkf-legend-svg', 'aria-hidden': 'true' },
+              { width: 54, height: 12, viewBox: '0 0 54 12', className: 'dkf-legend-svg', 'aria-hidden': 'true' },
               h('line', {
-                x1: 0,
-                y1: 5,
-                x2: 46,
-                y2: 5,
+                x1: 1,
+                y1: 6,
+                x2: directed ? 42 : 53,
+                y2: 6,
                 stroke: 'currentColor',
                 strokeWidth: width,
                 strokeDasharray: dash === undefined ? undefined : dash,
                 strokeLinecap: 'round',
               }),
+              directed
+                ? h('polygon', {
+                    points: '53,6 41,2 41,10',
+                    fill: 'currentColor',
+                  })
+                : null,
             ),
-            h('span', { className: 'dkf-legend-name' }, entry.rel),
-            h('span', { className: 'dkf-legend-note' }, entry.note),
+            h('span', { className: 'dkf-legend-text' }, entry.sentence),
           )
         }),
       )
