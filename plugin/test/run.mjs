@@ -485,6 +485,15 @@ await check('边淡化：线、箭头、标签按同一个 data-id 一起淡，�
   }
 })
 
+await check('图例淡化：未画类别压到 15%（与图上淡化分开调）', async () => {
+  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+  const mod = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  })
+  assert.match(mod.__internals.css, /\.dkf-legend-off\{opacity:\.15\}/)
+})
+
 await check('边淡化：认不出边元素时返回 0（上层据此提示，不静默）', async () => {
   const reactStubForInternals = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
   const { paintFocus } = loaded.factory((name) => { if (name === 'react') return reactStubForInternals; throw new Error('unexpected require: ' + name) }).__internals ?? {}

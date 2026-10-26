@@ -295,7 +295,7 @@ check('relation 页默认（全局、无焦点）：只画有向关系', () => {
   assert.match(byClass(tree, 'dkf-note').map(textOf).join('\n'), /只画有向关系：另 1 条无向关联/)
 })
 
-check('图例：五句话 + 带箭头的样条，五类一律同样深', () => {
+check('图例：五句话 + 带箭头的样条，没画的那类压到 15%', () => {
   const tree = render({ tabId: 'relation' })
   const rows = byClass(tree, 'dkf-legend-row')
   assert.equal(rows.length, 5)
@@ -312,10 +312,10 @@ check('图例：五句话 + 带箭头的样条，五类一律同样深', () => {
     assert.deepEqual(byClass(row, 'dkf-legend-end').map(textOf), ['A', 'B'])
   }
 
-  // 图例是“读图用的钥匙”，不参与淡化：没画的那类也只靠 title 提示
-  assert.equal(byClass(tree, 'dkf-legend-off').length, 0, '图例不该有淡出行')
+  const off = byClass(tree, 'dkf-legend-off').map((row) => textOf(byClass(row, 'dkf-legend-text')[0]))
+  assert.deepEqual(off, ['A 是 B 的一部分', 'A 阻塞 B', 'A 取代 B', 'A 与 B 相关'], '只有 caused-by 在当前视图里')
   const titles = rows.map((row) => String(row.props.title ?? ''))
-  assert.ok(titles.some((title) => title.includes('当前视图没画')), '未画的类别靠 title 提示')
+  assert.ok(titles.some((title) => title.includes('当前视图没画')), '未画的类别还要有 title 提示')
 
   const swatches = byClass(tree, 'dkf-legend-svg').map((svg) => svg.children.filter(Boolean))
   assert.equal(swatches.length, 5)
