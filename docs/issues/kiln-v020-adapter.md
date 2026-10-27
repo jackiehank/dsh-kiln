@@ -24,8 +24,8 @@ v0.2.0 把动作行的哈希键改成了 `commit`，并给 `path` 加了批量�
 
 ## 边界
 
-- 二进制下限仍按 `AGENTS.md` 的 v0.1.1+：批量是 v0.2.0 的能力，旧版要能自动退回逐条取数，
-  不能因为多给了 id 就静默丢数据；
+- 二进制下限 **v0.2.0+**：批量 `path` 从这一版开始；旧版不能「看起来支持」——遇到多 id
+  只回一条时要明确报错（见「假设修订」），不能静默丢数据；
 - 上限仍是 80 条（`DEFAULT_MAX_ISSUES`），不因为批量把全仓都拉回来；
 - 缓存策略不重做：HEAD 失效、同仓并发合并、增量只重取受影响 issue 的语义都保留；
 - 性能只承诺实测数字，不引入后台轮询或持久化缓存。
@@ -33,9 +33,9 @@ v0.2.0 把动作行的哈希键改成了 `commit`，并给 `path` 加了批量�
 ## 验收
 
 - 时间线短哈希、动作详情的完整 sha、搜索命中动作时的高亮恢复；
-- 冷启动改成批量：一次快照只起 1 个 `path` 子进程（本仓 19 条、`~/kiln` 59 条都验证）；
+- 冷启动改成批量：一次快照只起 1 个 `path` 子进程（本仓 20 条、`~/kiln` 63 条都验证）；
 - 命中路径仍 <5ms；单条提交后的刷新仍只重取受影响的 issue；
-- 旧版 kiln（`path` 多 id 静默只回第一条）能自动退回逐条取数，结果与改造前一致；
+- 旧版 kiln 在取数时得到明确错误（「需要 kiln v0.2.0+」），不会把第一条当全部；
 - 宿主侧用例与渲染用例全过；性能探针能打出批量前后的子进程数与耗时。
 
 ## 收集（2026-10-28，kiln v0.2.0 @ 2ddbd6b）
@@ -165,3 +165,37 @@ v0.2.0 把动作行的哈希键改成了 `commit`，并给 `path` 加了批量�
 - 取数层抛错要经 `snapshot.js` / `readFlow()` 转成 `kiln-error` 失败快照（约 10 行）；
 - 插件版本从 0.1.0 提到 **0.2.0**（`private`、未发布，只是内部标记：0.2.x ↔ kiln 0.2.x+），
   `package.json` 的 description 写明所需 kiln 版本。
+
+## 落地（2026-10-28）
+
+- `plugin/lib/flow.js:284` `readHistories()`：一次 `kiln path <id…> --json`（≤80 个 id，保持调用方
+  给的顺序），不再逐条起进程；`execKiln()` 允许 exit 1（部分 issue 取不到时上游仍给完整文档），
+  形状由 `parsePathDocument()`（:152）认，`pathShapeError()`（:173）在多 id 却拿到裸 pathDoc 时
+  给出「需要 kiln v0.2.0+」；`mapActions()`（:125）只读 `commit`。
+- `plugin/lib/flow.js:341` 与 `plugin/lib/snapshot.js:89`：取数层抛错转成 `kiln-error` 失败快照，
+  不写缓存；前端沿用现有文案（`payload.message`），不需要新 reason。
+- `plugin/lib/client.js:900` 只改注释：v0.2.0 已吐动作级 `tags`，按标签筛仍是另开的功能。
+- 版本：`plugin/package.json` 0.1.0 → 0.2.0；`AGENTS.md` / `README.md` / `plugin/README.md`
+  的 kiln 下限统一为 v0.2.0+。
+- 探针：`plugin/test/probe-perf.mjs` 去掉并发扫描，改量「批量 vs 旧法逐条」。
+
+### 验证
+
+- 用例：`node plugin/test/run.mjs` 57 个、`node plugin/test/render.mjs` 45 个全过；新增
+  「取数抛错 → 失败原因带出」「多 id 拿到单条 → 提示 v0.2.0+」等用例。
+- 真实输出：抓 v0.2.0 的 6 条批量 + 1 条单条 + graph，`parsePathDocument` / `buildFlow`
+  断言所有动作 sha 为 40 位、20 条 issue 的快照字段无缺。
+- 探针（本机，20 核）：
+
+| 仓库 | 冷启动 | 命中 | 批量 path | 旧法逐条 @8 |
+| --- | --- | --- | --- | --- |
+| 本仓（20 条 / 25 边） | 215 ms | 0.6 ms | 102 ms（1 进程） | 464 ms（20 进程） |
+| `~/kiln`（63 条 / 96 边） | 228 ms | 0.4 ms | 110 ms（1 进程） | 1371 ms（63 进程） |
+
+并发合并：两个并发请求 210 / 233 ms，`build + coalesced`，只跑一轮构建。
+
+### 已知代价
+
+- 只支持 kiln v0.2.0+；旧版在冷启动取数时报「需要 kiln v0.2.0+」，升级一条命令。
+- 增量缓存没有改：HEAD 前进仍是 graph + 两条 git 探测并行 + 受影响 issue 的批量 path；
+  批量化后「只重取几条」不再省时间，但这轮不删（见假设）。

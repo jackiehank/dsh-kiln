@@ -3,7 +3,7 @@
 本文件是接手 dsh-kiln 的 agent 的工作约定：**这个仓库用 kiln 管理 issue**，所有功能、缺陷、调研
 都由带 `issue:` + `action:` 的提交记录。代码在 diff 里，**为什么这么做只能在提交历史里找到**。
 
-- kiln 手册：本机 `~/kiln/README.md`（v0.1.1，已发布）；上游 <https://github.com/jackiehank/kiln>
+- kiln 手册：本机 `~/kiln/README.md`（v0.2.0，已发布）；上游 <https://github.com/jackiehank/kiln>
 - issue 文档：[`docs/issues/`](docs/issues/)；配图放 `docs/issues/assets/`，文档里用 `assets/<file>.png` 引用
 - 配置：[`.kilnconfig.jsonc`](.kilnconfig.jsonc)
 
@@ -32,7 +32,7 @@ kiln 把“问题 → 动作 → 结论”编码成 git commit 的 trailer，`ki
 识别规则只有一条：**一个提交是 kiln 动作，当且仅当同时带 `issue:` 与 `action:`**。普通提交
 （无 trailer）被忽略，所以杂务提交不会污染 issue 列表。
 
-二进制：`kiln`（在 PATH 上，需 v0.1.1+）。`kiln --version` 确认。
+二进制：`kiln`（在 PATH 上，插件需 v0.2.0+：批量 `path` 与 `commit` 键从这一版开始）。`kiln --version` 确认。
 安装：`go install github.com/jackiehank/kiln/cmd/kiln@latest`。
 
 ## 3. 配置（仓库根 `.kilnconfig.jsonc`，随仓库提交）

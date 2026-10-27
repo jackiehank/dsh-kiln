@@ -23,7 +23,8 @@ kiln check           # 语义完整性
 
 ## 依赖
 
-- [kiln](https://github.com/jackiehank/kiln) v0.1.1+：`go install github.com/jackiehank/kiln/cmd/kiln@latest`
+- [kiln](https://github.com/jackiehank/kiln) v0.2.0+：`go install github.com/jackiehank/kiln/cmd/kiln@latest`
+  （插件 0.2.x 用批量 `path` 一次读全，旧版会在取数时明确报错）
 - git
 
 ## 目录

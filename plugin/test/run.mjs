@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 
-import { buildFlow, mapActions } from '../lib/flow.js'
+import { buildFlow, mapActions, parsePathDocument, pathShapeError } from '../lib/flow.js'
 import { applyFocus, createSnapshotCache, evaluateCache } from '../lib/snapshot.js'
 import { parseTrailerRange } from '../lib/git.js'
 
@@ -55,6 +55,8 @@ function makeFakeFlow() {
     /** 闸门：把取数挂起来，用来排并发请求的时序。 */
     graphGate: null,
     historyGate: null,
+    /** 取数层抛错（例如 kiln 版本过旧）；保持 null 表示正常返回。 */
+    historyError: null,
     /** 每次调用时通知测试（排“是否同时发出”）。 */
     onCall: null,
   }
@@ -75,6 +77,7 @@ function makeFakeFlow() {
     readHistories: async (_repo, ids) => {
       note(`histories:${ids.join(',')}`)
       if (state.historyGate !== null) await state.historyGate
+      if (state.historyError !== null) throw state.historyError
       const out = new Map()
       for (const id of ids) out.set(id, state.histories.get(id) ?? [])
       return out
@@ -172,16 +175,62 @@ await check('applyFocus：没有 focus 参数时不动', () => {
 
 // ---------------------------------------------------------------- 数据层
 
-await check('mapActions：保留完整 sha 并派生短哈希', () => {
-  const actions = mapActions({ actions: [{ ordinal: 1, action: 'ask', id: SHA_A, date: 'd', title: 't' }] })
+await check('mapActions：commit 保留完整 sha 并派生短哈希', () => {
+  const actions = mapActions({ actions: [{ ordinal: 1, action: 'ask', commit: SHA_A, date: 'd', title: 't' }] })
   assert.equal(actions[0].id, SHA_A)
   assert.equal(actions[0].short, 'aaaaaaa')
 })
 
-await check('mapActions：没有 id 时给空串而不是猜', () => {
-  const actions = mapActions({ actions: [{ ordinal: 1, action: 'ask', date: 'd', title: 't' }] })
+await check('mapActions：没有 commit 时给空串（不再读 v0.1.1 的 id）', () => {
+  const actions = mapActions({ actions: [{ ordinal: 1, action: 'ask', id: SHA_B, date: 'd', title: 't' }] })
   assert.equal(actions[0].id, '')
   assert.equal(actions[0].short, '')
+})
+
+await check('parsePathDocument：批量形状 → 每条 issue 的动作；errors 不产生历史', () => {
+  const parsed = parsePathDocument({
+    issues: [
+      { issue: 'a', actions: [{ ordinal: 1, action: 'ask', commit: SHA_A, date: 'd', title: 't' }] },
+      { issue: 'b', actions: [] },
+    ],
+    errors: [{ issue: 'c', error: 'unknown-issue' }],
+  })
+  assert.equal(parsed.kind, 'batch')
+  assert.equal(parsed.histories.get('a')[0].id, SHA_A)
+  assert.deepEqual(parsed.histories.get('b'), [])
+  assert.equal(parsed.histories.has('c'), false)
+})
+
+await check('parsePathDocument：单条形状（一个 id 的合法响应）→ kind=single', () => {
+  const parsed = parsePathDocument({
+    issue: 'a',
+    action: 'ask',
+    done: false,
+    actions: [{ ordinal: 1, action: 'ask', commit: SHA_A, date: 'd', title: 't' }],
+  })
+  assert.equal(parsed.kind, 'single')
+  assert.equal(parsed.histories.get('a')[0].id, SHA_A)
+})
+
+await check('parsePathDocument：形状不认识 → unknown', () => {
+  assert.equal(parsePathDocument({}).kind, 'unknown')
+  assert.equal(parsePathDocument({ issues: 'nope' }).kind, 'unknown')
+  assert.equal(parsePathDocument(null).kind, 'unknown')
+})
+
+await check('pathShapeError：批量 / 单 id 单条放行', () => {
+  assert.equal(pathShapeError({ kind: 'batch' }, 20), null)
+  assert.equal(pathShapeError({ kind: 'single' }, 1), null)
+})
+
+await check('pathShapeError：多 id 却拿到单条 → 明说需要 v0.2.0+（旧版会静默丢 id）', () => {
+  const message = pathShapeError({ kind: 'single' }, 20)
+  assert.match(message, /v0\.2\.0\+/)
+  assert.match(message, /静默丢弃/)
+})
+
+await check('pathShapeError：形状不认识 → 单独报错，不猜', () => {
+  assert.match(pathShapeError({ kind: 'unknown' }, 2), /形状不认识/)
 })
 
 await check('buildFlow：默认焦点取最近动作，边按保留的节点过滤', () => {
@@ -313,6 +362,23 @@ await check('缓存：构建失败不写缓存，下次会重试', async () => {
   const retried = await cache.get('r', { bin: 'b1' })
   assert.equal(retried.ok, true)
   assert.equal(retried.cache.reason, 'config-changed')
+})
+
+await check('缓存：取数抛错（如 kiln 版本过旧）→ 带出原因，不写缓存', async () => {
+  const { flow, state } = makeFakeFlow()
+  const { git } = makeFakeGit()
+  const cache = createSnapshotCache({ git, flow })
+  state.historyError = new Error('需要 kiln v0.2.0+：path 批量只回了单条文档')
+
+  const failed = await cache.get('r', { bin: 'b1' })
+  assert.equal(failed.ok, false)
+  assert.equal(failed.reason, 'kiln-error')
+  assert.match(failed.message, /v0\.2\.0\+/)
+
+  state.historyError = null
+  const retried = await cache.get('r', { bin: 'b1' })
+  assert.equal(retried.ok, true)
+  assert.equal(retried.cache.action, 'build')
 })
 
 await check('缓存：读不到 HEAD 时不缓存，但功能不降级', async () => {

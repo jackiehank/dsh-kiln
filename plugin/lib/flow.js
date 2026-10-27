@@ -2,7 +2,7 @@
  * Flow 数据层：把一个 kiln 仓库读成一份只读快照。
  *
  * 这里只做两件事——调 `kiln graph --json` 取 issue 与折叠后的关系边，调
- * `kiln path <id> --json` 取每条 issue 的动作序列。语义（关系强弱、层级、
+ * `kiln path <id> … --json`（v0.2.0 的批量形态）一次取多条 issue 的动作序列。语义（关系强弱、层级、
  * 方向）全部留给定词表的前端，宿主不判断“什么算重要”。
  */
 import { execFile } from 'node:child_process'
@@ -15,15 +15,8 @@ const execFileAsync = promisify(execFile)
 const RUN_TIMEOUT_MS = 20_000
 const MAX_BUFFER = 8 * 1024 * 1024
 const DEFAULT_MAX_ISSUES = 80
-/**
- * 一次重建要起 N 个 `kiln path` 进程，成本主要在**进程启动**（Windows 上约 80ms/次）。
- * 实测（20 核，59 条 issue 的仓）：2→3259ms、4→1819ms、8→1258ms、12→1264ms、16→1240ms，
- * 8 之后就打到平台期——再加只是把等待切碎。
- *
- * 所以取 8：大仓吃满，小仓不铺张。**不按 CPU 核数自适应**：平台期跟核数无关，20 核机器上
- * 选 16 只多 18ms，却让 4 核机器上的进程数翻倍。
- */
-const PATH_CONCURRENCY = 8
+/** 插件只支持 v0.2.0+：批量 `path` 的契约从这一版开始（旧版对多 id 静默只回第一条）。 */
+const KILN_MIN_VERSION = '0.2.0'
 const MAX_TITLE = 200
 
 /** 一次 kiln 调用失败时携带可读原因，方便路由层原样透出。 */
@@ -78,7 +71,13 @@ export function forgetKiln() {
   kilnBinaries.delete('*')
 }
 
-async function runKiln(bin, args, cwd) {
+/**
+ * 跑一次 kiln，**不因退出码非零就丢掉 stdout**：`path` 批量在部分 issue 取不到时
+ * 仍会给出完整文档（`errors` 数组 + exit 1），调用方要自己判断能不能解析。
+ *
+ * ENOENT / EACCES 这类「根本没跑起来」的错误没有数字退出码，仍抛 KilnError。
+ */
+async function execKiln(bin, args, cwd) {
   try {
     const { stdout } = await execFileAsync(bin, args, {
       cwd,
@@ -86,12 +85,27 @@ async function runKiln(bin, args, cwd) {
       maxBuffer: MAX_BUFFER,
       windowsHide: true,
     })
-    return stdout
+    return { code: 0, stdout, stderr: '' }
   } catch (error) {
-    const stderr = typeof error?.stderr === 'string' ? error.stderr.trim() : ''
-    const reason = stderr !== '' ? stderr.split(/\r?\n/)[0] : String(error?.message ?? error)
-    throw new KilnError(reason)
+    if (typeof error?.code === 'number') {
+      return {
+        code: error.code,
+        stdout: typeof error.stdout === 'string' ? error.stdout : '',
+        stderr: typeof error.stderr === 'string' ? error.stderr.trim() : '',
+      }
+    }
+    throw new KilnError(String(error?.message ?? error))
   }
+}
+
+function reasonOf(result) {
+  return result.stderr !== '' ? result.stderr.split(/\r?\n/)[0] : `kiln 退出码 ${result.code}`
+}
+
+async function runKiln(bin, args, cwd) {
+  const result = await execKiln(bin, args, cwd)
+  if (result.code !== 0) throw new KilnError(reasonOf(result))
+  return result.stdout
 }
 
 /** 目录是不是一个 kiln 仓库：只有 .kilnconfig.jsonc 是登记在仓库里的判据。 */
@@ -103,24 +117,15 @@ export function isKilnRepo(dir) {
   }
 }
 
-async function mapLimit(tasks, limit) {
-  const out = new Array(tasks.length)
-  let next = 0
-  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
-    while (next < tasks.length) {
-      const index = next++
-      out[index] = await tasks[index]()
-    }
-  })
-  await Promise.all(workers)
-  return out
-}
-
-/** `kiln path --json` 的 actions → 视图需要的字段（保留完整 sha 与短哈希）。 */
+/**
+ * `kiln path --json` 的 actions → 视图需要的字段（保留完整 sha 与短哈希）。
+ *
+ * v0.2.0 的哈希键是 `commit`（`id` 只指 issue）；没有提交时给空串，不猜旧键。
+ */
 export function mapActions(document) {
   const actions = Array.isArray(document?.actions) ? document.actions : []
   return actions.map((action) => {
-    const sha = typeof action.id === 'string' ? action.id : ''
+    const sha = typeof action.commit === 'string' ? action.commit : ''
     return {
       ordinal: action.ordinal,
       action: action.action,
@@ -134,6 +139,44 @@ export function mapActions(document) {
       refs: Array.isArray(action.refs) ? action.refs.map((ref) => String(ref)) : [],
     }
   })
+}
+
+/**
+ * 解析 `kiln path` 的 JSON：单条与批量两种形状。
+ *
+ * - 给多个 id 时必须是 `{ issues: [...], errors?: [...] }`（v0.2.0+）；
+ * - 给一个 id 时是裸 pathDoc——v0.2.0 也这样，单条形状本身不是「旧版」的证据。
+ *
+ * `errors`（`unknown-issue` / `stat-failed`）里的 issue 不产生动作序列，保持空。
+ */
+export function parsePathDocument(document) {
+  if (Array.isArray(document?.issues)) {
+    const histories = new Map()
+    for (const doc of document.issues) {
+      if (typeof doc?.issue !== 'string') continue
+      histories.set(doc.issue, mapActions(doc))
+    }
+    return { kind: 'batch', histories }
+  }
+  if (typeof document?.issue === 'string' && Array.isArray(document?.actions)) {
+    return { kind: 'single', histories: new Map([[document.issue, mapActions(document)]]) }
+  }
+  return { kind: 'unknown', histories: new Map() }
+}
+
+/**
+ * 多 id 请求的形状校验：返回错误文案，合格返回 null。
+ *
+ * v0.1.1 对多余 id **静默只回第一条**（exit 0、文档还是裸 pathDoc），所以「多条却拿到
+ * 单条」必须报错，不能把第一条当全部——这是旧版兼容最危险的坑，也是版本下限的判据。
+ */
+export function pathShapeError(parsed, requestedCount) {
+  if (parsed.kind === 'batch') return null
+  if (parsed.kind === 'single' && requestedCount === 1) return null
+  if (parsed.kind === 'single') {
+    return `需要 kiln v${KILN_MIN_VERSION}+：path 批量只回了单条文档（旧版会静默丢弃其余 id）`
+  }
+  return 'kiln path 输出形状不认识（既不是批量文档，也不是单条 pathDoc）'
 }
 
 /**
@@ -231,24 +274,37 @@ export async function readGraph(repo) {
   }
 }
 
-/** 取若干 issue 的动作序列；单条失败当空序列处理，不拖垮整份快照。 */
+/**
+ * 取若干 issue 的动作序列：只起 **1 个** `kiln path` 进程（v0.2.0 批量，一次读全）。
+ *
+ * 只支持 kiln v0.2.0+：多 id 请求却拿到单条文档时抛 KilnError（v0.1.1 会静默只回第一条，
+ * 按单条解析会丢数据）。批量里个别 issue 取不到时上游走 `errors`，这里保持空序列，
+ * 不拖垮整份快照。
+ */
 export async function readHistories(repo, ids) {
   const dir = typeof repo === 'string' ? repo : ''
   const histories = new Map()
   if (!Array.isArray(ids) || ids.length === 0) return histories
+  const unique = [...new Set(ids)]
+  for (const id of unique) histories.set(id, [])
   const bin = ensureKiln()
   if (bin === null) return histories
-  await mapLimit(
-    ids.map((id) => async () => {
-      try {
-        const document = JSON.parse(await runKiln(bin, ['path', id, '--json'], dir))
-        histories.set(id, mapActions(document))
-      } catch {
-        histories.set(id, [])
-      }
-    }),
-    PATH_CONCURRENCY,
-  )
+
+  // 部分 issue 取不到时 kiln 仍输出完整文档（exit 1），所以不要求退出码为 0。
+  const result = await execKiln(bin, ['path', ...unique, '--json'], dir)
+  if (result.code !== 0 && result.code !== 1) throw new KilnError(reasonOf(result))
+  let document
+  try {
+    document = JSON.parse(result.stdout)
+  } catch {
+    throw new KilnError(result.stderr !== '' ? reasonOf(result) : 'kiln path 输出不是 JSON')
+  }
+  const parsed = parsePathDocument(document)
+  const shapeError = pathShapeError(parsed, unique.length)
+  if (shapeError !== null) throw new KilnError(shapeError)
+  for (const [id, actions] of parsed.histories) {
+    if (histories.has(id)) histories.set(id, actions)
+  }
   return histories
 }
 
@@ -275,9 +331,14 @@ export async function readFlow(repo, options = {}) {
   const maxIssues =
     Number.isInteger(options.maxIssues) && options.maxIssues > 0 ? options.maxIssues : DEFAULT_MAX_ISSUES
   const kept = nodes.slice(0, maxIssues)
-  const histories = await readHistories(
-    dir,
-    kept.map((node) => node.id),
-  )
+  let histories
+  try {
+    histories = await readHistories(
+      dir,
+      kept.map((node) => node.id),
+    )
+  } catch (error) {
+    return { ...base, ok: false, reason: 'kiln-error', message: String(error?.message ?? error) }
+  }
   return buildFlow({ repo: dir, graph: graphResult.graph, histories, focus: options.focus, maxIssues })
 }

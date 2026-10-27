@@ -1,9 +1,9 @@
 {
   "name": "@local/dsh-kiln",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "DSH × kiln：在会话顶部加一个只读的 kiln Flow 视图",
+  "description": "DSH × kiln：在会话顶部加一个只读的 kiln Flow 视图（需要 kiln v0.2.0+）",
   "license": "MIT",
   "exports": {
     ".": "./lib/index.js",

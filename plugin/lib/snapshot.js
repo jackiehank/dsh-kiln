@@ -81,7 +81,13 @@ export function createSnapshotCache(deps = {}) {
     const touched = seed === null ? [] : [...seed].filter((id) => kept.has(id))
     const fetchIds = [...new Set([...missing, ...touched])]
     if (fetchIds.length > 0) {
-      const fresh = await flow.readHistories(repo, fetchIds)
+      let fresh
+      try {
+        fresh = await flow.readHistories(repo, fetchIds)
+      } catch (error) {
+        // 取数层只支持 kiln v0.2.0+；版本过旧 / 输出坏掉时整份快照失败，由前端显示原因。
+        return { ok: false, reason: 'kiln-error', message: String(error?.message ?? error) }
+      }
       for (const [id, actions] of fresh) histories.set(id, actions)
     }
 

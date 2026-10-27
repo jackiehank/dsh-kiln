@@ -1,10 +1,11 @@
 # @local/dsh-kiln
 
 DSH × kiln 的插件初稿：在会话顶部标签排（对话 / 轨迹 / 上下文）**之后**加一个 `kiln` 标签，
-只读展示 kiln 仓库的 Flow 视图。
+只读展示 kiln 仓库的 Flow 视图。**插件版本 0.2.0，只支持 kiln v0.2.0+**（取数依赖 v0.2.0 的
+批量 `path` 与 `commit` 键；旧版会在取数时明确报错，不会退回逐条）。
 
 - 数据来源：宿主路由 `GET /kiln/flow?cwd=<绝对路径>&focus=<issue>`，宿主进程里跑
-  `kiln graph --json` 与 `kiln path <id> --json`。
+  `kiln graph --json` 与一次批量 `kiln path <id> … --json`（v0.2.0+）。
 - 浏览器半不直接读文件，也不调 CLI；仓库根 = 当前会话的工作区目录。
 - 视图语义：三页共享一个焦点 issue。issue 页无焦点时一行一个 issue；有焦点时读出结构——
   part-of 作母/子分组与面包屑，`blocks` → `supersedes` → `caused-by` 按强弱排，弱关联（relates-to）
@@ -38,12 +39,13 @@ DSH × kiln 的插件初稿：在会话顶部标签排（对话 / 轨迹 / 上�
   `pele.mount()`（Pele 没有字号变量，只改 CSS 会“字小框不变”，见 `docs/issues/kiln-graph-typography.md`）。
 - 与壳的关系：kiln 视图挂载期间隐藏 DSH 的“拖动调宽”手柄
   （`[data-conversation-content]:has(.dkf-root) [data-width-handle]`），切回对话页自动恢复。
-- 取数的代价（见 `docs/issues/kiln-perf-snapshot.md`）：一次快照 = 1 次 `kiln graph` + 每条 issue
-  一次 `kiln path`，成本几乎全在**进程启动**（Windows 约 80ms/次）。所以：path 并发 8
-  （实测 4→8 冷启动 −30%，再高是平台期）；HEAD 是失效令牌，HEAD 不动只花一次直读 ref（<1ms），
-  HEAD 前进只重取受影响的 issue；增量路径上 `graph` 与两条 git 探测**同时发**；
-  同仓并发的请求并到同一轮构建（连点刷新不会跑两遍子进程）。
-  实测：本仓冷启动 0.53s（19 条）、`~/kiln` 1.29s（59 条）、单条提交后 0.2s。
+- 取数的代价（见 `docs/issues/kiln-perf-snapshot.md`、`kiln-v020-adapter.md`）：一次快照 = 1 次
+  `kiln graph` + **1 次批量 `kiln path`**（v0.2.0 起一次进程读多条，点名 ≤80 个 id）。成本几乎
+  全在**进程启动**（Windows 约 80ms/次），所以批量化之后「条数」不再进入延迟公式；HEAD 是失效
+  令牌，HEAD 不动只花一次直读 ref（<1ms），HEAD 前进只重取受影响的 issue；增量路径上 `graph`
+  与两条 git 探测**同时发**；同仓并发的请求并到同一轮构建（连点刷新不会跑两遍子进程）。
+  实测：本仓冷启动 0.21s（20 条）、`~/kiln` 0.23s（63 条）、命中 0.4–0.7ms；旧法逐条
+  20 次 @并发 8 是 0.46s、63 次 @8 是 1.38s。
   构建耗时进 `payload.cache.ms`，悬停页头的仓库名就能看到「build / incremental / coalesced · 多少 ms」。
 
 ## 文件
@@ -57,7 +59,7 @@ DSH × kiln 的插件初稿：在会话顶部标签排（对话 / 轨迹 / 上�
 | `lib/client.js` | 浏览器半：`conversation.view` 插槽条目，名字 `kiln` |
 | `test/run.mjs` | 宿主侧用例（数据层、缓存决策、搜索/筛选纯函数） |
 | `test/render.mjs` | 渲染冒烟（极简 React 替身，不碰浏览器） |
-| `test/probe-perf.mjs` | 性能探针：graph / 冷启动 / 命中 / 并发扫描 / 并发合并 |
+| `test/probe-perf.mjs` | 性能探针：graph / 冷启动 / 命中 / 批量与旧逐条取法的对比 / 并发合并 |
 | `cordis.patch.yml` | 宿主侧插入声明（`insert: id: dsh-kiln`） |
 | `package.json` | `dsh.bundle.patch` + `dsh.client` 平台与依赖声明 |
 
@@ -90,9 +92,9 @@ node plugin/test/probe-perf.mjs . C:\Users\jacki\kiln
 ## 已知边界
 
 - 只读；不写 issue、不提交。
-- 一次快照 = 1 次 `graph` + N 次 `path`（N = issue 数，上限 80，并发 8）；冷启动的物理下限就是
-  `N × 80ms ÷ 8`（写入进程启动成本），要再快只能等上游给批量接口
-  （`kiln path` 现在不接多个 id：`kiln path a b --json` 静默只回第一个）。
-- 关系词表按 kiln 0.1.x 的内置词表硬编码在 `client.js` 的 `GROUPS` 里；等 kiln 支持
+- **只支持 kiln v0.2.0+**。一次快照 = 1 次 `graph` + 1 次批量 `path`（≤80 条）。旧版对多 id
+  会静默只回第一条，插件不会退回逐条——多 id 却拿到单条文档时直接报「需要 kiln v0.2.0+」，
+  避免把第一条当全部。
+- 关系词表按 kiln 0.2.0 的内置词表硬编码在 `client.js` 的 `GROUPS` 里；等 kiln 支持
   `.kilnconfig.jsonc` 配置 `relations` 后改成读配置。
 - Flow 布局是初稿，Triage / Genealogy 尚未实现。

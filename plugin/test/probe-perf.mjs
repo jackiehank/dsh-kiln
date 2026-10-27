@@ -1,5 +1,5 @@
 /**
- * 性能探针：量冷启动、命中、并发度对一次快照构建的影响。
+ * 性能探针：量冷启动、命中、批量取数与旧逐条取法的差距。
  *
  * 用法：node plugin/test/probe-perf.mjs [repo...]（默认当前目录）
  * 只读：只跑 `kiln --json` 与直读 HEAD，不写任何文件。数字打到 stdout，供 issue 文档引用。
@@ -27,23 +27,19 @@ async function timeIt(fn) {
   return { ms: Number(process.hrtime.bigint() - started) / 1e6, value }
 }
 
-/** 按同样的 worker 池跑一遍 `kiln path`，只为比较并发度（readHistories 的并发是模块常量）。 */
-async function sweep(repo, ids) {
-  const out = []
-  for (const limit of [2, 4, 8, 12, 16, 24]) {
-    const { ms } = await timeIt(async () => {
-      let next = 0
-      const workers = Array.from({ length: Math.min(limit, ids.length) }, async () => {
-        while (next < ids.length) {
-          const id = ids[next++]
-          await run(bin, ['path', id, '--json'], { cwd: repo, timeout: 20_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true })
-        }
-      })
-      await Promise.all(workers)
+/** 改造前的取法：一条 issue 一个进程（并发 8）。只用来对照，不再参与取数。 */
+async function legacyPerId(repo, ids, limit = 8) {
+  const { ms } = await timeIt(async () => {
+    let next = 0
+    const workers = Array.from({ length: Math.min(limit, ids.length) }, async () => {
+      while (next < ids.length) {
+        const id = ids[next++]
+        await run(bin, ['path', id, '--json'], { cwd: repo, timeout: 20_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true })
+      }
     })
-    out.push(`${limit}→${ms.toFixed(0)}ms`)
-  }
-  return out
+    await Promise.all(workers)
+  })
+  return ms
 }
 
 async function main() {
@@ -70,9 +66,9 @@ async function main() {
     cache.clear()
 
     const perCall = await timeIt(() => readHistories(repo, ids.slice(0, 1)))
-    console.log(`readHistories(1): ${perCall.ms.toFixed(0)} ms`)
+    console.log(`readHistories(1)：${perCall.ms.toFixed(0)} ms（单条形状，1 个进程）`)
     const hist = await timeIt(() => readHistories(repo, ids))
-    console.log(`readHistories(${ids.length}) @当前并发: ${hist.ms.toFixed(0)} ms`)
+    console.log(`readHistories(${ids.length})：${hist.ms.toFixed(0)} ms（批量，1 个进程）`)
 
     const built = await timeIt(() => buildFlow({ repo, graph: graph.graph, histories: hist.value }))
     console.log(`buildFlow: ${built.ms.toFixed(1)} ms`)
@@ -83,7 +79,8 @@ async function main() {
     const actions = coalesce.value.map((payload) => payload.cache?.action ?? 'unknown')
     console.log(`两个并发请求: ${coalesce.ms.toFixed(0)} ms · ${actions.join(' + ')}`)
 
-    console.log(`并发扫描: ${(await sweep(repo, ids)).join('  ')}`)
+    const legacy = await legacyPerId(repo, ids)
+    console.log(`旧法 ${ids.length} 次 path @8：${legacy.toFixed(0)} ms（${ids.length} 个进程）`)
   }
 }
 

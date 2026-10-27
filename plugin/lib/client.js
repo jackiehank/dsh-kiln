@@ -897,8 +897,8 @@ window.__ModuleLoader__.load({
 
     /**
      * 时间线可筛的值：动作名（按出现次数）、领域（按条数，且只在多于一个时给）。
-     * 标签不在这里——kiln 的 tag 是动作提交上的 trailer，但 `path --json` 不吐它，
-     * 视图只能拿到 issue 级并集，拿它筛动作会张冠李戴。
+     * 标签不在这里——kiln v0.2.0 起 `path --json` 已带动作级 `tags`，但「按标签筛」是
+     * 产品决定（会新增一个筛选维度），这轮适配不接，见 kiln-v020-adapter。
      */
     function rowFacets(rows, byId) {
       const actions = new Map()
