@@ -308,6 +308,14 @@ check('搜索：结果行带该 issue 的动作色条与 hover 预览', () => {
   assert.match(hint, /第 1\/2 条/, '以及动作位置')
 })
 
+check('搜索：色条突出的是命中的那条动作，不是最后一条', () => {
+  const view = render({ tabId: 'issue', query: '动作 1' })
+  const hit = byClass(view, 'dkf-hit')[0]
+  const blocks = byClass(hit, 'dkf-block')
+  const marked = blocks.findIndex((block) => String(block.props.className).includes('dkf-block-current'))
+  assert.equal(blocks.length, 2, '这条 issue 有两条动作')
+  assert.equal(marked, 0, '命中的是第 1 条动作，突出第 1 格而不是最后那格')
+})
 check('搜索：命中 issue 名时预览给当前标题', () => {
   const view = render({ tabId: 'issue', query: 'b' })
   const hint = String(byClass(view, 'dkf-hit')[0].props['data-hint'] ?? '')

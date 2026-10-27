@@ -1042,23 +1042,38 @@ window.__ModuleLoader__.load({
       return rows
     }
 
-    /** 焦点行下方的迷你动作条：最近 12 个，更早的折成 +k。 */
-    function strip(actions) {
+    /**
+     * 焦点行下方的迷你动作条：最多 12 格，颜色 = 动作类型。
+     *
+     * 默认标最后一格（= 当前动作）；`highlightId` 给了就标**那一格**——搜索结果命中某条动作时，
+     * 突出显示的是"命中的那条"，不是"最后那条"。命中太早、落在窗口外时，窗口会挪到包含它的位置，
+     * 末尾用 `+k` 表示"更新的动作没画下"（前缀 `+k` 仍是"更早的没画下"）。
+     */
+    function strip(actions, highlightId) {
       if (!Array.isArray(actions) || actions.length === 0) return null
-      const visible = actions.slice(-12)
-      const extra = actions.length - visible.length
+      const hitIndex =
+        highlightId === undefined || highlightId === null
+          ? -1
+          : actions.findIndex((action) => action.id === highlightId)
+      const end = hitIndex < 0 ? actions.length : Math.min(actions.length, Math.max(hitIndex + 1, 12))
+      const start = Math.max(0, end - 12)
+      const visible = actions.slice(start, end)
+      const older = start
+      const newer = actions.length - end
+      const anchor = hitIndex >= start && hitIndex < end ? hitIndex - start : visible.length - 1
       return h(
         'span',
         { className: 'dkf-strip', 'data-hint': actions.map((action) => `${action.ordinal}. ${action.action}`).join('\n') },
-        extra > 0 ? h('span', { className: 'dkf-ago' }, `+${extra}`) : null,
+        older > 0 ? h('span', { className: 'dkf-ago' }, `+${older}`) : null,
         visible.map((action, index) =>
           h('span', {
             key: `${action.ordinal}-${index}`,
-            className: cls('dkf-block', index === visible.length - 1 && 'dkf-block-current'),
+            className: cls('dkf-block', index === anchor && 'dkf-block-current'),
             style: { background: colorOf(action.action) },
             'data-hint': `${action.ordinal}. ${action.action} · ${action.date} · ${action.title ?? ''}`,
           }),
         ),
+        newer > 0 ? h('span', { className: 'dkf-ago', 'data-hint': `还有 ${newer} 条更新的动作没画下` }, `+${newer}`) : null,
       )
     }
 
@@ -1352,7 +1367,7 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { className: 'dkf-hit-head' },
-              strip(row.issue.actions),
+              strip(row.issue.actions, row.actionId),
               h('span', { className: 'dkf-id' }, highlightParts(String(row.issue.id), row.idRanges)),
               row.issue.domain ? h('span', { className: 'dkf-chip' }, row.issue.domain) : null,
               h('span', { className: 'dkf-chip' }, row.issue.done === true ? '已完成' : '进行中'),
