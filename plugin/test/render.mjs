@@ -298,6 +298,22 @@ check('搜索：命中 issue 名时，第二行只是当前标题（不做高亮
   assert.equal(byClass(hit, 'dkf-hit-title-quiet').length, 1, '第二行是背景标题，弱化显示')
   assert.equal(byClass(hit, 'dkf-chip-action').length, 0, '没有动作标签')
 })
+check('搜索：结果行带该 issue 的动作色条与 hover 预览', () => {
+  const view = render({ tabId: 'issue', query: '动作 1' })
+  const hit = byClass(view, 'dkf-hit')[0]
+  assert.equal(byClass(hit, 'dkf-strip').length, 1, '第一行要带历次动作的彩色条')
+  assert.ok(byClass(hit, 'dkf-block').length >= 1, '色条里每个块是一次动作')
+  const hint = String(hit.props['data-hint'] ?? '')
+  assert.match(hint, /命中：/, '预览要说清命中来自哪条动作')
+  assert.match(hint, /第 1\/2 条/, '以及动作位置')
+})
+
+check('搜索：命中 issue 名时预览给当前标题', () => {
+  const view = render({ tabId: 'issue', query: 'b' })
+  const hint = String(byClass(view, 'dkf-hit')[0].props['data-hint'] ?? '')
+  assert.match(hint, /当前标题/, '没有动作命中时预览讲当前状态')
+  assert.match(hint, /b 标题/)
+})
 check('搜索：没有命中时给明确空态', () => {
   const view = render({ tabId: 'issue', query: 'zzz' })
   assert.equal(byClass(view, 'dkf-hit').length, 0)

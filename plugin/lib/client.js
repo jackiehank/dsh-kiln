@@ -1032,6 +1032,8 @@ window.__ModuleLoader__.load({
           actionId: actionHit === null ? null : String(actionHit.id ?? ''),
           ordinal: actionHit === null ? null : actionHit.ordinal,
           total: actions.length,
+          /** 命中动作的日期（preview 里给到天）；命中 issue 名时退回最后一条动作的日期。 */
+          date: String((actionHit === null ? issue?.last?.date : actionHit.date) ?? '').slice(0, 10),
           idRanges: matchRanges(id, terms),
           titleRanges: matchRanges(shown, terms),
         })
@@ -1303,6 +1305,22 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 搜索结果的 hover 预览：行里的标题会被省略号截断，这里把它补全，
+     * 并说清命中来自哪条动作（动作名 + 位置 + 日期）。多行文本，`.dkf-tip-title` 用 pre-line 渲染。
+     */
+    function hitHint(row) {
+      const state = row.issue.done === true ? '已完成' : '进行中'
+      const head = [String(row.issue.id ?? ''), state, String(row.issue.domain ?? '')]
+        .filter((part) => part !== '')
+        .join(' · ')
+      const when = row.date === '' || row.date === undefined ? '' : ` · ${row.date}`
+      const lines =
+        row.action === null
+          ? [head, `当前标题${when}`, String(row.title ?? '')]
+          : [head, `命中：${row.action} · 第 ${row.ordinal ?? '?'}/${row.total ?? '?'} 条${when}`, String(row.title ?? '')]
+      return lines.join('\n')
+    }
+    /**
      * 搜索结果：一行一条 issue（id / 标题 / 领域 / 状态 / ⏎）。
      * 有输入就整块替掉内容区——不是把当前页的列表收窄（那样搜不到别的页里的东西）。
      */
@@ -1328,10 +1346,13 @@ window.__ModuleLoader__.load({
               'aria-selected': index === props.selected,
               onClick: () => props.onPick(row),
               style: row.action === null ? undefined : { '--dkf-row-color': colorOf(row.action) },
+              // hover 预览：把行里被省略号吃掉的东西补全（完整标题 + 命中动作的日期与位置）
+              'data-hint': hitHint(row),
             },
             h(
               'div',
               { className: 'dkf-hit-head' },
+              strip(row.issue.actions),
               h('span', { className: 'dkf-id' }, highlightParts(String(row.issue.id), row.idRanges)),
               row.issue.domain ? h('span', { className: 'dkf-chip' }, row.issue.domain) : null,
               h('span', { className: 'dkf-chip' }, row.issue.done === true ? '已完成' : '进行中'),
