@@ -60,3 +60,80 @@ kiln path <id> --json        N 次（N = min(issue 数, 80)）
 | 增量刷新的子进程 | 1 次 git range + 1 次 graph + 受影响 issue 的 path | 同上 |
 
 这几条只说明"钱花在哪"，具体到今天的机器、并发曲线与前端成本，见 collect。
+
+## 收集：今天的实测
+
+环境：Windows 11 · 20 逻辑核 · Node v24.19.0 · kiln 0.1.1（`C:\Users\jacki\go\bin\kiln.EXE`）。
+探针随仓库提交，可复跑：
+
+```powershell
+node plugin/test/probe-perf.mjs . C:\Users\jacki\kiln
+```
+
+两个仓：`dsh-kiln`（18 issue / 104 动作）、`~/kiln`（59 issue / 257 动作）。
+
+### 一次快照
+
+| 仓库 | issue | `graph` | 冷启动 | 快照 JSON | HEAD 命中 |
+| --- | --- | --- | --- | --- | --- |
+| dsh-kiln | 18 | 115 ms | **696 ms** | 39 KB | 0.7 ms |
+| `~/kiln` | 59 | 108 ms | **1924 ms** | 87 KB | 0.6 ms |
+
+冷启动 ≈ `graph` + `ceil(N / 4) × 110ms`，与「成本几乎全在 path」的旧结论一致；
+命中路径已经只剩一次直读 HEAD，没有可压的空间。
+
+### 并发扫描（一次重建里跑完全部 `kiln path`）
+
+| 并发 | 2 | **4（今天）** | 8 | 12 | 16 | 24 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 18 条 | 958 ms | **558 ms** | 430 ms | 439 ms | 420 ms | 437 ms |
+| 59 条 | 3259 ms | **1819 ms** | 1258 ms | 1264 ms | 1240 ms | 1256 ms |
+
+8 之后是平台期：Windows 的进程创建在 8 个并发时就打满了，再加只是把等待切得更碎
+（59 条 8→24 只差 18ms，噪声级）。**并发 4 是被丢掉的 30%。**
+
+### 进程启动地板（5 次中位数）
+
+| 命令 | 耗时 |
+| --- | --- |
+| `kiln --version` | 84 ms |
+| `git rev-parse HEAD` | 82 ms |
+| `git merge-base --is-ancestor` | 86 ms |
+| `git log -n 50` | 88 ms |
+
+单条 `kiln path` 是 104–110 ms，即**其中约 80ms 是启动**，真正干活只占 20–30ms。
+推论：只要还是「一条 issue 一个进程」，冷启动的物理下限就是 `N × 80ms ÷ 并发`。
+
+### 增量刷新（在一次性克隆里提交一条动作后测）
+
+| 步骤 | 耗时 | 缓存 |
+| --- | --- | --- |
+| 冷启动（克隆） | 682 ms | `build` |
+| 提交一条动作后再刷新 | **329 ms** | `incremental`，只重取 `kiln-search` |
+| 紧接着再刷新 | 0 ms | `hit` |
+
+329 ms 由四个子进程构成，但它们的依赖关系并不成立：
+
+```text
+readGraph（108）→ isAncestor（86）→ newIssueIds（88）→ path × k（110）
+```
+
+`graph`、`merge-base --is-ancestor`、`git log <old>..<new>` **三者互不依赖**——现在却排着队跑。
+
+### 前端纯计算（85 KB 快照，5 次中位数）
+
+| 操作 | 耗时 |
+| --- | --- |
+| `JSON.parse` | 0.20 ms |
+| `searchIssues`（全仓 257 个动作） | 0.15 ms |
+| `buildMermaid`（59 节点） | 0.02 ms |
+
+前端不是瓶颈：解析、搜索、mermaid 文本都在 1ms 以下；真正花时间的是 pele 的布局与绘制，
+那条线已单独量过（58 节点约 20ms，`kiln-graph-readability`），这次不动。
+
+### 结论
+
+1. 主成本是 **N 次进程启动**，不是数据量（87 KB 解析 0.2ms）；
+2. 并发 4 → 8：冷启动 −23%（18 条）/ −31%（59 条），再高无收益；
+3. 增量刷新的四个子进程里有三个**互不依赖**，串行是白等；
+4. 前端、payload、命中路径都不值得动。
