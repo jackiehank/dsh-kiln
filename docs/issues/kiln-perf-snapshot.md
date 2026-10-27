@@ -197,3 +197,46 @@ A/B/C 就都成了余量。给 `~/kiln` 提 ask，并与 `issue-list-scaling` �
 
 本轮**落地 A + B + C**；D/E 否决并记账；F 提上游。另外补一个观测口径：
 构建耗时进 `payload.cache.ms`，头部快照提示直接显示，便于以后复核不用开控制台。
+
+## 落地
+
+1. **并发 4 → 8**（`plugin/lib/flow.js` 的 `PATH_CONCURRENCY`）：注释里带实测曲线，并写清
+   「不按核数自适应」的理由——平台期跟核数无关，自适应只会让小机器开得太多。
+2. **增量三探并行**（`plugin/lib/snapshot.js`）：`readGraph` / `isAncestor` / `newIssueIds`
+   三路一起发；`buildRecord` 接受调用方已拿到的 `graphResult`（省一次 108ms），
+   但它在 `ok !== true` 时**自己重取**——「失败要重试」这条语义不能因为省一次而丢。
+3. **单飞**（`plugin/lib/snapshot.js` 的 `buildOnce`）：按 `repo + maxIssues` 记 in-flight，
+   同仓并发请求并到同一轮构建；**只在 `record.head === probe.head` 时复用**，失败结果不留在
+   in-flight 里当答案。命中合并时缓存标记是 `coalesced`。
+4. **观测**：`get()` 把宿主侧耗时写进 `cache.ms`；页头仓库名的提示变成
+   「build / incremental / coalesced · 123ms · 时间」，性能问题在界面上就能复核。
+
+### 验证（同一台机器，改前 → 改后）
+
+| 指标 | 改前 | 改后 | 目标 |
+| --- | --- | --- | --- |
+| 本仓冷启动（19 条 issue） | 696 ms | **527 ms** | ≤ 600 ms |
+| `~/kiln` 冷启动（59 条 issue） | 1924 ms | **1290 ms** | ≤ 1400 ms |
+| 单条提交后的刷新（克隆实测） | 329 ms | **203 ms** | ≤ 300 ms |
+| HEAD 命中 | 0.6 ms | 0.4 ms | ≤ 5 ms |
+| 冷缓存上两个并发请求 | 2 × 1924 ms（两轮 60 个子进程） | **1306 ms**（`build + coalesced`） | 只跑一轮 |
+| 前端纯计算（解析 / 搜索 / mermaid） | 0.20 / 0.15 / 0.02 ms | 未变 | 不是瓶颈 |
+
+- `npm test --prefix plugin` → **50 个宿主用例 + 45 个渲染用例**全过。新增 5 条：`cache.ms`、
+  同仓并发合并、合并只认同一 HEAD、三探同时发出（三探拦在同一道闸门上，串行实现会死等 → 超时失败）、
+  预取 graph 失败会重取。
+- 探针（随仓库提交，只读）：`node plugin/test/probe-perf.mjs . C:\Users\jacki\kiln`。
+
+### 已知边界
+
+- **下限仍是"每条 issue 一次启动"**：按 80ms/次、并发 8 外推，19 条约 190ms、59 条约 590ms
+  （实测 527 / 1290，差的这部分是进程创建之间互相排队 + 一次 graph）。要再快只能等上游批量接口。
+- **单飞只在"这一轮构建还没结束"时生效**：两次刷新隔了一次构建的时长，就还是两轮
+  （第二轮通常是 `hit` / `incremental`，本来也不贵）。
+- 未动：前端渲染、payload 体积（87KB）、pele 布局；渐进式两段快照与跨重启持久化按假设里的理由否决。
+
+### 上游
+
+`kiln path` 不接多个 id（`kiln path a b --json` 静默只回第一个），所以批量化只能在 kiln 侧做。
+已提：`~/kiln` 的 `path-batch`（`docs/issues/path-batch.md`，commit `0249745`），
+关联 `issue-list-scaling` 与 `path-action-tags`。落地后本插件只需把 `readHistories` 换成一次调用。

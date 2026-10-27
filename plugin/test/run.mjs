@@ -50,14 +50,31 @@ function makeFakeFlow() {
     ]),
     calls: [],
     graphFails: false,
+    /** 头几次 graph 调用直接失败（验证“预取失败要重取”）。 */
+    graphFailures: 0,
+    /** 闸门：把取数挂起来，用来排并发请求的时序。 */
+    graphGate: null,
+    historyGate: null,
+    /** 每次调用时通知测试（排“是否同时发出”）。 */
+    onCall: null,
+  }
+  const note = (name) => {
+    state.calls.push(name)
+    if (typeof state.onCall === 'function') state.onCall(name)
   }
   const flow = {
     readGraph: async () => {
-      state.calls.push('graph')
+      note('graph')
+      if (state.graphGate !== null) await state.graphGate
+      if (state.graphFailures > 0) {
+        state.graphFailures -= 1
+        return { ok: false, reason: 'kiln-error' }
+      }
       return state.graphFails ? { ok: false, reason: 'not-kiln-repo' } : { ok: true, graph: state.graph }
     },
     readHistories: async (_repo, ids) => {
-      state.calls.push(`histories:${ids.join(',')}`)
+      note(`histories:${ids.join(',')}`)
+      if (state.historyGate !== null) await state.historyGate
       const out = new Map()
       for (const id of ids) out.set(id, state.histories.get(id) ?? [])
       return out
@@ -75,20 +92,28 @@ function makeFakeGit() {
     ancestor: true,
     delta: { ok: true, ids: new Set() },
     calls: [],
+    probeGate: null,
+    onCall: null,
+  }
+  const note = (name) => {
+    state.calls.push(name)
+    if (typeof state.onCall === 'function') state.onCall(name)
   }
   const git = {
     readHead: async () => {
-      state.calls.push('head')
+      note('head')
       return state.head
     },
     configToken: () => state.config,
     binaryToken: () => state.bin,
     isAncestor: async () => {
-      state.calls.push('ancestor')
+      note('ancestor')
+      if (state.probeGate !== null) await state.probeGate
       return state.ancestor
     },
     newIssueIds: async () => {
-      state.calls.push('delta')
+      note('delta')
+      if (state.probeGate !== null) await state.probeGate
       return state.delta
     },
   }
@@ -304,6 +329,115 @@ await check('缓存：读不到 HEAD 时不缓存，但功能不降级', async (
   const second = await cache.get('r', { bin: 'b1' })
   assert.notEqual(second.cache.action, 'hit')
   assert.ok(state.calls.includes('graph'), '无 HEAD 时每次都重建')
+})
+
+await check('缓存：cache.ms 是宿主侧实测耗时（界面上要能复核）', async () => {
+  const { flow } = makeFakeFlow()
+  const { git } = makeFakeGit()
+  const cache = createSnapshotCache({ git, flow })
+  const result = await cache.get('r', { bin: 'b1' })
+  assert.equal(typeof result.cache.ms, 'number')
+  assert.ok(result.cache.ms >= 0)
+})
+
+await check('缓存：同仓并发请求只构建一次（连点刷新不跑两遍子进程）', async () => {
+  const { flow, state } = makeFakeFlow()
+  const { git } = makeFakeGit()
+  const cache = createSnapshotCache({ git, flow })
+
+  // 把取数挂在闸门上：两个请求都进来之后再放行，模拟「构建中又点了一次刷新」
+  let release = null
+  state.historyGate = new Promise((resolve) => {
+    release = resolve
+  })
+
+  const first = cache.get('r', { bin: 'b1' })
+  const second = cache.get('r', { bin: 'b1' })
+  state.historyGate = null
+  release()
+  const [a, b] = await Promise.all([first, second])
+
+  assert.equal(a.ok, true)
+  assert.equal(b.ok, true)
+  assert.equal(a.cache.action, 'build')
+  assert.equal(b.cache.action, 'coalesced')
+  assert.deepEqual(state.calls, ['graph', 'histories:a,b'], '一轮构建只该取一遍数')
+  assert.equal(a.issues.length, 2)
+  assert.equal(b.issues.length, 2)
+})
+
+await check('缓存：合并只认同一 HEAD（构建期间 HEAD 又动了就不复用）', async () => {
+  const { flow, state } = makeFakeFlow()
+  const { git, state: gitState } = makeFakeGit()
+  const cache = createSnapshotCache({ git, flow })
+
+  let release = null
+  state.historyGate = new Promise((resolve) => {
+    release = resolve
+  })
+
+  const first = cache.get('r', { bin: 'b1' })
+  // 等第一个请求读过 HEAD 并进入构建，再让 HEAD 前进
+  await new Promise((resolve) => setImmediate(resolve))
+  gitState.head = 'h2'
+  const second = cache.get('r', { bin: 'b1' })
+  state.historyGate = null
+  release()
+  const [a, b] = await Promise.all([first, second])
+
+  assert.equal(a.cache.action, 'build')
+  assert.notEqual(b.cache.action, 'coalesced', '不同 HEAD 的记录不能顶给新请求')
+  assert.equal(b.ok, true)
+  assert.equal(state.calls.filter((call) => call === 'graph').length, 2, '第二个请求要自己取一遍')
+})
+
+await check('缓存：增量时 graph 与两条 git 探测同时发出（不排队）', async () => {
+  const { flow, state } = makeFakeFlow()
+  const { git, state: gitState } = makeFakeGit()
+  const cache = createSnapshotCache({ git, flow })
+  await cache.get('r', { bin: 'b1' })
+
+  gitState.head = 'h2'
+  gitState.delta = { ok: true, ids: new Set(['a']) }
+
+  // 三探都拦在同一个闸门上：串行实现永远等不到「三个都开始」，只能靠超时收场
+  const started = new Set()
+  let release = null
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  const touch = (name) => {
+    if (name !== 'graph' && name !== 'ancestor' && name !== 'delta') return
+    started.add(name)
+    if (started.size === 3) release()
+  }
+  state.onCall = touch
+  gitState.onCall = touch
+  state.graphGate = gate
+  gitState.probeGate = gate
+
+  const timeout = new Promise((_resolve, reject) => {
+    setTimeout(() => reject(new Error('三探没有同时发出（串行会死等）')), 1500).unref?.()
+  })
+  const result = await Promise.race([cache.get('r', { bin: 'b1' }), timeout])
+  assert.equal(result.cache.action, 'incremental')
+  assert.deepEqual([...started].sort(), ['ancestor', 'delta', 'graph'])
+})
+
+await check('缓存：预取的 graph 失败时会重取一次（重试语义不丢）', async () => {
+  const { flow, state } = makeFakeFlow()
+  const { git, state: gitState } = makeFakeGit()
+  const cache = createSnapshotCache({ git, flow })
+  await cache.get('r', { bin: 'b1' })
+
+  gitState.head = 'h2'
+  gitState.delta = { ok: true, ids: new Set(['a']) }
+  state.calls.length = 0
+  state.graphFailures = 1
+
+  const result = await cache.get('r', { bin: 'b1' })
+  assert.equal(result.ok, true, '预取的 graph 失败不该让整次请求失败')
+  assert.equal(state.calls.filter((call) => call === 'graph').length, 2, '失败后要真的重取一次')
 })
 
 let loaded = null

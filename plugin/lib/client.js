@@ -2128,7 +2128,9 @@ window.__ModuleLoader__.load({
             className: 'dkf-repo',
             'data-hint':
               payload?.ok === true
-                ? `${cwd}\n快照：${payload.cache?.action ?? 'unknown'} · ${payload.generatedAt ?? ''}`
+                ? `${cwd}\n快照：${payload.cache?.action ?? 'unknown'}${
+                    typeof payload.cache?.ms === 'number' ? ` · ${payload.cache.ms}ms` : ''
+                  } · ${payload.generatedAt ?? ''}`
                 : cwd,
           },
           basename(cwd) || 'kiln',

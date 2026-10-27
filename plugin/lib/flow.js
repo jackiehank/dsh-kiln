@@ -15,7 +15,15 @@ const execFileAsync = promisify(execFile)
 const RUN_TIMEOUT_MS = 20_000
 const MAX_BUFFER = 8 * 1024 * 1024
 const DEFAULT_MAX_ISSUES = 80
-const PATH_CONCURRENCY = 4
+/**
+ * 一次重建要起 N 个 `kiln path` 进程，成本主要在**进程启动**（Windows 上约 80ms/次）。
+ * 实测（20 核，59 条 issue 的仓）：2→3259ms、4→1819ms、8→1258ms、12→1264ms、16→1240ms，
+ * 8 之后就打到平台期——再加只是把等待切碎。
+ *
+ * 所以取 8：大仓吃满，小仓不铺张。**不按 CPU 核数自适应**：平台期跟核数无关，20 核机器上
+ * 选 16 只多 18ms，却让 4 核机器上的进程数翻倍。
+ */
+const PATH_CONCURRENCY = 8
 const MAX_TITLE = 200
 
 /** 一次 kiln 调用失败时携带可读原因，方便路由层原样透出。 */

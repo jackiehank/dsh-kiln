@@ -77,6 +77,12 @@ async function main() {
     const built = await timeIt(() => buildFlow({ repo, graph: graph.graph, histories: hist.value }))
     console.log(`buildFlow: ${built.ms.toFixed(1)} ms`)
 
+    // 单飞：冷缓存上同时发两个请求，应该只跑一轮构建
+    const shared = createSnapshotCache()
+    const coalesce = await timeIt(async () => Promise.all([shared.get(repo), shared.get(repo)]))
+    const actions = coalesce.value.map((payload) => payload.cache?.action ?? 'unknown')
+    console.log(`两个并发请求: ${coalesce.ms.toFixed(0)} ms · ${actions.join(' + ')}`)
+
     console.log(`并发扫描: ${(await sweep(repo, ids)).join('  ')}`)
   }
 }

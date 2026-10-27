@@ -38,6 +38,13 @@ DSH × kiln 的插件初稿：在会话顶部标签排（对话 / 轨迹 / 上�
   `pele.mount()`（Pele 没有字号变量，只改 CSS 会“字小框不变”，见 `docs/issues/kiln-graph-typography.md`）。
 - 与壳的关系：kiln 视图挂载期间隐藏 DSH 的“拖动调宽”手柄
   （`[data-conversation-content]:has(.dkf-root) [data-width-handle]`），切回对话页自动恢复。
+- 取数的代价（见 `docs/issues/kiln-perf-snapshot.md`）：一次快照 = 1 次 `kiln graph` + 每条 issue
+  一次 `kiln path`，成本几乎全在**进程启动**（Windows 约 80ms/次）。所以：path 并发 8
+  （实测 4→8 冷启动 −30%，再高是平台期）；HEAD 是失效令牌，HEAD 不动只花一次直读 ref（<1ms），
+  HEAD 前进只重取受影响的 issue；增量路径上 `graph` 与两条 git 探测**同时发**；
+  同仓并发的请求并到同一轮构建（连点刷新不会跑两遍子进程）。
+  实测：本仓冷启动 0.53s（19 条）、`~/kiln` 1.29s（59 条）、单条提交后 0.2s。
+  构建耗时进 `payload.cache.ms`，悬停页头的仓库名就能看到「build / incremental / coalesced · 多少 ms」。
 
 ## 文件
 
@@ -45,7 +52,12 @@ DSH × kiln 的插件初稿：在会话顶部标签排（对话 / 轨迹 / 上�
 | --- | --- |
 | `lib/index.js` | 宿主半：注册只读 HTTP 路由（Cordis function plugin） |
 | `lib/flow.js` | 宿主半的数据层：调 kiln CLI，把仓库读成一份快照 |
+| `lib/snapshot.js` | 宿主半的快照缓存：HEAD 失效、按 issue 增量、同仓并发合并 |
+| `lib/git.js` | 宿主半的 git 探测：HEAD、配置/二进制令牌、`old..new` 碰了哪些 issue |
 | `lib/client.js` | 浏览器半：`conversation.view` 插槽条目，名字 `kiln` |
+| `test/run.mjs` | 宿主侧用例（数据层、缓存决策、搜索/筛选纯函数） |
+| `test/render.mjs` | 渲染冒烟（极简 React 替身，不碰浏览器） |
+| `test/probe-perf.mjs` | 性能探针：graph / 冷启动 / 命中 / 并发扫描 / 并发合并 |
 | `cordis.patch.yml` | 宿主侧插入声明（`insert: id: dsh-kiln`） |
 | `package.json` | `dsh.bundle.patch` + `dsh.client` 平台与依赖声明 |
 
@@ -61,6 +73,12 @@ node --input-type=module -e "
 "
 ```
 
+量一次取数的代价（只读，跑 `kiln` 与直读 ref，不写文件）：
+
+```powershell
+node plugin/test/probe-perf.mjs . C:\Users\jacki\kiln
+```
+
 ## 安装（桌面端 profile）
 
 插件目前只是本地目录，不发布。安装需要写 `~/.dsh/profiles/desktop`：
@@ -72,7 +90,9 @@ node --input-type=module -e "
 ## 已知边界
 
 - 只读；不写 issue、不提交。
-- 每次打开视图 = 1 次 `graph` + N 次 `path`（N = issue 数，上限 80，并发 4）。
+- 一次快照 = 1 次 `graph` + N 次 `path`（N = issue 数，上限 80，并发 8）；冷启动的物理下限就是
+  `N × 80ms ÷ 8`（写入进程启动成本），要再快只能等上游给批量接口
+  （`kiln path` 现在不接多个 id：`kiln path a b --json` 静默只回第一个）。
 - 关系词表按 kiln 0.1.x 的内置词表硬编码在 `client.js` 的 `GROUPS` 里；等 kiln 支持
   `.kilnconfig.jsonc` 配置 `relations` 后改成读配置。
 - Flow 布局是初稿，Triage / Genealogy 尚未实现。
