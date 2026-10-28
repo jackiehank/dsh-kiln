@@ -602,6 +602,20 @@ kiln timeline --jsonl
 - 不落盘：宿主重启后首屏缓存丢失，回到冷流式 ~0.1–0.2s。
 - 排序仍是“拓扑约束下的 author-date”，merge 仓不是严格全局时间序。
 
+## collect（2026-10-28）：上游把「timeline 流」做出来了，名字是 `action log --jsonl`
+
+- kiln v0.3.0 新增 `kiln action log --jsonl [--limit N]`，下游契约定稿在 `~/kiln@8f942fc`
+  （`docs/action-log.md` 第六轮）。**§6 的依赖 1 已交付**，只是入口不叫 `timeline`。
+- 契约要点：一行一个对象；`issue`/`action`/`commit`/`date` 恒有，`title`/`domain`/`tags` 缺省即没有；
+  没有终止记录（EOF 即结束）、没有增量游标；git 是 author-date 倒序，jj 是拓扑序。
+- **依赖 2、3 仍未交付**（同日用 v0.3.0 复验）：`list --json` 的行仍是
+  `id / domain / action / done / title / commit / tags`，没有 `date`；`list` 也没有
+  `--limit/--offset`。所以「索引窗口 + 按最近排序」这一半还开不了工。
+- 本仓已经把时间线改成吃这条流（`kiln-v030-adapter`）：时间线不再受 80 条限制，issue 列表与
+  关系图仍走原快照。实测本仓 142 行 101ms、`~/kiln` 350 行 115ms。
+- 剩下的是「索引窗口 + 按需详情」：等上游补 `list` 的 `date` 与分页，再决定要不要在宿主缓存
+  首屏 N 条。
+
 ### 8. 验收
 
 - **同一套端点/代码**在 64 / 1k / 10k / 100k 合成仓上跑通，没有 mode 参数/规模分支。
