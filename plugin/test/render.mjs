@@ -115,8 +115,6 @@ globalThis.window = {
 }
 globalThis.document = { getElementById: () => ({}), createElement: () => ({}) }
 globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.stringify(payload) })
-// 渲染用例不跑 effect：搜索的 120+100ms 延迟实验在测试里必须关闭，否则结果永远不出现。
-globalThis.__DSH_KILN_TEST__ = true
 
 await import('../lib/client.js?render=1')
 assert.equal(loaded?.id, '@local/dsh-kiln')
