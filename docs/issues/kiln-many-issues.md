@@ -84,3 +84,100 @@ Flow 是**只读快照**：打开仓库时拿全量 `graph`，但只保留前 80
 - 不引入索引 / 数据库 / 持久化缓存；
 - 不承诺把 100k issue 全塞进一次快照；
 - 不改关系图 / 时间线的视觉。
+
+## 收集：同类工具怎么处理“多”（2026-10-28）
+
+看的是同一个问题：对象很多、不可能全塞进一个本地视图时，CLI / TUI / Web / GUI 分别怎么办。
+
+### 1. GitHub（Web + gh CLI）：一页 + 服务端搜索 + 按需详情
+
+- REST 列表分页：`per_page`，大多数端点最大 100，下一页靠 `Link` header
+  （[pagination](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api)）。
+- `gh issue list` 默认只取**最近 30 条**，`--limit` 调大；筛选/搜索交给服务端
+  （[manual](https://cli.github.com/manual/gh_issue_list)）。
+- 搜索 API 每次最多 **1,000 条**（[search](https://docs.github.com/en/rest/search/search?apiVersion=2022-11-28#about-search)）；
+  超出时不是“全量”，而是明确的分页边界。
+- Web 的 issue 列表本身是查询结果，不是全库；点开 issue 才取详情/评论。
+
+**含义**：列表是「一页」，不是「库」；搜索是导航大集合的主入口；详情按需取。
+
+### 2. Jira：JQL 搜索优先 + token 分页
+
+- 新版 `/rest/api/3/search/jql` 用 `maxResults` + `nextPageToken` / `isLast` 翻页
+  （[JQL search](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/)）；
+  不再假设能一次拿全。
+- 界面是 issue navigator：先写 JQL/筛选，再翻页看结果；详情按需打开。
+
+**含义**：大集合的默认交互是“先查询”，不是“先列全”；页与页之间用稳定 token。
+
+### 3. GitLab：keyset 分页
+
+- API 默认 `per_page` 20、最大 100；用 keyset/游标而不是纯 offset，翻页稳定
+  （[pagination](https://docs.gitlab.com/api/rest/#pagination)、
+  [keyset](https://docs.gitlab.com/development/database/keyset_pagination/)）。
+
+**含义**：顺序与游标是契约的一部分；同一个仓库翻页不能因为新增对象而漂移。
+
+### 4. gh-dash（TUI）：固定 20/节，导航到未加载项时再取
+
+- 默认每个 section 只取 **20 条** PR / issue，可配置；加载时、定时刷新、以及
+  **导航到“还没有取到”的下一条时**再取
+  （[defaults](https://www.gh-dash.dev/configuration/defaults)）。
+- 右侧 preview pane 按需取当前项的详情；30 分钟定时刷新。
+
+**含义**：这是最接近插件的先例——固定页大小不是问题，**页能前进、当前项能预览**才是关键。
+
+### 5. Sourcegraph：搜索有上限/超时，明确“非穷尽”
+
+- 默认搜索有 `count:` / 超时上限；要穷尽需显式 `count:all`，且仍受服务端超时约束
+  （[exhaustive search](https://docs-legacy.sourcegraph.com/@4.4/code_search/how-to/exhaustive)）。
+
+**含义**：上限要可见、可解释；不要用“前 N 条”冒充全量。
+
+### 6. Linear：local-first 同步 + 本地 DB
+
+- 客户端各自维护本地数据库，创建/改状态/导航不依赖网络往返；增量 sync 处理落后
+  （[delta sync](https://linear.app/now/rebuilding-delta-sync-read-path)）。
+
+**含义**：这是另一条根治路线——全量本地索引，代价是持久化/同步引擎；与插件“不落盘”冲突，
+除非改形态。
+
+### 归纳：五条共识
+
+| 共识 | 例子 | 对 kiln 的含义 |
+| --- | --- | --- |
+| 列表是「一页」，不是「全库」 | GitHub 30/100、GitLab 20/100、Jira maxResults、gh-dash 20 | 80 本身不是问题 |
+| 页必须能前进 | GitHub 下一页、Jira token、gh-dash 导航时补取 | 现在缺“第 81 条”的路 |
+| 大集合靠搜索导航 | GitHub/Jira/Sourcegraph | 已有全仓搜索，但结果要能打开 |
+| 详情按需取 | GitHub issue 页、Jira、gh-dash preview | 行便宜、详情贵；不该把详情塞进快照 |
+| 上限要可见/可解释 | GitHub 1k、Sourcegraph count/timeout | 截断提示要有，且能继续 |
+
+另有两条反例/边界：
+
+- **VS Code** 用 `search.maxResults`（默认 20,000，可调）截断结果，但明确给“show more”；
+  说明“上限 + 可调 + 明示”是 GUI 的常见组合。
+- **Linear** 的本地全量同步能根治“多”，但要持久化索引；本仓的只读、不落盘约束下不该走。
+
+### 对 dsh-kiln 的直接含义
+
+1. **80 不是问题本身**；“只给前 80 条、且没有第 81 条的路”才是。GitHub / Jira / gh-dash
+   都接受页大小，但都能继续取或按需打开。
+2. **gh-dash 是最接近的先例**：固定页 + 导航到未加载项再取 + preview。插件的搜索命中已经跨出页，
+   缺的正是“打开这一条”的按需取数。
+3. **候选 A（`/kiln/issue` 按需取单条）不是补丁，是主流做法**；候选 B（焦点纳入）能让页选得更聪明，
+   但替代不了“任何命中都能打开”。
+4. **大仓“搜索优先”不是新发明**：Jira/JQL、GitHub search 都是；插件已有全仓搜索，只差结果可打开。
+5. **不学 Linear**：本地全量同步能根治，但要持久化索引/同步引擎，与“不落盘”冲突；除非另开 issue
+   改形态。
+
+### 来源
+
+- GitHub 分页：<https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api>
+- GitHub 搜索上限：<https://docs.github.com/en/rest/search/search?apiVersion=2022-11-28#about-search>
+- gh issue list：<https://cli.github.com/manual/gh_issue_list>
+- Jira JQL search：<https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/>
+- GitLab 分页：<https://docs.gitlab.com/api/rest/#pagination>
+- GitLab keyset：<https://docs.gitlab.com/development/database/keyset_pagination/>
+- gh-dash defaults：<https://www.gh-dash.dev/configuration/defaults>
+- Sourcegraph exhaustive：<https://docs-legacy.sourcegraph.com/@4.4/code_search/how-to/exhaustive>
+- Linear delta sync：<https://linear.app/now/rebuilding-delta-sync-read-path>
