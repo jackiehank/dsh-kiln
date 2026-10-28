@@ -395,3 +395,97 @@ S 先取 **200**（200 条约 400KB path、~1000 动作；首屏 path 仍是一�
 5. **结论 C 不变**：索引先行仍然是最小化 payload/DOM 的插件侧办法；只是“上游 limit”从“欠的东西”
    变成“触发条件已到的上游议题”。若上游不做，100k 的首屏仍是 1–2s 的全量 list，只能加加载态，
    不能假装更快。
+
+## 假设补充：timeline 边扫边发（2026-10-28）
+
+> 结论先行：给 **timeline** 单独做一条「上游 `git log --author-date-order` 边扫边发 NDJSON、
+> 下游宿主转发、浏览器边收边渲染」的流。它不建全仓模型，第一行在首个命中提交后就出现；
+> 100k 时首屏预计从 1–2s 降到 **~0.1–0.2s（5–10×）**，总扫描时间不变，内存有界。
+> issue 列表/关系图仍走 C 的 index-first；不要为了首屏把所有命令都改流式。
+
+### 1. 为什么只对 timeline 有效
+
+- `list` / `graph` 的流式只能省编码/传输；它们必须先 `engine.Build` 聚合全仓，
+  第一行仍要等全史扫描（100k 约 0.84–1.32s）。
+- **timeline 不需要聚合**：一行 = 一个提交的 trailer；`git log` 本身就是倒序、逐条输出。
+  只要把 `git.Log()` 的“先收全量再 parse”改成 `StdoutPipe` + 逐记录读，就能边扫边发。
+- author date 在每个 commit 头里（`%aI`），按 `git log --author-date-order` 输出即可；
+  不需要先知道某个 issue 的全部动作。
+- 排序承诺：`--author-date-order` 是“拓扑约束下的 author-date 倒序”——线性仓严格，
+  merge 多的仓可能为“父在子后”让路；要严格全局 author-date 排序只能缓冲，那会失去首行优势。
+
+### 2. 上游接口草案
+
+```text
+kiln timeline --jsonl
+```
+
+每行一个动作（NDJSON），字段：
+
+```json
+{"issue":"kiln-many-issues","action":"hypothesize","commit":"...","date":"2026-10-28T...","title":"...","domain":"integration"}
+```
+
+- 只输出同时带 `issue:` + `action:` 的提交（与 kiln 的识别规则一致）；
+- 顺序：`git log --author-date-order`，新→旧；
+- 不建 `engine.Build`，不读 `model.Repo`；stderr 只放错误，退出码沿用；
+- 可选 `--limit N` 由上游先做（但客户端也可以读够 N 行就断开、宿主 kill 子进程）；
+- jj 后端用等价的时间序（author timestamp）实现；做不到就明确“timeline 流仅 git”。
+
+### 3. 下游链路
+
+1. 宿主新增 `GET /kiln/timeline?cwd=`，`spawn` kiln，stdout 直接 pipe 到 HTTP chunked 响应；
+   客户端断开 / 切页 / 刷新时 kill 子进程。
+2. 浏览器 `fetch` + `ReadableStream` 按行解析 NDJSON；每行 `JSON.parse` 后 append；
+   用批量阈值（如 20 行或 50ms）合并 `setState`，避免每行一次 render。
+3. 首屏只渲染前 N 条（N≈50）；用户往下滚再继续读；背压由 Node 的 pipe 自然产生。
+4. 点行仍走 `/kiln/issue` 取该 issue 的 `path` + 邻域；timeline 本身不需要索引。
+5. 错误/结束：宿主转发 stderr 与退出码；客户端区分“正常结束”和“流中断”，不把半截当完整。
+
+### 4. 性能推演
+
+| 仓库规模 | 现在首屏 timeline | 流式首行 | 流式全程 | 内存/传输 |
+| --- | --- | --- | --- | --- |
+| 64 | 快照 ~0.2s | ~0.1s | ~0.1s | 很小 |
+| 1k | 快照 ~0.2s | ~0.1s | ~0.15s | ~350KB 全量 |
+| 10k | path 全量/大仓模式 | ~0.1s | ~0.3–0.5s | ~3.5MB 全量，首屏只读几十 KB |
+| 100k | 1–2s（全史建模） | **~0.1–0.2s** | ~1.1–1.3s | 35MB 全量；首屏可停读，kiln 峰值不持整份文档 |
+
+- 首行的常数来自：kiln/git 启动 ~46ms + 首个提交解析/传输/渲染；与仓库规模基本无关。
+- 总时间仍是一次全史扫描（10–13µs/commit 量级）；流式只把“等待”变成“渐进出现”。
+- 如果用户只读首屏，实际传输/解析可以远小于 35MB；背压会暂停 kiln。
+- 5–10× 是首屏（time-to-first-content）的改善，不是总吞吐的改善；2–3k 以下收益不明显。
+
+### 5. 与 C 的关系
+
+- C 解决 issue 列表、关系图、focus 的 **bounded**；
+- timeline 流解决**默认首屏**（最近动作）的 time-to-first-content；
+- 两者不冲突：timeline 不再依赖快照的 actions，issue/关系仍走 index + 按需详情；
+- 如果 timeline 流不可用（jj、老版本），回退到 C 的 focus-only timeline。
+
+### 6. 风险 / 代价
+
+- **排序是近似的**：`--author-date-order` 有拓扑约束；merge/日期错序时与“全局严格 author-date”
+  不完全一致，UI 文案要写“按作者时间，最近优先”。
+- **长连接**：一个 timeline 视图一个子进程；切页/刷新/HEAD 变化要 kill + 重启；Windows 上要确认
+  子进程树清理。
+- **解析与背压**：NDJSON 按行解析，半行/坏行要跳过并计数；客户端慢了要暂停读，不能无限堆内存。
+- **上游新增面**：新命令/格式/测试；`show`/`list` 的 JSON 契约不变，避免影响现有消费者。
+- **没有缓存**：每次打开 timeline 重扫；HEAD 不变时是否缓存首屏由插件决定（内存、LRU）。
+- **测试难**：流式时序/取消/错误需要合成仓与假流；不可能只靠现有 golden。
+
+### 7. 验收 / 实验
+
+- 上游：`kiln timeline --jsonl` 在合成 100k 仓上首行 ≤200ms；行序为 author-date 倒序
+  （拓扑约束）；只含 issue+action 提交；中断/退出码正确；`go test ./...`。
+- 插件：宿主 pipe + 客户端增量渲染；100k 首屏 p50 ≤250ms；切页后子进程被 kill；无重复/丢行；
+  只读首屏时内存不随总行数线性增长。
+- 回归：线性仓（如本仓/`~/kiln`）流式行序与现有 timeline 的 author-date 排序一致；
+  merge 仓记录差异并接受。
+- 对比实验：64 / 10k / 100k 合成仓，量首行、首屏、全程、峰值内存；没有 5× 就不值得做。
+
+### 8. 结论
+
+**值得做，但只做 timeline 这一条流**。它把大仓最常用的首屏从“等全史”变成“先看最近”，
+且不需要改动 `list`/`graph` 的契约；issue 列表/关系图仍按 C 的 index-first 解决。
+上游先定义 `timeline --jsonl`，插件再上宿主 pipe + 浏览器流式渲染；两者分开验收。
