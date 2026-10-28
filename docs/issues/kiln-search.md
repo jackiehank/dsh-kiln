@@ -628,3 +628,66 @@ UI 加什么、两边靠什么防止漂移。
 - lazygit Searching：<https://github.com/jesseduffield/lazygit/blob/master/docs/Searching.md>
 - VS Code Search Issues wiki：<https://github.com/microsoft/vscode/wiki/Search-Issues>
 - gh-dash：<https://pkg.go.dev/github.com/dlvhdr/gh-dash/v4@v4.3.0>
+
+## 验证：新二进制是否满足 search-result-contract（2026-10-28）
+
+被验对象：`C:\Users\jacki\kiln\kiln.exe`，`v0.2.1-0.20261028065156-2b02f3d33cd7`，构建 2026-10-28 14:55；
+对应 kiln issue `search-result-contract` 的 `92b37ad`（实现）+ `2b02f3d`（文档）。
+系统 PATH 上的 `kiln` 仍是 v0.2.0，下面的命令都显式用新二进制。
+
+### 结论
+
+**数据层契约满足**：rank 0–4、排序、tie-break、hit.total/date、文本/JSON 同序、非搜索输出不变、filters 叠加、
+空结果/空查询、go test/vet/gofmt 全部通过。插件侧只剩两处按计划的主动对齐（hit 规则、时间比较），
+不需要 kiln 再改。唯一没在真仓覆盖的是「>200 字符的 subject」——本仓最长 184，kiln 本身不截断；
+建议补一条单测，但不阻塞。
+
+### 逐项核对
+
+| 要求 / 验收 | 结果 | 证据 |
+| --- | --- | --- |
+| `rank` 0–4 都在真仓出现 | ✓ | `path json` → `path-action-tags#0`；`list scaling` → `issue-list-scaling#1`；`排序` → `search-result-contract#2`；`grep fzf` → `issue-list-scaling#3`；`search grep` → `issue-list-scaling#4` |
+| rank 只在 `--search` 出现，普通 list 仍按 id | ✓ | `list --json` 无 `rank` 键；与 v0.2.0 逐字节相同（见下） |
+| rank 0 只认首词前缀（Q1=A） | ✓ | `path json` 把 `path-action-tags` 排 0；`kiln v0.2.0` 在插件与 kiln 两边都把 `kiln-search` / `kiln-v020-adapter` 排 0 |
+| 同 rank tie-break：末条动作时间降序、再 id | ✓ | `path json` 的 rank 3：`perf-audit` 10-27 23:16 > `json-commit-hash` 20:51 > `config-home` 10-15；rank 4：`issue-list-scaling` 21:56 > `cli-consistency` 21:51；单测另有同日期按 id 的用例 |
+| `hit.total` / `hit.date` | ✓ | `排序` 的 `issue-list-scaling`：ordinal=6、total=10、date=`2026-10-27T17:40:25+08:00`，与 `path --json` 第 6 条动作的 commit/date/subject 逐项相等 |
+| hit 抑制：id+标题能解释 / 词分散 → 无 hit | ✓ | 查询 `search-result-contract` → hit=null；`search grep` → hit=null；`grep fzf` → 有 hit |
+| 文本与 JSON 同序 | ✓ | `path json`、`排序`、`worktree json`、`tag json` 四个查询逐条相同；与旧文本的“行集合”也相同（只是顺序变了） |
+| 非搜索输出逐字节不变 | ✓ | v0.2.0 vs 新二进制：`list --json` 17,206 B、`list` 3,690 B、`status --json` 15,301 B、`status` 2,579 B、`graph --json` 26,781 B 全部 `identical=True`；`path <id> --json` 与 `path --all --json` 也相同 |
+| filters 叠加且排序保持 | ✓ | `path json` 全量 7 条 → `--action=collect` 6 条、`--domain=cli` 6 条；过滤后仍是 rank 序；`filter` 回显 `action/search` |
+| 空结果 / 空查询 | ✓ | `--search zzz --json` → exit 0、`count:0`、stderr 一行；`--search ""` → exit 2 |
+| 文档同步 | ✓ | README:109 写了 rank 0–4 与 tie-break；`machine-readable-output.md:146/147/154` 写了 `rank`、`hit.total/date` 与“只有搜索改顺序” |
+| gofmt / vet / test | ✓ | `gofmt -l` 空；`go vet ./...` exit 0；`go test ./...` 全过；`TestListSearch*` / `TestListJSONWithoutSearch*` / `TestListTextWithoutSearch*` 13 条全 PASS |
+| >200 字符 subject | ⚠ | 本仓最长 184；kiln 无截断逻辑，但没找到单独的 >200 用例。建议补一条单测 |
+| 零值日期 | ✓（单测） | `TestListSearchSortsMissingDatesLast` 通过；真仓无零值数据 |
+| 快照 >80 条时的插件范围 | — | 未验；dsh-kiln 当前 20 条，插件上限 80，两边同范围 |
+
+### 与插件现有搜索的 parity
+
+在同一份 dsh-kiln 快照上跑了 9 个查询，把插件的内存搜索与 `kiln list --search --json` 对比：
+
+- **ids 与 rank 全部逐条相同**：`graph`、`Quick Open`、`色条 选中`、`SEARCH`、`搜索`、`dsh`、`zzz`、
+  `kiln v0.2.0`、`path json`；
+- **hit 只在两处不同**：`SEARCH`、`dsh`——插件仍按“标题能解释就抑制”，而 kiln 按“id+标题能解释”抑制。
+  这正是插件待改的那一处，不是 kiln 的问题；
+- 排序 tie-break 两边当前结果一致；插件按 ISO 字符串比较，跨时区会差，插件侧改成按时间即可。
+
+### 插件侧待做
+
+1. 把 `hit` 抑制规则改成 `id + 标题`（与 kiln 一致），删掉“只看标题”的旧判断；
+2. `byRecency` / 搜索 tie-break 改成按时间比较；
+3. 接宿主 `list --search` 路由与渲染（B 方案），保留高亮/键盘/色条；
+4. 二进制解析：PATH 上的 `kiln` 还是 v0.2.0，集成时用 `DSH_KILN_BIN=C:\Users\jacki\kiln\kiln.exe`
+   或更新 PATH；新二进制是 `v0.2.1-0.20261028...` 伪版本，若文档写版本下限，等正式 tag。
+
+### 复现命令
+
+```powershell
+$k='C:\Users\jacki\kiln\kiln.exe'
+& $k list --search '排序' --json
+& $k list --search 'path json'
+& $k list --json                      # 与 C:\Users\jacki\go\bin\kiln.exe 的 list --json 对拍
+go test ./... ; go vet ./... ; gofmt -l .
+```
+
+插件 parity 的临时脚本只读本仓与二进制，验证完已删除，不落盘。
