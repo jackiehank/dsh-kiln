@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 
-import { buildFlow, mapActions, parsePathDocument, pathShapeError } from '../lib/flow.js'
+import { buildFlow, mapActions, parsePathDocument, pathShapeError, searchDocumentError } from '../lib/flow.js'
 import { applyFocus, createSnapshotCache, evaluateCache } from '../lib/snapshot.js'
 import { parseTrailerRange } from '../lib/git.js'
 
@@ -938,57 +938,85 @@ await check('时间线筛选：动作与领域两组，过滤的是动作行', a
   assert.equal(filterRows(rows, readRowFilters(undefined), byId).length, 3, '没筛选就是原样')
 })
 
-await check('搜索：切词、AND、排序与高亮区间', async () => {
+await check('搜索：切词/高亮 + 宿主行映射（rank/hit 由 kiln 给，不再自己匹配）', () => {
   const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
-  const { splitTerms, searchIssues, matchRanges } = loaded.factory((name) => {
+  const { splitTerms, mapSearchRows, matchRanges } = loaded.factory((name) => {
     if (name === 'react') return reactStub
     throw new Error('unexpected require: ' + name)
   }).__internals ?? {}
-  assert.equal(typeof searchIssues, 'function', '需要 __DSH_KILN_TEST__ 暴露 searchIssues')
+  assert.equal(typeof mapSearchRows, 'function', '需要 __DSH_KILN_TEST__ 暴露 mapSearchRows')
 
   assert.deepEqual(splitTerms('  Graph   UI '), ['graph', 'ui'], '按空白切词并小写')
   assert.deepEqual(splitTerms('   '), [])
   assert.deepEqual(matchRanges('Kiln-Graph', ['graph']), [[5, 10]])
   assert.deepEqual(matchRanges('aaaa', ['aa']), [[0, 4]], '相邻区间合并成一段')
 
-  const issues = [
-    { id: 'kiln-graph-dark', title: '深色下的图', last: { date: '2026-10-02' } },
-    { id: 'kiln-search', title: '加一个搜索框', last: { date: '2026-10-03' } },
-    { id: 'other', title: '只在标题里出现 graph', last: { date: '2026-10-01' } },
-  ]
-  assert.deepEqual(
-    searchIssues(issues, 'graph').map((row) => row.issue.id),
-    ['kiln-graph-dark', 'other'],
-    'id 命中排在标题命中前面',
-  )
-  assert.deepEqual(
-    searchIssues(issues, 'graph dark').map((row) => row.issue.id),
-    ['kiln-graph-dark'],
-    '两个词都要出现（AND）',
-  )
-  assert.deepEqual(searchIssues(issues, 'SEARCH').map((row) => row.issue.id), ['kiln-search'], '大小写不敏感')
-  assert.deepEqual(searchIssues(issues, '  '), [], '空查询不出结果')
-  assert.deepEqual(searchIssues(issues, 'nonexistent'), [])
+  const a = {
+    id: 'a',
+    title: 'A 标题',
+    domain: 'integration',
+    done: false,
+    actions: [{ action: 'ask', title: 'ask 动作 1', id: 'sha-a1', ordinal: 1, date: '2026-01-01' }],
+    last: { date: '2026-01-01' },
+  }
+  const b = {
+    id: 'b',
+    title: 'B 标题',
+    domain: 'cli',
+    done: true,
+    actions: [
+      { action: 'ask', title: 'ask 动作 1', id: 'sha-b1', ordinal: 1, date: '2026-02-01' },
+      { action: 'apply', title: '落地 搜索框', id: 'sha-apply', ordinal: 2, date: '2026-02-02' },
+    ],
+    last: { date: '2026-02-02' },
+  }
+  const document = {
+    count: 3,
+    issues: [
+      { id: 'a', rank: 0, title: 'A 标题', domain: 'integration', done: false, hit: null },
+      {
+        id: 'b',
+        rank: 3,
+        title: 'B 标题',
+        domain: 'cli',
+        done: true,
+        hit: { ordinal: 2, action: 'apply', commit: 'sha-apply', subject: '落地 搜索框', total: 2, date: '2026-02-02T10:00:00+08:00' },
+      },
+      { id: 'c', rank: 4, title: 'C 标题', domain: 'docs', done: false, hit: null },
+    ],
+  }
+  const rows = mapSearchRows(document, new Map([['a', a], ['b', b]]), splitTerms('搜索'))
+  assert.deepEqual(rows.map((row) => row.issue.id), ['a', 'b', 'c'], '顺序由 kiln 决定，不再本地排序')
+  assert.equal(rows[0].action, null)
+  assert.equal(rows[0].date, '2026-01-01', '没 hit 时退回快照里最后一条动作的日期')
+  assert.equal(rows[1].issue, b, '快照里有的 issue 用完整对象（色条/展开要靠 actions）')
+  assert.equal(rows[1].action, 'apply')
+  assert.equal(rows[1].actionId, 'sha-apply')
+  assert.equal(rows[1].ordinal, 2)
+  assert.equal(rows[1].total, 2)
+  assert.equal(rows[1].date, '2026-02-02')
+  assert.equal(rows[1].title, '落地 搜索框', '命中动作时显示命中的那条标题')
+  assert.deepEqual(rows[1].titleRanges, [[3, 5]], '高亮落在展示的标题上')
+  assert.equal(rows[2].issue.actions.length, 0, '快照外的命中退化成最小行')
+  assert.equal(rows[2].issue.id, 'c')
+})
 
-  // 早期动作标题也要能搜到（契约见 docs/issues/kiln-search.md「为什么搜『搜索』没结果」）
-  const deep = [
-    {
-      id: 'kiln-search',
-      title: '撤掉 accent 强调条',
-      actions: [
-        { action: 'ask', id: 'sha-ask', ordinal: 1, title: '三页都只能按属性收窄' },
-        { action: 'apply', id: 'sha-apply', ordinal: 2, title: '落地：页头中间常驻搜索框' },
-      ],
-      last: { date: '2026-10-02' },
-    },
-  ]
-  const found = searchIssues(deep, '搜索')
-  assert.equal(found.length, 1, '只出现在早期动作标题里的词也要命中')
-  assert.equal(found[0].title, '落地：页头中间常驻搜索框', '展示命中的那条标题，否则高亮看不见')
-  assert.equal(found[0].action, 'apply', '命中来自动作时要说清是哪条动作')
-  assert.equal(found[0].ordinal, 2, '以及它在路径里的位置')
-  assert.equal(found[0].total, 2)
-  assert.deepEqual(found[0].titleRanges, [[9, 11]], '高亮落在展示的那条标题上')
+await check('搜索文档校验：旧二进制没有 rank / hit.total 就明说需要 v0.2.1+', () => {
+  assert.equal(searchDocumentError({ issues: [] }), null)
+  assert.equal(
+    searchDocumentError({ issues: [{ id: 'a', rank: 0, hit: null }] }),
+    null,
+    '新形状合格',
+  )
+  assert.match(searchDocumentError({ issues: [{ id: 'a', hit: null }] }), /v0\.2\.1\+/)
+  assert.match(
+    searchDocumentError({ issues: [{ id: 'a', rank: 0, hit: { ordinal: 1, action: 'ask', commit: 's', subject: 't' } }] }),
+    /total/,
+  )
+  assert.match(
+    searchDocumentError({ issues: [{ id: 'a', rank: 0, hit: { ordinal: 1, action: 'ask', commit: 's', subject: 't', total: 2 } }] }),
+    /date/,
+  )
 })
 
 await check('搜索框真居中：页头是左右等宽的三栏网格，输入框占中间那栏', async () => {

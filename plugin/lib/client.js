@@ -24,6 +24,10 @@ window.__ModuleLoader__.load({
 
     const STYLE_ID = 'dsh-kiln-flow-style'
     const FLOW_URL = '/kiln/flow'
+    const SEARCH_URL = '/kiln/search'
+    /** 搜索走宿主 → kiln，每次约 100ms；输入停 120ms 再发，连击只留最后一轮。 */
+    const SEARCH_DEBOUNCE_MS = 120
+    const EMPTY_SEARCH = { query: '', rows: [], pending: false, ms: 0, count: 0, error: null }
 
     /** 关系词表：宿主只回原始边，方向与强弱在这里推导（不在宿主判断“什么算重要”）。 */
     const INVERSE = {
@@ -845,12 +849,17 @@ window.__ModuleLoader__.load({
       return [pinned, ...sorted]
     }
 
-    /** 组内按最近动作时间排序；没有日期的排最后。 */
+    /** 组内按最近动作时间排序；按时间而不是 ISO 字符串比较，缺失日期的排最后。 */
     function byRecency(left, right) {
-      const leftDate = left.last?.date ?? ''
-      const rightDate = right.last?.date ?? ''
-      if (leftDate === rightDate) return left.id.localeCompare(right.id)
-      return leftDate < rightDate ? 1 : -1
+      const leftTime = Date.parse(left.last?.date ?? '')
+      const rightTime = Date.parse(right.last?.date ?? '')
+      const leftMissing = Number.isNaN(leftTime)
+      const rightMissing = Number.isNaN(rightTime)
+      if (leftMissing && rightMissing) return left.id.localeCompare(right.id)
+      if (leftMissing) return 1
+      if (rightMissing) return -1
+      if (leftTime === rightTime) return left.id.localeCompare(right.id)
+      return leftTime < rightTime ? 1 : -1
     }
 
     /**
@@ -1000,46 +1009,59 @@ window.__ModuleLoader__.load({
       return mergeRanges(ranges)
     }
 
-    /** 排序按"用户最可能想要的"：id 以首词开头 > id 命中 > 标题命中 > 拆开命中；同档按最近动作。 */
-    function searchIssues(issues, query) {
-      const terms = splitTerms(query)
-      if (terms.length === 0) return []
-      const rows = []
-      for (const issue of issues) {
-        const id = String(issue?.id ?? '')
-        const title = String(issue?.title ?? '')
-        // 快照里已经带着每个动作的标题：一起当检索面，否则"我记得这条 issue 讨论过 X、
-        // 但 X 只出现在早期动作里"就搜不到（见 docs/issues/kiln-search.md 的"为什么搜『搜索』没结果"）
-        const actions = Array.isArray(issue?.actions) ? issue.actions : []
-        const actionTitles = actions.map((action) => String(action?.title ?? '')).filter((text) => text !== '')
-        const haystack = [id, title, ...actionTitles].map((text) => text.toLowerCase()).join(' \u0000 ')
-        if (!terms.every((term) => haystack.includes(term))) continue
-        const hasAll = (text) => terms.every((term) => text.toLowerCase().includes(term))
-        const idHit = hasAll(id)
-        const titleHit = hasAll(title)
-        const actionHit = titleHit
-          ? null
-          : (actions.find((action) => hasAll(String(action?.title ?? ''))) ?? null)
-        const rank = id.toLowerCase().startsWith(terms[0]) ? 0 : idHit ? 1 : titleHit ? 2 : actionHit !== null ? 3 : 4
-        // 展示能看见命中的那条标题：当前标题优先，否则用命中的那条动作标题
-        const shown = titleHit ? title : (actionHit === null ? title : String(actionHit.title ?? ''))
-        rows.push({
+    /** 搜索失败时的可读文案：优先用宿主带来的 message，其次按 reason 翻成人话。 */
+    function searchFailureText(body) {
+      if (typeof body?.message === 'string' && body.message !== '') return body.message
+      const reason = String(body?.reason ?? '')
+      const known = {
+        'kiln-missing': '宿主进程里找不到 kiln 可执行文件。把 kiln 放进 PATH，或设置 DSH_KILN_BIN。',
+        'not-kiln-repo': '这个工作区不是 kiln 仓库（缺 .kilnconfig.jsonc）。',
+        'invalid-dir': '工作区路径无效。',
+        'empty-query': '搜索词为空。',
+      }
+      return known[reason] ?? (reason === '' ? 'kiln 搜索失败' : `搜索失败：${reason}`)
+    }
+
+    /**
+     * `kiln list --search --json` 的行 → 搜索结果视图需要的字段。
+     *
+     * **顺序、rank、hit 全部由 kiln 给**，这里只做字段改名与高亮区间；不再自己匹配/排序。
+     * 快照里有该 issue 时带上 actions（色条、n/m、跳转要靠它）；没有就退化成一个最小行——
+     * 搜索可以跨出快照的 80 条上限，但那一行只能看、不能展开动作详情。
+     */
+    function mapSearchRows(document, byId, terms) {
+      const rows = Array.isArray(document?.issues) ? document.issues : []
+      return rows.map((row) => {
+        const id = String(row?.id ?? '')
+        const found = byId?.get?.(id)
+        const issue = found ?? {
+          id,
+          domain: String(row?.domain ?? ''),
+          action: String(row?.action ?? ''),
+          done: row?.done === true,
+          title: String(row?.title ?? ''),
+          tags: Array.isArray(row?.tags) ? row.tags : [],
+          actions: [],
+          last: null,
+        }
+        const hit = row?.hit ?? null
+        const shown = hit === null ? String(row?.title ?? issue.title ?? '') : String(hit.subject ?? '')
+        const date = hit === null ? issue.last?.date : hit.date
+        return {
           issue,
-          rank,
+          rank: row?.rank,
           title: shown,
-          /** 命中来自动作标题时带上"哪条动作"——结果行要能区分"找到的是 issue 名"还是"动作里的词"。 */
-          action: actionHit === null ? null : String(actionHit.action ?? ''),
-          actionId: actionHit === null ? null : String(actionHit.id ?? ''),
-          ordinal: actionHit === null ? null : actionHit.ordinal,
-          total: actions.length,
-          /** 命中动作的日期（preview 里给到天）；命中 issue 名时退回最后一条动作的日期。 */
-          date: String((actionHit === null ? issue?.last?.date : actionHit.date) ?? '').slice(0, 10),
+          /** 命中来自动作时带上"哪条动作"——结果行要能区分"找到的是 issue 名"还是"动作里的词"。 */
+          action: hit === null ? null : String(hit.action ?? ''),
+          actionId: hit === null ? null : String(hit.commit ?? ''),
+          ordinal: hit === null ? null : hit.ordinal,
+          total: hit === null ? (Array.isArray(issue.actions) ? issue.actions.length : 0) : hit.total,
+          /** 命中动作的日期（preview 里给到天）；只命中 id/标题时退回快照里的最后一条动作日期。 */
+          date: String(date ?? '').slice(0, 10),
           idRanges: matchRanges(id, terms),
           titleRanges: matchRanges(shown, terms),
-        })
-      }
-      rows.sort((left, right) => left.rank - right.rank || byRecency(left.issue, right.issue))
-      return rows
+        }
+      })
     }
 
     /**
@@ -1858,6 +1880,8 @@ window.__ModuleLoader__.load({
 
     function KilnView(props) {
       const cwd = typeof props.cwd === 'string' ? props.cwd : ''
+      /** 测试缝：渲染用例不跑 effect，直接喂一份宿主搜索结果（生产恒为 null）。 */
+      const searchFixture = globalThis.__DSH_KILN_TEST__ === true ? globalThis.__DSH_KILN_SEARCH_FIXTURE__ : null
       const idBase = 'dsh-kiln-view'
       const memory = readViewState(cwd)
       const [state, setState] = React.useState(() => {
@@ -1886,6 +1910,8 @@ window.__ModuleLoader__.load({
       const [searchIndex, setSearchIndex] = React.useState(-1)
       /** 选中一条"动作命中"的结果后要滚到的那一行（值 = 动作的提交 sha）。 */
       const [scrollTo, setScrollTo] = React.useState(null)
+      /** 宿主返回的搜索结果；测试里由 __DSH_KILN_SEARCH_FIXTURE__ 覆盖（effect 不执行）。 */
+      const [rawSearch, setRawSearch] = React.useState(EMPTY_SEARCH)
       const rootRef = React.useRef(null)
       const searchRef = React.useRef(null)
       /** 中文输入法组合期间，回车是"上屏"不是"确认"，别让键盘处理抢先。 */
@@ -2038,11 +2064,77 @@ window.__ModuleLoader__.load({
       const issueList = React.useMemo(() => sortIssues(scoped, focus === null ? null : focus.id), [scoped, focus])
 
       /**
-       * 搜索：整仓范围（不看筛选，也不看焦点作用域——"直接找那一条"不该被悄悄过滤），
-       * 有输入就把内容区换成结果列表。
+       * 搜索：宿主路由 → `kiln list --search --json`；整仓范围，不看筛选与焦点。
+       * 输入停 120ms 再发，新查询会 abort 旧请求；高亮与键盘交互仍在客户端。
        */
       const searching = splitTerms(query).length > 0
-      const searchRows = React.useMemo(() => searchIssues(issues, query), [issues, query])
+      const searchState = searchFixture ?? rawSearch ?? EMPTY_SEARCH
+      React.useEffect(() => {
+        if (searchFixture !== null && searchFixture !== undefined) return
+        const terms = splitTerms(query)
+        if (terms.length === 0) {
+          setRawSearch(EMPTY_SEARCH)
+          return
+        }
+        const controller = new AbortController()
+        let cancelled = false
+        const startedAt = Date.now()
+        setRawSearch((previous) => ({ ...previous, pending: true, error: null }))
+        const timer = setTimeout(async () => {
+          try {
+            const response = await fetch(
+              `${SEARCH_URL}?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(query)}`,
+              { signal: controller.signal, cache: 'no-store' },
+            )
+            const body = await response.json()
+            if (cancelled) return
+            if (body?.ok !== true) {
+              setRawSearch({
+                query,
+                rows: [],
+                pending: false,
+                ms: Date.now() - startedAt,
+                count: 0,
+                error: searchFailureText(body),
+              })
+              return
+            }
+            const rows = mapSearchRows(body.document, byId, terms)
+            setRawSearch({
+              query,
+              rows,
+              pending: false,
+              ms: Date.now() - startedAt,
+              count: Number.isInteger(body.document?.count) ? body.document.count : rows.length,
+              error: null,
+            })
+          } catch (error) {
+            if (cancelled || error?.name === 'AbortError') return
+            setRawSearch({
+              query,
+              rows: [],
+              pending: false,
+              ms: Date.now() - startedAt,
+              count: 0,
+              error: String(error?.message ?? error),
+            })
+          }
+        }, SEARCH_DEBOUNCE_MS)
+        return () => {
+          cancelled = true
+          clearTimeout(timer)
+          controller.abort()
+        }
+      }, [query, cwd, byId, searchFixture])
+
+      const searchPending =
+        searching &&
+        (searchFixture === null || searchFixture === undefined) &&
+        (searchState.pending === true || searchState.query !== query)
+      const searchRows = searchPending ? [] : Array.isArray(searchState.rows) ? searchState.rows : []
+      const searchMs = searchState.ms ?? 0
+      const searchError =
+        searchFixture === null || searchFixture === undefined ? (searchState.error ?? null) : null
 
       const clearSearch = () => {
         setQuery('')
@@ -2313,11 +2405,17 @@ window.__ModuleLoader__.load({
                 'div',
                 { className: 'dkf-bar-tools' },
                 searching
-                  ? h(
-                      'span',
-                      { key: 'hits', className: 'dkf-count' },
-                      `${searchRows.length} 条命中 · 仓库共 ${issues.length} 条`,
-                    )
+                  ? searchPending
+                    ? h('span', { key: 'hits', className: 'dkf-count' }, '搜索中…')
+                    : searchError
+                      ? h('span', { key: 'hits', className: 'dkf-count' }, '搜索失败')
+                      : h(
+                          'span',
+                          { key: 'hits', className: 'dkf-count' },
+                          `${searchRows.length} 条命中 · ${searchMs}ms · 仓库共 ${
+                            typeof payload?.total === 'number' ? payload.total : issues.length
+                          } 条`,
+                        )
                   : pageTools !== null
                     ? pageTools
                     : tabId === 'issue'
@@ -2364,12 +2462,25 @@ window.__ModuleLoader__.load({
         let content = null
         if (searching) {
           // 有输入就整块换成结果：搜索是"直接找那一条"，不掺页面与筛选
-          content = h(SearchResults, {
-            rows: searchRows,
-            query,
-            selected: searchIndex,
-            onPick: pickSearch,
-          })
+          content = searchPending
+            ? h(
+                'div',
+                { className: 'dkf-empty', 'aria-live': 'polite' },
+                h('p', null, '搜索中…'),
+              )
+            : searchError !== null
+              ? h(
+                  'div',
+                  { className: 'dkf-error' },
+                  h('p', { className: 'dkf-error-title' }, '搜索失败'),
+                  h('p', { className: 'dkf-error-detail' }, searchError),
+                )
+              : h(SearchResults, {
+                  rows: searchRows,
+                  query,
+                  selected: searchIndex,
+                  onPick: pickSearch,
+                })
         } else if (tabId === 'timeline') {
           content = h(TimelinePanel, {
             rows: shownRows,
@@ -2520,6 +2631,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, searchIssues, matchRanges, mergeRanges, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, css: CSS } } : {}) }
   },
 })

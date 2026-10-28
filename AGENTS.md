@@ -32,7 +32,7 @@ kiln 把“问题 → 动作 → 结论”编码成 git commit 的 trailer，`ki
 识别规则只有一条：**一个提交是 kiln 动作，当且仅当同时带 `issue:` 与 `action:`**。普通提交
 （无 trailer）被忽略，所以杂务提交不会污染 issue 列表。
 
-二进制：`kiln`（在 PATH 上，插件需 v0.2.0+：批量 `path` 与 `commit` 键从这一版开始）。`kiln --version` 确认。
+二进制：`kiln`（在 PATH 上，插件 Flow 取数需 v0.2.0+、搜索需 v0.2.1+）。可用 `DSH_KILN_BIN` 指向本地构建；`kiln --version` 确认。
 安装：`go install github.com/jackiehank/kiln/cmd/kiln@latest`。
 
 ## 3. 配置（仓库根 `.kilnconfig.jsonc`，随仓库提交）

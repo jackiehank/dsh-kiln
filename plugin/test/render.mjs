@@ -105,6 +105,53 @@ const payload = {
 
 // ---------------------------------------------------------------- 载入真实模块
 
+/** 搜索结果行的测试形状（与 client.js 的 mapSearchRows 输出一致）。 */
+const rangesOf = (text, term) => {
+  const at = String(text).indexOf(term)
+  return at < 0 ? [] : [[at, at + term.length]]
+}
+const searchRow = (issue, fields = {}) => ({
+  issue,
+  title: issue.title,
+  action: null,
+  actionId: null,
+  ordinal: null,
+  total: issue.actions.length,
+  date: '',
+  idRanges: [],
+  titleRanges: [],
+  ...fields,
+})
+const searchFixture = (query, rows) => ({ query, rows, pending: false, ms: 0, count: rows.length, error: null })
+const fixtureA = searchFixture('a', [
+  searchRow(payload.issues[0], {
+    date: payload.issues[0].last.date.slice(0, 10),
+    idRanges: rangesOf('a', 'a'),
+  }),
+])
+const fixtureAction1 = searchFixture(
+  '动作 1',
+  payload.issues.map((issue) => {
+    const hit = issue.actions[0]
+    return searchRow(issue, {
+      title: hit.title,
+      action: hit.action,
+      actionId: hit.id,
+      ordinal: 1,
+      total: issue.actions.length,
+      date: hit.date.slice(0, 10),
+      titleRanges: rangesOf(hit.title, '动作'),
+    })
+  }),
+)
+const fixtureB = searchFixture('b', [
+  searchRow(payload.issues[1], {
+    date: payload.issues[1].last.date.slice(0, 10),
+    idRanges: rangesOf('b', 'b'),
+  }),
+])
+const fixtureEmpty = searchFixture('zzz', [])
+
 let loaded = null
 globalThis.window = {
   __ModuleLoader__: {
@@ -115,6 +162,8 @@ globalThis.window = {
 }
 globalThis.document = { getElementById: () => ({}), createElement: () => ({}) }
 globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.stringify(payload) })
+// 搜索走 effect + fetch；渲染替身不执行 effect，用 __DSH_KILN_TEST__ 打开缝并喂 fixture。
+globalThis.__DSH_KILN_TEST__ = true
 
 await import('../lib/client.js?render=1')
 assert.equal(loaded?.id, '@local/dsh-kiln')
@@ -133,6 +182,7 @@ function render({
   filters = undefined,
   rowFilters = undefined,
   query = '',
+  search = null,
 }) {
   const React = makeReact([
     {
@@ -164,7 +214,11 @@ function render({
   }
   const mod = loaded.factory(requireOf)
   const KilnView = captureComponent(mod)
-  return expand(KilnView({ cwd: '/repo' }))
+  // 搜索是 effect + fetch；渲染替身不跑 effect，直接喂一份宿主搜索结果。
+  globalThis.__DSH_KILN_SEARCH_FIXTURE__ = search
+  const tree = expand(KilnView({ cwd: '/repo' }))
+  globalThis.__DSH_KILN_SEARCH_FIXTURE__ = null
+  return tree
 }
 
 function captureComponent(mod) {
@@ -271,16 +325,16 @@ check('搜索：输入框在第一层页头，不是另一行', () => {
 })
 
 check('搜索：有输入就换成结果列表，页栏显示命中数', () => {
-  const view = render({ tabId: 'issue', query: 'a' })
+  const view = render({ tabId: 'issue', query: 'a', search: fixtureA })
   const hits = byClass(view, 'dkf-hit')
   assert.equal(hits.length, 1, '测试数据里只有 a 命中')
-  assert.equal(textOf(byClass(view, 'dkf-count')[0]), '1 条命中 · 仓库共 3 条')
+  assert.equal(textOf(byClass(view, 'dkf-count')[0]), '1 条命中 · 0ms · 仓库共 3 条')
   assert.equal(byClass(view, 'dkf-row').length, 0, '搜索期间不再渲染当前页的列表')
   assert.equal(byClass(hits[0], 'dkf-hl').length > 0, true, '命中片段要能高亮')
 })
 
 check('搜索：命中动作标题时，第二行是动作 + 那条标题，并标「历史动作 n/m」', () => {
-  const view = render({ tabId: 'issue', query: '动作 1' })
+  const view = render({ tabId: 'issue', query: '动作 1', search: fixtureAction1 })
   const hits = byClass(view, 'dkf-hit')
   assert.equal(hits.length, 3, '三个 issue 的第 1 条动作标题都含「动作 1」')
   const body = byClass(hits[0], 'dkf-hit-body')[0]
@@ -292,14 +346,14 @@ check('搜索：命中动作标题时，第二行是动作 + 那条标题，并�
 })
 
 check('搜索：命中 issue 名时，第二行只是当前标题（不做高亮主角）', () => {
-  const view = render({ tabId: 'issue', query: 'b' })
+  const view = render({ tabId: 'issue', query: 'b', search: fixtureB })
   const hit = byClass(view, 'dkf-hit')[0]
   assert.equal(byClass(hit, 'dkf-hit-meta').length, 0, '没有"历史动作"标记')
   assert.equal(byClass(hit, 'dkf-hit-title-quiet').length, 1, '第二行是背景标题，弱化显示')
   assert.equal(byClass(hit, 'dkf-chip-action').length, 0, '没有动作标签')
 })
 check('搜索：结果行带该 issue 的动作色条与 hover 预览', () => {
-  const view = render({ tabId: 'issue', query: '动作 1' })
+  const view = render({ tabId: 'issue', query: '动作 1', search: fixtureAction1 })
   const hit = byClass(view, 'dkf-hit')[0]
   assert.equal(byClass(hit, 'dkf-strip').length, 1, '第一行要带历次动作的彩色条')
   assert.ok(byClass(hit, 'dkf-block').length >= 1, '色条里每个块是一次动作')
@@ -309,7 +363,7 @@ check('搜索：结果行带该 issue 的动作色条与 hover 预览', () => {
 })
 
 check('搜索：色条突出的是命中的那条动作，不是最后一条', () => {
-  const view = render({ tabId: 'issue', query: '动作 1' })
+  const view = render({ tabId: 'issue', query: '动作 1', search: fixtureAction1 })
   const hit = byClass(view, 'dkf-hit')[0]
   const blocks = byClass(hit, 'dkf-block')
   const marked = blocks.findIndex((block) => String(block.props.className).includes('dkf-block-current'))
@@ -317,13 +371,13 @@ check('搜索：色条突出的是命中的那条动作，不是最后一条', (
   assert.equal(marked, 0, '命中的是第 1 条动作，突出第 1 格而不是最后那格')
 })
 check('搜索：命中 issue 名时预览给当前标题', () => {
-  const view = render({ tabId: 'issue', query: 'b' })
+  const view = render({ tabId: 'issue', query: 'b', search: fixtureB })
   const hint = String(byClass(view, 'dkf-hit')[0].props['data-hint'] ?? '')
   assert.match(hint, /当前标题/, '没有动作命中时预览讲当前状态')
   assert.match(hint, /b 标题/)
 })
 check('搜索：没有命中时给明确空态', () => {
-  const view = render({ tabId: 'issue', query: 'zzz' })
+  const view = render({ tabId: 'issue', query: 'zzz', search: fixtureEmpty })
   assert.equal(byClass(view, 'dkf-hit').length, 0)
   const empty = byClass(view, 'dkf-empty')[0]
   assert.match(textOf(empty), /没有找到「zzz」/)

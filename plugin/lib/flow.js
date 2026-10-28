@@ -275,6 +275,53 @@ export async function readGraph(repo) {
 }
 
 /**
+ * 搜索文档的形状校验：rank 与 hit.total/date 是 kiln v0.2.1+ 才有的字段。
+ * 返回错误文案，合格返回 null。
+ *
+ * 不解析版本串：旧版二进制会静默给出没有 rank 的行，按形状拒绝比按版本猜更直接。
+ */
+export function searchDocumentError(document) {
+  const rows = Array.isArray(document?.issues) ? document.issues : null
+  if (rows === null) return 'kiln list --search 输出缺少 issues 数组'
+  for (const row of rows) {
+    if (!Number.isInteger(row?.rank)) {
+      return '需要 kiln v0.2.1+：list --search 的行缺少 rank'
+    }
+    if (row.hit !== null && row.hit !== undefined) {
+      if (!Number.isInteger(row.hit.total)) return '需要 kiln v0.2.1+：hit 缺少 total'
+      if (typeof row.hit.date !== 'string' || row.hit.date === '') {
+        return '需要 kiln v0.2.1+：hit 缺少 date'
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * 一次整仓搜索：`kiln list --search <q> --json`。
+ *
+ * 搜索结果不缓存：查询串是动态的，缓存只会带来“同一个 q 读到旧结果”的歧义；
+ * 每次一个进程，宿主路由按输入防抖后调用。
+ */
+export async function readSearch(repo, query) {
+  const dir = typeof repo === 'string' ? repo : ''
+  const text = String(query ?? '').trim()
+  if (text === '') return { ok: false, reason: 'empty-query' }
+  const invalid = validateRepo(dir)
+  if (invalid !== null) return { ok: false, reason: invalid }
+  const bin = ensureKiln()
+  if (bin === null) return { ok: false, reason: 'kiln-missing' }
+  try {
+    const document = JSON.parse(await runKiln(bin, ['list', `--search=${text}`, '--json'], dir))
+    const shapeError = searchDocumentError(document)
+    if (shapeError !== null) return { ok: false, reason: 'kiln-too-old', message: shapeError }
+    return { ok: true, query: text, document }
+  } catch (error) {
+    return { ok: false, reason: 'kiln-error', message: String(error?.message ?? error) }
+  }
+}
+
+/**
  * 取若干 issue 的动作序列：只起 **1 个** `kiln path` 进程（v0.2.0 批量，一次读全）。
  *
  * 只支持 kiln v0.2.0+：多 id 请求却拿到单条文档时抛 KilnError（v0.1.1 会静默只回第一条，

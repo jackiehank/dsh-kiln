@@ -691,3 +691,39 @@ go test ./... ; go vet ./... ; gofmt -l .
 ```
 
 插件 parity 的临时脚本只读本仓与二进制，验证完已删除，不落盘。
+
+## 落地（2026-10-28）
+
+插件从「快照内内存搜索」改成「宿主调 kiln 搜索、客户端只渲染」：
+
+- `plugin/lib/flow.js:306` `readSearch()`：一次 `kiln list --search=<q> --json`；
+  `searchDocumentError()`（:283）校验 `rank` / `hit.total` / `hit.date`，旧版直接 `kiln-too-old`，
+  不自己补排序。
+- `plugin/lib/index.js:93` 新增只读路由 `GET /kiln/search?cwd=&q=`；与 flow 共用信任栅栏、超时与
+  `kiln-error` 映射；不缓存，每次读当前历史。
+- `plugin/lib/client.js:1019` `mapSearchRows()`：把 kiln 行映射成视图行（rank/hit/title/idRanges），
+  快照里有的 issue 带上 actions；`searchIssues` 删除。输入停 120ms（:29）后 fetch（:2073），
+  新查询 abort 旧请求；等待显示「搜索中…」，失败显示原因；页栏 `N 条命中 · Xms · 仓库共 M 条`。
+- `byRecency`（:853）改成按时间比较（跨时区与缺失日期都正确）。
+- 测试：`run.mjs` 改测 `mapSearchRows` / `searchDocumentError`；`render.mjs` 用 fixture 喂搜索结果。
+  `node plugin/test/run.mjs` 58、`render.mjs` 45 全过。
+- 版本：插件 0.3.0；Flow 取数需 kiln v0.2.0+，搜索需 v0.2.1+；README / AGENTS 同步。
+
+### 验证
+
+- 新二进制 `v0.2.1-0.20261028065156-2b02f3d33cd7`：`GET /kiln/search?cwd=…&q=dsh` 实测 200、
+  `count=2`，两行 `rank=1/3`；`readSearch` 对旧 v0.2.0 明确返回 `kiln-too-old`
+  「需要 kiln v0.2.1+：list --search 的行缺少 rank」。
+- 端到端（`readFlow` + `readSearch` + `mapSearchRows`，真实本仓）：
+  - `dsh` → `kiln-dsh-integration#1`（无 hit）、`kiln-graph-width-handle#3`（hit `ask`，1/4）；
+  - `kiln v0.2.0` → `kiln-search#0`、`kiln-v020-adapter#0`；
+  - `色条 选中` → `kiln-search#4`（无 hit）。
+- `node --check` 覆盖 client / index / flow；README、AGENTS、package.json 同步。
+
+### 已知代价 / 边界
+
+- 搜索从 0.04ms 内存匹配变成「120ms 防抖 + 约 100ms 进程」；这段延迟已在真机验收为可接受。
+- 全仓结果里快照外的 issue（>80 条）只显示简版行，不能展动作/色条；要把焦点 issue 纳入快照是后续 issue。
+- PATH 上的 `kiln` 仍是 v0.2.0；运行插件要 `DSH_KILN_BIN=C:\Users\jacki\kiln\kiln.exe`
+  （或更新 PATH）。新二进制目前是 `v0.2.1-0.2026…` 伪版本，正式发布前文档不写死版本号。
+- 新路由需要重启 DSH 宿主才加载；客户端刷新后生效。
