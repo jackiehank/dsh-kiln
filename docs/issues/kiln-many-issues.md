@@ -181,3 +181,53 @@ Flow 是**只读快照**：打开仓库时拿全量 `graph`，但只保留前 80
 - gh-dash defaults：<https://www.gh-dash.dev/configuration/defaults>
 - Sourcegraph exhaustive：<https://docs-legacy.sourcegraph.com/@4.4/code_search/how-to/exhaustive>
 - Linear delta sync：<https://linear.app/now/rebuilding-delta-sync-read-path>
+
+## 收集：kiln 本身怎么处理“多”（2026-10-28）
+
+核实对象：`C:\Users\jacki\kiln\kiln.exe`，`v0.2.1-0.20261028065156-2b02f3d33cd7`；
+当前仓 64 issue / 315 actions。方法：读 `allowedFlags` 与 git log 调用、跑命令数行数/字节/耗时、
+再试 `--limit`。
+
+### 结论：kiln 没有分页，所有读命令都是全量
+
+| 命令 | 输出 | 证据 |
+| --- | --- | --- |
+| `list` | 过滤/搜索后的**全部**行 | `count=64`、`issues=64`；`--limit 5` 只警告未知 flag，仍回 64 |
+| `status` | 全部 issue（按 domain 分块） | 64 条行；文本 72 行（含块头/汇总）；`--limit 5` 仍 64 |
+| `graph` | 全量节点 + 折叠边 | 64 节点 / 99 边；`--issue` / `--depth` 是**邻域收窄**，不是分页 |
+| `path` | 单条或点名的多条全量动作 | 单条 2,033 B；`--all` 64 条 / 315 动作 / 131,929 B |
+| `check` / `worktree list` | 全部结果 | 源码里同样没有 limit/offset |
+| `list --search` | 全部命中，按 rank 排序 | 例如 `a` 命中 63 条，没有截断 |
+
+源码层面：
+
+- `list` 允许的 flag 只有 `json/domain/tag/action/status/search`（`cli.go:2389`）；
+- `status` 只有 `json`；`graph` 是 `format/mermaid/json/issue/depth`；`path` 是 `stat/shortstat/json/all`；
+- `git log` 是全史（`internal/vcs/git/git.go:31`，没有 `-n` / `--max-count`）；
+- 全仓 grep 没有 `limit` / `offset` / `paginate` / `per_page` 之类的读侧实现；
+- 唯一能“变短”的手段是**过滤/取子集**：`list` 的筛选/搜索、`graph --issue --depth`、`path` 指定单条/几条——
+  都不是分页。
+
+### 实测数字（本机，64 issue）
+
+| 命令 | 字节 | 耗时（3 次） |
+| --- | --- | --- |
+| `list --json` | 17,206 | 96–99 ms |
+| `status --json` | 15,301 | 99–101 ms |
+| `graph --json` | 26,781 | 99–101 ms |
+| `path --all --json` | 131,929 | 100–102 ms |
+| `path <id> --json` | 2,033 | 98–101 ms |
+
+`--limit 5` 实测：`list --json` 仍 `count=64`，`status --json` 仍 64 行；只打一行
+「未知 flag --limit」。
+
+### 对 dsh-kiln 的含义
+
+1. **80 条是插件自己的策略，不是 kiln 的限制**。kiln 侧没有 page/limit 可对，不能指望上游分页。
+2. **按需详情的原语已经存在**：`kiln path <id> --json`（约 100ms / 2KB）。候选 A 不需要新上游命令，
+   宿主加一条 `/kiln/issue`（或复用 `path` 的单条调用）即可。
+3. **`path --all` 不是大仓通解**：64 条已经 132KB；上游压测 100k 时 35MB / 329MB。
+4. **`graph` 已是全量节点/边**：插件是在本地切片；如果只想“列全 issue 元数据”可以不取 actions
+   （`list`/`graph` 就够），但 timeline/动作详情仍要 `path`。
+5. **搜索侧不缺分页**：`list --search` 已返回全量命中；缺的只是“打开快照外那一条”，不是数据层翻页。
+6. **kiln 的形态是无状态全量扫描**：要做分页/索引，要么在插件侧做页语义，要么改 kiln 形态（另开 issue）。
