@@ -539,3 +539,92 @@ A（契约 + 快路径），不要硬上 B。
 - 模拟装置已撤：搜索恢复同步，57 + 45 用例全过；B 的 p50 门槛通过。
 - 后续：按 hypothesize 的「下一步」，先在 `~/kiln` 补 `rank` / `hit.total` / `hit.date`
   与排序，再回本仓做宿主路由 + 客户端改造。在那之前插件仍是即时搜索，不留半成品延迟。
+
+## 收集：多界面工具怎么处理搜索（2026-10-28）
+
+挑的都是「同一份数据，既有 CLI 又有 TUI / Web / GUI」的工具，看三件事：查询与匹配归谁、
+UI 加什么、两边靠什么防止漂移。
+
+### 1. fzf：一个匹配器，两种入口
+
+- 交互 TUI 与非交互 `--filter` 是同一个二进制、同一套匹配 flags（`--exact` / `--nth` /
+  `--no-sort`）；`--filter` 不开 finder，`--no-sort` 时退化成 fuzzy grep
+  （[fzf(1)](https://manpages.ubuntu.com/manpages/resolute/man1/fzf.1.html)）。
+- 差异只在「有没有交互循环」：TUI 加预览/键位/高亮，CLI 输出纯结果。
+- 对 kiln：最理想的「一套实现」形态；但插件是 JS、kiln 是 Go，共享不了代码。
+
+### 2. gh + GitHub Web：一套查询语言，两个前端
+
+- `gh search issues` 用 GitHub search syntax，可 `--json` / `--limit` / `--sort best-match` /
+  `--search-type lexical|semantic|hybrid`；`--web` 把同一查询交给浏览器
+  （[gh search issues](https://cli.github.com/manual/gh_search_issues)）。
+- Web 用同一套 qualifiers；CLI 是搜索 API 的薄客户端。差异在前端：CLI 有 limit/JSON/字段，
+  Web 有 facets/高亮/分页。文档也写明 advanced boolean syntax 不支持 `--web`。
+- 结论：**查询语言 + 搜索后端是契约**；前端只决定结果怎么切、怎么显示。`--web` 是廉价的跨端复用。
+
+### 3. Sourcegraph `src` + Web：唯一后端，两个客户端
+
+- `src search` 连实例、跑同一套 query syntax（`r:` 这类过滤器就是 Web 那套），`-json` 给程序读
+  （[src quickstart](https://sourcegraph.com/docs/cli/quickstart)、
+  [src-cli](https://pkg.go.dev/github.com/sourcegraph/src-cli)、
+  [query syntax](https://sourcegraph.com/docs/code-search/queries)）。
+- Web 用同一套语法，额外做高亮、facets、结果分组；CLI 文本只标命中行。
+- 结论：一致性靠「唯一后端」；UI 加的是呈现。代价是必须有服务/网络，离线不可用。
+
+### 4. lazygit：filter 与 search 是两种 UI 动作
+
+- `/` 在多数视图是 filter（内容收窄）；在 commits 视图**故意**是 search（高亮 + n/N，不改变集合），
+  因为要看命中前后提交；菜单是 type-to-filter，不用 `/`
+  （[Searching.md](https://github.com/jesseduffield/lazygit/blob/master/docs/Searching.md)）。
+- 结论：同一查询串可以有两种呈现；数据层只给「匹配/命中」，UI 决定「替换列表还是高亮定位」。
+
+### 5. VS Code：一个 GUI 里两套引擎（反例）
+
+- 工作区搜索用 ripgrep；已打开文件用编辑器的 JS regex；ignore/exclude 共用，但 regex 引擎
+  （Rust/PCRE2 vs JS）与换行处理会不一致，官方 wiki 明确列出「开着的文件结果不同」的成因
+  （[Search Issues](https://github.com/microsoft/vscode/wiki/Search-Issues)）。
+- 结论：两套引擎能活，但差异会以「同一查询、不同结果」暴露；要么单引擎，要么用边界测试兜住。
+
+### 6. gh-dash：TUI 只做服务端查询的壳
+
+- sections 是 GitHub filters，搜索是 TUI 的一个 keybinding；数据来自 GitHub API，UI 只做
+  布局/预览/键位/定时刷新（[gh-dash](https://pkg.go.dev/github.com/dlvhdr/gh-dash/v4@v4.3.0)）。
+- 结论：TUI 不实现搜索，只实现「查询构造 + 结果呈现」，一致性天然。
+
+### 四种架构
+
+| 架构 | 例子 | 一致性 | 代价 |
+| --- | --- | --- | --- |
+| 单引擎多入口 | fzf | 天然 | 跨进程 / 性能 |
+| 单后端多前端 | gh、src、gh-dash | 语义天然 | 网络、延迟、离线 |
+| 单视图双动作 | lazygit | 查询同、呈现异 | 要明确 filter / search |
+| 双引擎单 UI | VS Code | 靠契约 / 测试 | 漂移风险 |
+
+### 对 dsh-kiln 的直接含义
+
+1. **语义归数据层，呈现归 UI**：匹配、hit、排序是数据层；filter vs search、高亮、键位是 UI。
+   lazygit 是最接近的先例。
+2. **要一套实现，gh/src 模式比 fzf 模式现实**：CLI 是唯一后端，UI 调它；Go/JS 共享不了代码，
+   只能共享契约。代价是 100ms + 防抖（已实测可接受）。
+3. **要两套实现，就抄 VS Code 的反面**：VS Code 把「两套引擎」的差异写进了文档；我们必须用
+   共享用例 / parity 测试锁住 ids/rank/hit，否则不要声称一致。
+4. **高亮大多在客户端**：fzf 的 matched chars、Sourcegraph 的 match 信息、VS Code 的 editor
+   高亮都在前端；数据层给足文本与命中即可，不必把高亮塞进 CLI。
+5. **排序不要两边各排**：gh 的 best-match、Sourcegraph 的服务端顺序是唯一顺序；UI 私自重排
+   就会和 CLI 分叉。插件的 rank 若要保留，就把它变成 kiln 输出的 `rank`。
+6. **filter 与 search 要按视图选**：lazygit 的 commits 视图选 search 是为了保留上下文。插件现在
+   是「整块换成结果页」的第三种形态——它牺牲了原列表的上下文，换来全仓结果；这是产品决定，
+   不是数据层的一部分。
+7. **`--web` 式交接值得抄**：kiln 保证查询串/结果字段一致，插件用自己的渲染；比共享渲染便宜。
+
+### 来源
+
+- fzf(1)：<https://manpages.ubuntu.com/manpages/resolute/man1/fzf.1.html>
+- gh search issues：<https://cli.github.com/manual/gh_search_issues>
+- GitHub 搜索语法：<https://docs.github.com/en/search-github/getting-started-with-searching-on-github/understanding-the-search-syntax>
+- Sourcegraph src quickstart：<https://sourcegraph.com/docs/cli/quickstart>
+- Sourcegraph query syntax：<https://sourcegraph.com/docs/code-search/queries>
+- Sourcegraph src-cli：<https://pkg.go.dev/github.com/sourcegraph/src-cli>
+- lazygit Searching：<https://github.com/jesseduffield/lazygit/blob/master/docs/Searching.md>
+- VS Code Search Issues wiki：<https://github.com/microsoft/vscode/wiki/Search-Issues>
+- gh-dash：<https://pkg.go.dev/github.com/dlvhdr/gh-dash/v4@v4.3.0>
