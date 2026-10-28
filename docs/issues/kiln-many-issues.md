@@ -353,3 +353,45 @@ S 先取 **200**（200 条约 400KB path、~1000 动作；首屏 path 仍是一�
 - 100k：不崩、不落盘；首屏与 focus 有加载态；文档写明“需上游 limit 才能更快”。
 - 测试：80/200/500/5k 合成仓的探针；`__DSH_KILN_TEST__` 下的 fixture；无网络/子进程的纯函数用例。
 - 搜索：任意 query 的命中都能打开详情；不再出现“搜到了但打不开”。
+
+## 收集：kiln 的流式 JSON 到底覆盖到哪（2026-10-28）
+
+结论：**只有 `path` 的 batch 形态流式**（`path --all`、`path a b …`）；`list` / `status` / `graph` /
+`check` / `show` / 单条 `path` 仍是整份 `writeJSON`。流式降低的是 **kiln 进程的峰值内存**，
+不改变输出字节，也不改变消费方“收完整份再 parse”的事实。
+
+### 源码事实
+
+- `pathBatchWriter`（`internal/cli/cli.go:1633`）：`bufio.Writer`（64KB）+ 复用 encoder，逐 issue 写；
+  只有 `pathBatch` 用它（`--all` / 多 id）。
+- `writeJSON`（`cli.go:2874`）用 `json.Encoder` 一次编码整个 DTO：
+  `list`（:2481）、`status`（:2507）、`graph`（:2728）、`check`、`show`、单条 `path` 都走它。
+- 测试 `TestPathBatchStreamsTheSameBytesAsWriteJSON`（`cli_test.go:4042`）：流式输出与
+  `writeJSON` 逐字节相同——形状是契约，不是实现细节。
+- `docs/perf-audit.md`：100k 动作时 `path --all` 35MB 文档 / 1.14s / 峰值 190MB（流式前 330MB，−40%）；
+  `list` 约 17MB；明确写「流式只覆盖 batch」；分页/截断列为**不做**，但留了触发条件。
+
+### 实测（64 issue / 315 actions）
+
+| 命令 | 字节 | 是否流式 | 耗时 |
+| --- | --- | --- | --- |
+| `path --all --json` | 131,929 | 是 | 100–102ms |
+| `list --json` | 17,206 | 否 | 96–99ms |
+| `graph --json` | 26,781 | 否 | 99–101ms |
+| `path <id> --json` | 2,033 | 否 | 98–101ms |
+
+64 条看不出峰值内存差；**输出字节与流式前一致**，因为契约要求同形。
+
+### 对假设的修正
+
+1. **100k 的 `path --all` 峰值是 190MB，不是 329MB**（流式前 330MB）；输出仍是 35MB、时间 +5–10%。
+2. **`list` 100k 约 17MB**（原估 27MB）；它不是流式，index-first 仍要整份收/parse。
+3. **流式不帮插件**：`flow.js` 用 `execFile` 捕获整个 stdout 再 `JSON.parse`，峰值在插件侧不会因为
+   kiln 流式而下降；真要边收边解析得改成 `spawn` + 流式 parser。而且 `path --all` 的 35MB 已超过
+   当前 `MAX_BUFFER` 8MB——大仓模式本来就不该用它。
+4. **上游对分页/截断的立场比假设里写的更硬**：`issue-list-scaling` 已论证否决，`perf-audit` 的
+   “明确不做”里也列了分页/截断。触发条件写的是“真实仓 1k+ / `path --all` >10MB / 消费方需要前 N 条”，
+   dsh-kiln 的大仓模式正好命中；可以据此开上游 issue 谈 `--limit`/`--count`，但不能假设它已经有。
+5. **结论 C 不变**：索引先行仍然是最小化 payload/DOM 的插件侧办法；只是“上游 limit”从“欠的东西”
+   变成“触发条件已到的上游议题”。若上游不做，100k 的首屏仍是 1–2s 的全量 list，只能加加载态，
+   不能假装更快。
