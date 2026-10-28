@@ -25,9 +25,31 @@ window.__ModuleLoader__.load({
     const STYLE_ID = 'dsh-kiln-flow-style'
     const FLOW_URL = '/kiln/flow'
     const SEARCH_URL = '/kiln/search'
+    const TIMELINE_URL = '/kiln/timeline'
     /** 搜索走宿主 → kiln，每次约 100ms；输入停 120ms 再发，连击只留最后一轮。 */
     const SEARCH_DEBOUNCE_MS = 120
+    /** 时间线边收边渲染：最多 20fps，350 行动作不会把 React 刷 350 次。 */
+    const TIMELINE_FLUSH_MS = 50
     const EMPTY_SEARCH = { query: '', rows: [], pending: false, ms: 0, count: 0, error: null }
+    const EMPTY_TIMELINE = { rows: [], phase: 'idle', error: null, ms: 0, count: 0 }
+
+    /** NDJSON 按行切：chunk 不保证按行到，半行留到下一块（与宿主 timeline.js 同一套规则）。 */
+    function createLineSplitter() {
+      let rest = ''
+      return {
+        push(chunk) {
+          rest += String(chunk ?? '')
+          const lines = rest.split(/\r?\n/)
+          rest = lines.pop() ?? ''
+          return lines
+        },
+        flush() {
+          const line = rest
+          rest = ''
+          return line === '' ? [] : [line]
+        },
+      }
+    }
 
     /** 关系词表：宿主只回原始边，方向与强弱在这里推导（不在宿主判断“什么算重要”）。 */
     const INVERSE = {
@@ -332,6 +354,7 @@ window.__ModuleLoader__.load({
 .dkf-focusbtn{all:unset;cursor:pointer;color:var(--dkf-fg3);white-space:nowrap;padding:0 5px;border-radius:var(--dkf-r);opacity:0;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-row:hover .dkf-focusbtn,.dkf-row:focus-within .dkf-focusbtn,.dkf-arow:hover .dkf-focusbtn,.dkf-arow:focus-within .dkf-focusbtn{opacity:1}
 .dkf-focusbtn:focus-visible{opacity:1}
+.dkf-afaint{color:var(--dkf-fg3);white-space:nowrap;padding:0 5px;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta);opacity:.7}
 /* 时间线：一行一个动作，点色 = 动作色 */
 .dkf-arow{position:relative;display:grid;grid-template-columns:12px auto auto minmax(0,1fr) auto auto auto;align-items:center;gap:8px;padding:4px 6px;border-radius:var(--dkf-r);min-width:0;outline:none;cursor:pointer}
 .dkf-abar{width:7px;height:7px;border-radius:50%;justify-self:center;position:relative;z-index:1;background:var(--dkf-row-color,var(--dkf-fg3))}
@@ -808,35 +831,13 @@ window.__ModuleLoader__.load({
       if (view === null) return issues
       return issues.filter((issue) => view.ids.has(issue.id))
     }
-    function flattenActions(issues) {
-      const rows = []
-      for (const issue of issues) {
-        const actions = Array.isArray(issue.actions) ? issue.actions : []
-        for (const action of actions) {
-          rows.push({
-            issueId: issue.id,
-            action: action.action,
-            title: action.title,
-            date: action.date,
-            id: action.id,
-            short: action.short,
-            ordinal: action.ordinal,
-            refs: Array.isArray(action.refs) ? action.refs : [],
-          })
-        }
-      }
-      return rows
-    }
-
-    /** 时间倒序；同刻按 issue id、再按 ordinal 稳定排序，刷新不乱跳。 */
-    function sortActions(rows) {
-      return rows.slice().sort((left, right) => {
-        const leftDate = left.date ?? ''
-        const rightDate = right.date ?? ''
-        if (leftDate !== rightDate) return leftDate < rightDate ? 1 : -1
-        if (left.issueId !== right.issueId) return left.issueId < right.issueId ? -1 : 1
-        return (left.ordinal ?? 0) - (right.ordinal ?? 0)
-      })
+    /**
+     * 时间线的聚焦收窄：流是全仓的，聚焦时只留焦点 + 一跳邻居。
+     * 不重排——上游 git 已按 author-date 倒序（jj 是拓扑序），边到边画就是时间顺序。
+     */
+    function scopeTimeline(rows, view) {
+      if (view === null) return rows
+      return rows.filter((row) => view.ids.has(row.issueId))
     }
 
     /** 按最近动作排序；有焦点时把焦点的行钉在第一条。 */
@@ -1123,22 +1124,19 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** timeline 行展开：这条提交的详情。 */
+    /** timeline 行展开：这条提交的详情。动作级 domain/tags 由 action log 给，缺了就不显示。 */
     function ActionDetail(props) {
       const row = props.row
-      const refs = Array.isArray(row.refs) ? row.refs : []
+      const tags = Array.isArray(row.tags) ? row.tags : []
       return h(
         'div',
         { className: 'dkf-detail' },
         h('div', null, h('span', { className: 'dkf-detail-key' }, '提交'), h('code', null, row.id || '（无 sha）')),
-        h(
-          'div',
-          null,
-          h('span', { className: 'dkf-detail-key' }, '步骤'),
-          h('span', null, `${row.ordinal ?? '?'} / ${props.total ?? '?'}`),
-        ),
-        refs.length > 0
-          ? h('div', null, h('span', { className: 'dkf-detail-key' }, '引用'), h('span', null, refs.join('、')))
+        row.domain !== undefined && row.domain !== ''
+          ? h('div', null, h('span', { className: 'dkf-detail-key' }, '领域'), h('span', null, row.domain))
+          : null,
+        tags.length > 0
+          ? h('div', null, h('span', { className: 'dkf-detail-key' }, '标签'), h('span', null, tags.join('、')))
           : null,
         h('div', null, h('span', { className: 'dkf-detail-key' }, '时间'), h('span', null, row.date || '')),
       )
@@ -1223,22 +1221,25 @@ window.__ModuleLoader__.load({
           h('span', { className: 'dkf-atitle', 'data-hint': row.title }, row.title || '（无标题）'),
           h('span', { className: 'dkf-ashort' }, row.short || ''),
           h('span', { className: 'dkf-ago' }, ago(row.date)),
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'dkf-focusbtn',
-              tabIndex: -1,
-              'data-hint': `聚焦 ${row.issueId}（快捷键 f）`,
-              onClick: (event) => {
-                event.stopPropagation()
-                props.onFocus()
-              },
-            },
-            '⌖ 聚焦',
-          ),
+          // 快照外的 issue（>80 条）能看、能展开，但没有结构可聚焦：给一个说明，不放假按钮。
+          props.known !== false
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dkf-focusbtn',
+                  tabIndex: -1,
+                  'data-hint': `聚焦 ${row.issueId}（快捷键 f）`,
+                  onClick: (event) => {
+                    event.stopPropagation()
+                    props.onFocus()
+                  },
+                },
+                '⌖ 聚焦',
+              )
+            : h('span', { className: 'dkf-afaint', 'data-hint': '不在本次快照（超过 80 条 issue），只能时间线里看' }, '快照外'),
         ),
-        props.expanded === true ? h(ActionDetail, { row, total: props.total }) : null,
+        props.expanded === true ? h(ActionDetail, { row }) : null,
       )
     }
 
@@ -1420,9 +1421,9 @@ window.__ModuleLoader__.load({
         { className: 'dkf-list dkf-rail', tabIndex: 0, onKeyDown: listKeyDown },
         props.rows.map((row, index) =>
           h(ActionRow, {
-            key: `${row.issueId}-${row.ordinal}-${index}`,
+            key: `${row.issueId}-${row.ordinal ?? row.id ?? index}-${index}`,
             row,
-            total: props.totalOf(row.issueId),
+            known: props.knownOf(row.issueId),
             expanded: props.expanded !== null && props.expanded.kind === 'action' && props.expanded.id === actionKey(row),
             onToggle: () => props.onToggle({ kind: 'action', id: actionKey(row) }),
             onFocus: () => props.onFocus(row.issueId),
@@ -1882,6 +1883,8 @@ window.__ModuleLoader__.load({
       const cwd = typeof props.cwd === 'string' ? props.cwd : ''
       /** 测试缝：渲染用例不跑 effect，直接喂一份宿主搜索结果（生产恒为 null）。 */
       const searchFixture = globalThis.__DSH_KILN_TEST__ === true ? globalThis.__DSH_KILN_SEARCH_FIXTURE__ : null
+      /** 同一条缝：时间线流在渲染用例里也不跑，喂一份已收完的流（生产恒为 null）。 */
+      const timelineFixture = globalThis.__DSH_KILN_TEST__ === true ? globalThis.__DSH_KILN_TIMELINE_FIXTURE__ : null
       const idBase = 'dsh-kiln-view'
       const memory = readViewState(cwd)
       const [state, setState] = React.useState(() => {
@@ -1912,6 +1915,8 @@ window.__ModuleLoader__.load({
       const [scrollTo, setScrollTo] = React.useState(null)
       /** 宿主返回的搜索结果；测试里由 __DSH_KILN_SEARCH_FIXTURE__ 覆盖（effect 不执行）。 */
       const [rawSearch, setRawSearch] = React.useState(EMPTY_SEARCH)
+      /** 时间线：宿主 NDJSON 流收下来的行 + 阶段；测试里由 __DSH_KILN_TIMELINE_FIXTURE__ 覆盖。 */
+      const [timeline, setTimeline] = React.useState(EMPTY_TIMELINE)
       const rootRef = React.useRef(null)
       const searchRef = React.useRef(null)
       /** 中文输入法组合期间，回车是"上屏"不是"确认"，别让键盘处理抢先。 */
@@ -2044,6 +2049,106 @@ window.__ModuleLoader__.load({
         return () => controller.abort()
       }, [cwd, nonce])
 
+      /**
+       * 时间线：订阅宿主 `/kiln/timeline`（宿主把 `kiln action log --jsonl` 原样转出来）。
+       *
+       * 上游没有终止记录，EOF 就是结束；宿主补一个 `done` 事件把「读完了」和退出码带过来。
+       * 收行合批（50ms）刷新，350 条动作不会把 React 刷 350 次。离开页面 / 换仓库 / 刷新都
+       * abort，宿主随之 kill 子进程。
+       */
+      React.useEffect(() => {
+        if (timelineFixture !== null && timelineFixture !== undefined) return undefined
+        if (cwd === '') {
+          setTimeline(EMPTY_TIMELINE)
+          return undefined
+        }
+        const controller = new AbortController()
+        const startedAt = Date.now()
+        const splitter = createLineSplitter()
+        const decoder = new TextDecoder()
+        const rows = []
+        let error = null
+        let settled = false
+        let sawDone = false
+        let timer = null
+        const publish = (phase) => {
+          setTimeline({ rows: rows.slice(), phase, error, ms: Date.now() - startedAt, count: rows.length })
+        }
+        const schedule = () => {
+          if (timer !== null) return
+          timer = setTimeout(() => {
+            timer = null
+            if (!settled) publish('streaming')
+          }, TIMELINE_FLUSH_MS)
+        }
+        const take = (line) => {
+          const text = String(line ?? '').trim()
+          if (text === '') return
+          let event
+          try {
+            event = JSON.parse(text)
+          } catch {
+            error = `时间线输出不是 JSON：${text.slice(0, 120)}`
+            return
+          }
+          if (event?.kind === 'action' && typeof event.issueId === 'string') {
+            rows.push({
+              issueId: event.issueId,
+              action: event.action,
+              id: event.id,
+              short: event.short,
+              date: event.date,
+              title: event.title,
+              domain: event.domain,
+              tags: Array.isArray(event.tags) ? event.tags : [],
+            })
+            schedule()
+            return
+          }
+          if (event?.kind === 'error') {
+            error = String(event.message ?? '时间线读取失败')
+            return
+          }
+          if (event?.kind === 'done') sawDone = true
+        }
+        const run = async () => {
+          try {
+            const response = await fetch(`${TIMELINE_URL}?cwd=${encodeURIComponent(cwd)}`, {
+              credentials: 'same-origin',
+              signal: controller.signal,
+              cache: 'no-store',
+            })
+            if (!response.ok) throw new Error(`HTTP ${response.status}`)
+            const reader = response.body?.getReader?.()
+            if (reader === undefined || reader === null) throw new Error('当前环境不支持流式读取')
+            for (;;) {
+              const { done, value } = await reader.read()
+              if (done) break
+              for (const line of splitter.push(decoder.decode(value, { stream: true }))) take(line)
+            }
+            for (const line of splitter.flush()) take(line)
+            settled = true
+            if (timer !== null) {
+              clearTimeout(timer)
+              timer = null
+            }
+            if (!sawDone && error === null) error = '时间线流被提前中断（没有收到收口事件）。'
+            publish('done')
+          } catch (failure) {
+            if (controller.signal.aborted) return
+            settled = true
+            error = String(failure?.message ?? failure)
+            publish('error')
+          }
+        }
+        publish('streaming')
+        run()
+        return () => {
+          if (timer !== null) clearTimeout(timer)
+          controller.abort()
+        }
+      }, [cwd, nonce, timelineFixture])
+
       // 切焦点时收起附属展开，并把焦点行重新展开：换焦点等于换一批邻居与一份动作
       React.useEffect(() => {
         setExpandedChildren(false)
@@ -2060,7 +2165,10 @@ window.__ModuleLoader__.load({
       const relations = React.useMemo(() => canonicalEdges(edges), [edges])
       const view = React.useMemo(() => (focus === null ? null : relatedOf(focus.id, relations)), [focus, relations])
       const scoped = React.useMemo(() => scopedIssues(issues, view), [issues, view])
-      const rows = React.useMemo(() => sortActions(flattenActions(scoped)), [scoped])
+      const timelineState = timelineFixture ?? timeline
+      const rows = React.useMemo(() => scopeTimeline(timelineState.rows, view), [timelineState.rows, view])
+      const timelineStreaming = timelineState.phase === 'streaming'
+      const timelineError = timelineState.error ?? null
       const issueList = React.useMemo(() => sortIssues(scoped, focus === null ? null : focus.id), [scoped, focus])
 
       /**
@@ -2206,10 +2314,11 @@ window.__ModuleLoader__.load({
           node.scrollIntoView({ block: 'center' })
         }
         setScrollTo(null)
-      }, [scrollTo])
+      }, [scrollTo, rows.length])
 
       const refresh = () => setNonce((value) => value + 1)
-      const totalOf = (issueId) => (Array.isArray(byId.get(issueId)?.actions) ? byId.get(issueId).actions.length : 0)
+      /** 时间线行的「聚焦」只对快照里的 issue 有意义；快照外的给说明，不给假按钮。 */
+      const knownOf = (issueId) => byId.has(issueId)
 
       const header = h(
         'div',
@@ -2369,7 +2478,9 @@ window.__ModuleLoader__.load({
         h(
           'span',
           { key: 'count', className: 'dkf-count' },
-          rowFilterOn && canFilterRows ? `${shownRows.length} / ${rows.length} 个动作` : `${rows.length} 个动作`,
+          rowFilterOn && canFilterRows
+            ? `${shownRows.length} / ${rows.length} 个动作${timelineStreaming ? ' · 读取中…' : ''}`
+            : `${rows.length} 个动作${timelineStreaming ? ' · 读取中…' : ''}`,
         ),
       ]
 
@@ -2484,15 +2595,19 @@ window.__ModuleLoader__.load({
         } else if (tabId === 'timeline') {
           content = h(TimelinePanel, {
             rows: shownRows,
-            totalOf,
+            knownOf,
             expanded,
             onToggle: toggleExpand,
             onFocus: focusIssue,
             emptyText: rowFilterOn
               ? '没有符合筛选条件的动作。'
-              : focus === null
-                ? '还没有任何 kiln 动作。'
-                : '焦点与相关 issue 还没有动作。',
+              : timelineStreaming
+                ? '正在读取动作…'
+                : timelineError !== null
+                  ? '时间线读取失败。'
+                  : focus === null
+                    ? '还没有任何 kiln 动作。'
+                    : '焦点与相关 issue 还没有动作。',
           })
         } else if (tabId === 'issue') {
           // 有焦点 = 读结构（母 / 子 / 强关系 / 弱关联）；没焦点 = 一行一个 issue
@@ -2540,6 +2655,9 @@ window.__ModuleLoader__.load({
                 `焦点 ${focusId} 不在本次快照里（可能被截断或已消失）。`,
                 h('button', { type: 'button', className: 'dkf-toggle', onClick: clearFocus }, ' 回到全局'),
               )
+            : null,
+          !searching && tabId === 'timeline' && timelineError !== null
+            ? h('p', { className: 'dkf-note' }, timelineError)
             : null,
           payload?.truncated === true
             ? h('p', { className: 'dkf-note' }, `共 ${payload.total ?? issues.length} 条 issue，只展示前 ${issues.length} 条。`)

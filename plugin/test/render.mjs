@@ -152,6 +152,35 @@ const fixtureB = searchFixture('b', [
 ])
 const fixtureEmpty = searchFixture('zzz', [])
 
+/**
+ * 时间线的宿主流形状（`/kiln/timeline` 的 action 事件落成的行）。
+ * 与线上一样按 author-date 倒序、同刻按 issue id，动作级 domain/tags 由流带下来。
+ */
+const timelineFixture = {
+  rows: payload.issues
+    .flatMap((issue) =>
+      issue.actions.map((item) => ({
+        issueId: issue.id,
+        action: item.action,
+        id: item.id,
+        short: item.short,
+        date: item.date,
+        title: item.title,
+        domain: issue.domain,
+        tags: [],
+      })),
+    )
+    .sort((left, right) => {
+      if (left.date !== right.date) return left.date < right.date ? 1 : -1
+      if (left.issueId !== right.issueId) return left.issueId < right.issueId ? -1 : 1
+      return 0
+    }),
+  phase: 'done',
+  error: null,
+  ms: 4,
+  count: 4,
+}
+
 let loaded = null
 globalThis.window = {
   __ModuleLoader__: {
@@ -183,6 +212,7 @@ function render({
   rowFilters = undefined,
   query = '',
   search = null,
+  timeline = timelineFixture,
 }) {
   const React = makeReact([
     {
@@ -214,10 +244,12 @@ function render({
   }
   const mod = loaded.factory(requireOf)
   const KilnView = captureComponent(mod)
-  // 搜索是 effect + fetch；渲染替身不跑 effect，直接喂一份宿主搜索结果。
+  // 搜索与时间线都是 effect + fetch；渲染替身不跑 effect，直接喂宿主的产物。
   globalThis.__DSH_KILN_SEARCH_FIXTURE__ = search
+  globalThis.__DSH_KILN_TIMELINE_FIXTURE__ = timeline
   const tree = expand(KilnView({ cwd: '/repo' }))
   globalThis.__DSH_KILN_SEARCH_FIXTURE__ = null
+  globalThis.__DSH_KILN_TIMELINE_FIXTURE__ = null
   return tree
 }
 
@@ -677,7 +709,7 @@ check('展开是互斥的：展开 a 时 b 不展开', () => {
   assert.equal(carets.filter((text) => text === '▸').length, 2)
 })
 
-check('timeline 点开一行：展开该提交的详情（sha / 步骤 / 时间）', () => {
+check('timeline 点开一行：展开该提交的详情（sha / 领域 / 时间）', () => {
   const sha = `${'a'.repeat(30)}${String(2).padStart(10, '0')}`
   const opened = render({ expanded: { kind: 'action', id: sha } })
   const details = byClass(opened, 'dkf-detail')
@@ -685,7 +717,53 @@ check('timeline 点开一行：展开该提交的详情（sha / 步骤 / 时间�
   const text = textOf(details[0])
   assert.match(text, /提交/)
   assert.ok(text.includes(sha), '详情里应有完整 sha')
-  assert.match(text, /2 \/ 2/)
+  assert.match(text, /领域/)
+  assert.match(text, /integration/)
+  assert.doesNotMatch(text, /步骤/, '时间线吃的是动作流，没有 ordinal，不能假装有')
+})
+
+check('timeline 读取中：计数标「读取中」，空流说明在读取而不是没动作', () => {
+  const streaming = render({
+    timeline: { rows: [], phase: 'streaming', error: null, ms: 0, count: 0 },
+  })
+  assert.match(textOf(byClass(streaming, 'dkf-count')[0]), /读取中/)
+  assert.match(textOf(byClass(streaming, 'dkf-empty')[0]), /正在读取动作/)
+})
+
+check('timeline 流失败：给出可读错误，其余页面照常', () => {
+  const failed = render({
+    timeline: { rows: [], phase: 'error', error: '需要 kiln v0.3.0+：时间线走 action log --jsonl', ms: 3, count: 0 },
+  })
+  const note = byClass(failed, 'dkf-note')
+  assert.equal(note.length, 1)
+  assert.match(textOf(note[0]), /v0\.3\.0\+/)
+  const issuePage = render({
+    tabId: 'issue',
+    timeline: { rows: [], phase: 'error', error: 'x', ms: 0, count: 0 },
+  })
+  assert.equal(byClass(issuePage, 'dkf-row').length, 3, 'issue 页不依赖时间线流')
+})
+
+check('timeline 快照外的 issue：不给聚焦按钮，改给说明', () => {
+  const rows = timelineFixture.rows.concat([
+    {
+      issueId: 'zzz',
+      action: 'apply',
+      id: 'c'.repeat(40),
+      short: 'ccccccc',
+      date: '2026-10-06T00:00:00+08:00',
+      title: '快照外的动作',
+      domain: 'integration',
+      tags: [],
+    },
+  ])
+  const view = render({
+    timeline: { rows, phase: 'done', error: null, ms: 4, count: rows.length },
+  })
+  const outside = byClass(view, 'dkf-arow').find((row) => textOf(byClass(row, 'dkf-aissue')[0]) === 'zzz')
+  assert.ok(outside !== undefined, '快照外的行仍要出现')
+  assert.equal(byClass(outside, 'dkf-focusbtn').length, 0, '没有结构可聚焦就不给按钮')
+  assert.equal(textOf(byClass(outside, 'dkf-afaint')[0]), '快照外')
 })
 
 // ---------------------------------------------------------------- 汇总

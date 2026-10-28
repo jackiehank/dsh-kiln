@@ -27,7 +27,7 @@ export class KilnError extends Error {
   }
 }
 
-const truncate = (text) =>
+export const truncateTitle = (text) =>
   typeof text === 'string' && text.length > MAX_TITLE ? `${text.slice(0, MAX_TITLE - 1)}…` : text ?? ''
 
 /** 每个目录只探测一次；探测结果随进程存活。 */
@@ -134,7 +134,7 @@ export function mapActions(document) {
       /** 展示用的短哈希（7 位）；空提交没有 id，保持空串而不是猜。 */
       short: sha.slice(0, 7),
       date: action.date,
-      title: truncate(action.title),
+      title: truncateTitle(action.title),
       /** 该动作声明的 refs：timeline 展开时显示，空就是空，不补默认值。 */
       refs: Array.isArray(action.refs) ? action.refs.map((ref) => String(ref)) : [],
     }
@@ -206,7 +206,7 @@ export function buildFlow(input) {
       domain: node.domain ?? '',
       action: node.action ?? '',
       done: node.done === true,
-      title: truncate(node.title),
+      title: truncateTitle(node.title),
       tags: Array.isArray(node.tags) ? node.tags : [],
       actions,
       last,
@@ -250,7 +250,7 @@ function ensureKiln() {
 }
 
 /** 仓库形状校验：返回原因字符串，合格返回 null。 */
-function validateRepo(dir) {
+export function repoProblem(dir) {
   if (dir === '' || !isAbsolute(dir) || !existsSync(dir) || !statSync(dir).isDirectory()) return 'invalid-dir'
   if (!existsSync(join(dir, '.kilnconfig.jsonc'))) return 'not-kiln-repo'
   return null
@@ -262,7 +262,7 @@ function validateRepo(dir) {
  */
 export async function readGraph(repo) {
   const dir = typeof repo === 'string' ? repo : ''
-  const invalid = validateRepo(dir)
+  const invalid = repoProblem(dir)
   if (invalid !== null) return { ok: false, reason: invalid }
   const bin = ensureKiln()
   if (bin === null) return { ok: false, reason: 'kiln-missing' }
@@ -307,7 +307,7 @@ export async function readSearch(repo, query) {
   const dir = typeof repo === 'string' ? repo : ''
   const text = String(query ?? '').trim()
   if (text === '') return { ok: false, reason: 'empty-query' }
-  const invalid = validateRepo(dir)
+  const invalid = repoProblem(dir)
   if (invalid !== null) return { ok: false, reason: invalid }
   const bin = ensureKiln()
   if (bin === null) return { ok: false, reason: 'kiln-missing' }

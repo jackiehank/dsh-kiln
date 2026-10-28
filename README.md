@@ -23,9 +23,9 @@ kiln check           # 语义完整性
 
 ## 依赖
 
-- [kiln](https://github.com/jackiehank/kiln) **v0.2.1+**：`go install github.com/jackiehank/kiln/cmd/kiln@latest`
-  （Flow 取数 v0.2.0+ 即可；搜索要 v0.2.1+ 的 `rank` / `hit.total` / `hit.date`。开发版可用
-  `DSH_KILN_BIN=<kiln 可执行文件>` 指向本地构建，旧版会明确报错）
+- [kiln](https://github.com/jackiehank/kiln) **v0.3.0+**：`go install github.com/jackiehank/kiln/cmd/kiln@latest`
+  （Flow 取数 v0.2.0+ 即可；搜索要 v0.2.1+ 的 `rank` / `hit.total` / `hit.date`；时间线要 v0.3.0+ 的
+  `action log --jsonl`。开发版可用 `DSH_KILN_BIN=<kiln 可执行文件>` 指向本地构建，旧版会明确报错）
 - git
 
 ## 目录

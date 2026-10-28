@@ -5,10 +5,18 @@
  * 真正 fork `kiln` / `git` 的路径在本机沙箱里会被 EPERM 拦住，那一层靠浏览器/桌面端实机验证。
  */
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 
 import { buildFlow, mapActions, parsePathDocument, pathShapeError, searchDocumentError } from '../lib/flow.js'
 import { applyFocus, createSnapshotCache, evaluateCache } from '../lib/snapshot.js'
 import { parseTrailerRange } from '../lib/git.js'
+import {
+  actionLogArgs,
+  actionLogProblem,
+  consumeActionLog,
+  createLineSplitter,
+  mapActionRecord,
+} from '../lib/timeline.js'
 
 let passed = 0
 const failures = []
@@ -1058,6 +1066,102 @@ await check('标签已不作为筛选维度：组清单里只剩领域与状态'
   }).__internals ?? {}
   assert.deepEqual((filterGroups ?? []).map((group) => group.id), ['domains', 'states'])
 })
+// ---------------------------------------------------------------- 时间线流（kiln v0.3.0 action log --jsonl）
+
+/** 假子进程：stdout/stderr 是可手动 emit 的数据源，生命周期由测试自己收口。 */
+function childStub() {
+  const child = new EventEmitter()
+  child.stdout = Object.assign(new EventEmitter(), { setEncoding() {} })
+  child.stderr = Object.assign(new EventEmitter(), { setEncoding() {} })
+  return child
+}
+
+await check('时间线：chunk 不按行到，半行留到下一块，CRLF 也认', () => {
+  const splitter = createLineSplitter()
+  assert.deepEqual(splitter.push('{"a":1}\n{"b"'), ['{"a":1}'], '没有换行的尾巴不算一行')
+  assert.deepEqual(splitter.push(':2}\r\n'), ['{"b":2}'])
+  assert.deepEqual(splitter.flush(), [])
+  assert.deepEqual(splitter.push('tail'), [])
+  assert.deepEqual(splitter.flush(), ['tail'], '没有换行收尾的最后一行不能丢')
+})
+
+await check('时间线：记录按契约映射，缺省字段就是空（键不存在 ≠ null）', () => {
+  const row = mapActionRecord({
+    issue: 'a',
+    action: 'apply',
+    commit: SHA_A,
+    date: '2026-10-28T23:06:28+08:00',
+  })
+  assert.deepEqual(row, {
+    issueId: 'a',
+    action: 'apply',
+    id: SHA_A,
+    short: 'aaaaaaa',
+    date: '2026-10-28T23:06:28+08:00',
+    title: '',
+    domain: '',
+    tags: [],
+  })
+  const full = mapActionRecord({
+    issue: 'b',
+    action: 'test',
+    commit: SHA_B,
+    date: '2026-10-28T00:00:00Z',
+    title: 'x'.repeat(250),
+    domain: 'integration',
+    tags: ['plugin', 'flow'],
+  })
+  assert.equal(full.title.length, 200, '标题沿用快照同样的 200 字截断')
+  assert.equal(full.domain, 'integration')
+  assert.deepEqual(full.tags, ['plugin', 'flow'])
+  assert.equal(mapActionRecord({ issue: 'a', action: 'apply' }), null, '缺 commit 是坏行')
+  assert.equal(mapActionRecord(null), null)
+})
+
+await check('时间线：limit 只给正数，0/负数当作全量', () => {
+  assert.deepEqual(actionLogArgs(0), ['action', 'log', '--jsonl'])
+  assert.deepEqual(actionLogArgs(-3), ['action', 'log', '--jsonl'])
+  assert.deepEqual(actionLogArgs(5), ['action', 'log', '--jsonl', '--limit', '5'])
+})
+
+await check('时间线：失败文案——旧版指路 v0.3.0+，其他错误原样给出', () => {
+  assert.equal(actionLogProblem(0, ''), null)
+  assert.match(actionLogProblem(2, '未知子命令: action'), /v0\.3\.0\+/)
+  assert.match(actionLogProblem(1, 'unknown command "action log"'), /v0\.3\.0\+/)
+  assert.match(actionLogProblem(1, 'fatal: bad revision HEAD'), /bad revision/)
+  assert.match(actionLogProblem(-1, ''), /退出码 -1/)
+})
+
+await check('时间线：逐条回调、跨块拼行、坏行不吞、done 只来一次', () => {
+  const calls = []
+  const child = childStub()
+  consumeActionLog(child, {
+    onRecord: (row) => calls.push(row.issueId),
+    onError: (message) => calls.push(`err:${message.slice(0, 4)}`),
+    onDone: (info) => calls.push(`done:${info.code}:${info.count}:${info.failed}`),
+  })
+  child.stdout.emit(
+    'data',
+    `{"issue":"a","action":"ask","commit":"${SHA_A}","date":"2026-10-01T00:00:00+08:00"}\n{"issue":"b"`,
+  )
+  child.stdout.emit(
+    'data',
+    `,"action":"apply","commit":"${SHA_B}","date":"2026-10-02T00:00:00+08:00"}\nnot json\n`,
+  )
+  child.emit('close', 0)
+  assert.deepEqual(calls, ['a', 'b', 'err:acti', 'done:0:2:true'])
+
+  const errors = []
+  const failedSpawn = childStub()
+  consumeActionLog(failedSpawn, {
+    onError: (message) => errors.push(message),
+    onDone: () => errors.push('done'),
+  })
+  failedSpawn.emit('error', new Error('spawn kiln ENOENT'))
+  failedSpawn.emit('close', -1)
+  assert.deepEqual(errors, ['spawn kiln ENOENT', 'done'], 'error 之后 close 不能把 done 再说一遍')
+})
+
 // ---------------------------------------------------------------- 汇总
 console.log('')
 if (failures.length === 0) {
