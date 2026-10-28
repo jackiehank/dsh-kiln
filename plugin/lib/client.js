@@ -25,6 +25,28 @@ window.__ModuleLoader__.load({
     const STYLE_ID = 'dsh-kiln-flow-style'
     const FLOW_URL = '/kiln/flow'
 
+    /**
+     * TEST（kiln-search 的延迟实验）：真 B 方案 = 输入停 120ms 后跑一次 `kiln list --search`
+     * （本机 103–112ms）。这里不接宿主路由，只用内存匹配模拟同样的等待，先验证交互能不能接受。
+     * 测试环境自动降为 0，渲染用例仍同步；真机可在控制台改
+     * `window.__DSH_KILN_SEARCH_DELAY__ = { debounce: 0, latency: 0 }` 后再输入。
+     */
+    const SEARCH_DEBOUNCE_MS = 120
+    const SEARCH_SIMULATED_MS = 100
+    function searchTiming() {
+      if (globalThis.__DSH_KILN_TEST__ === true) return { debounce: 0, latency: 0 }
+      const override = globalThis.__DSH_KILN_SEARCH_DELAY__
+      const debounce =
+        typeof override?.debounce === 'number' && Number.isFinite(override.debounce)
+          ? Math.max(0, override.debounce)
+          : SEARCH_DEBOUNCE_MS
+      const latency =
+        typeof override?.latency === 'number' && Number.isFinite(override.latency)
+          ? Math.max(0, override.latency)
+          : SEARCH_SIMULATED_MS
+      return { debounce, latency }
+    }
+
     /** 关系词表：宿主只回原始边，方向与强弱在这里推导（不在宿主判断“什么算重要”）。 */
     const INVERSE = {
       'has-part': 'part-of',
@@ -1886,6 +1908,8 @@ window.__ModuleLoader__.load({
       const [searchIndex, setSearchIndex] = React.useState(-1)
       /** 选中一条"动作命中"的结果后要滚到的那一行（值 = 动作的提交 sha）。 */
       const [scrollTo, setScrollTo] = React.useState(null)
+      /** 延迟实验：上一次完成的结果；null = 本次查询还没跑过。 */
+      const [searchResult, setSearchResult] = React.useState(null)
       const rootRef = React.useRef(null)
       const searchRef = React.useRef(null)
       /** 中文输入法组合期间，回车是"上屏"不是"确认"，别让键盘处理抢先。 */
@@ -2040,9 +2064,52 @@ window.__ModuleLoader__.load({
       /**
        * 搜索：整仓范围（不看筛选，也不看焦点作用域——"直接找那一条"不该被悄悄过滤），
        * 有输入就把内容区换成结果列表。
+       *
+       * TEST（kiln-search 的延迟实验）：B 方案会先防抖 120ms 再跑一次 kiln（约 100ms）；这里
+       * 用内存匹配模拟同样的等待，先把交互手感验掉。测试环境 timing 为 0，仍走同步路径。
        */
       const searching = splitTerms(query).length > 0
-      const searchRows = React.useMemo(() => searchIssues(issues, query), [issues, query])
+      const timing = searchTiming()
+      const delayedSearch = timing.debounce + timing.latency > 0
+      const immediateRows = React.useMemo(() => searchIssues(issues, query), [issues, query])
+      React.useEffect(() => {
+        if (!delayedSearch) return
+        if (splitTerms(query).length === 0) {
+          setSearchResult(null)
+          return
+        }
+        let cancelled = false
+        let finishTimer = null
+        const startedAt = Date.now()
+        const debounceTimer = setTimeout(() => {
+          finishTimer = setTimeout(() => {
+            if (cancelled) return
+            setSearchResult({
+              query,
+              issues,
+              rows: searchIssues(issues, query),
+              pending: false,
+              ms: Date.now() - startedAt,
+            })
+          }, timing.latency)
+        }, timing.debounce)
+        return () => {
+          cancelled = true
+          clearTimeout(debounceTimer)
+          if (finishTimer !== null) clearTimeout(finishTimer)
+        }
+      }, [query, issues, delayedSearch, timing.debounce, timing.latency])
+
+      const searchPending =
+        delayedSearch &&
+        searching &&
+        (searchResult === null ||
+          searchResult.pending === true ||
+          searchResult.query !== query ||
+          searchResult.issues !== issues)
+      const searchRows = delayedSearch ? (searchResult?.rows ?? []) : immediateRows
+      const visibleSearchRows = searchPending ? [] : searchRows
+      const searchMs = delayedSearch && searchResult?.query === query ? searchResult.ms : 0
 
       const clearSearch = () => {
         setQuery('')
@@ -2078,19 +2145,19 @@ window.__ModuleLoader__.load({
           else if (searchRef.current !== null && typeof searchRef.current.blur === 'function') searchRef.current.blur()
           return
         }
-        if (searchRows.length === 0) return
+        if (visibleSearchRows.length === 0) return
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
           event.preventDefault()
           const delta = event.key === 'ArrowDown' ? 1 : -1
           setSearchIndex((previous) => {
             const base = Number.isFinite(previous) && previous >= 0 ? previous : delta === 1 ? -1 : 0
-            return (base + delta + searchRows.length) % searchRows.length
+            return (base + delta + visibleSearchRows.length) % visibleSearchRows.length
           })
           return
         }
         if (event.key === 'Enter') {
           const index = Number.isFinite(searchIndex) && searchIndex >= 0 ? searchIndex : 0
-          const row = searchRows[index]
+          const row = visibleSearchRows[index]
           if (row !== undefined) {
             event.preventDefault()
             pickSearch(row)
@@ -2139,7 +2206,7 @@ window.__ModuleLoader__.load({
           className: 'dkf-search',
           type: 'text',
           value: query,
-          placeholder: '搜索 issue…',
+          placeholder: delayedSearch ? `搜索 issue…（模拟 ${timing.debounce + timing.latency}ms）` : '搜索 issue…',
           'aria-label': '搜索 issue',
           spellCheck: false,
           autoComplete: 'off',
@@ -2313,11 +2380,21 @@ window.__ModuleLoader__.load({
                 'div',
                 { className: 'dkf-bar-tools' },
                 searching
-                  ? h(
-                      'span',
-                      { key: 'hits', className: 'dkf-count' },
-                      `${searchRows.length} 条命中 · 仓库共 ${issues.length} 条`,
-                    )
+                  ? searchPending
+                    ? h('span', { key: 'hits', className: 'dkf-count' }, '搜索中…')
+                    : h(
+                        'span',
+                        {
+                          key: 'hits',
+                          className: 'dkf-count',
+                          'data-hint': delayedSearch
+                            ? `TEST：防抖 ${timing.debounce}ms + 模拟 kiln ${timing.latency}ms`
+                            : undefined,
+                        },
+                        delayedSearch
+                          ? `${searchRows.length} 条命中 · ${searchMs}ms（模拟）· 仓库共 ${issues.length} 条`
+                          : `${searchRows.length} 条命中 · 仓库共 ${issues.length} 条`,
+                      )
                   : pageTools !== null
                     ? pageTools
                     : tabId === 'issue'
@@ -2364,12 +2441,23 @@ window.__ModuleLoader__.load({
         let content = null
         if (searching) {
           // 有输入就整块换成结果：搜索是"直接找那一条"，不掺页面与筛选
-          content = h(SearchResults, {
-            rows: searchRows,
-            query,
-            selected: searchIndex,
-            onPick: pickSearch,
-          })
+          content = searchPending
+            ? h(
+                'div',
+                { className: 'dkf-empty', 'aria-live': 'polite' },
+                h('p', null, '搜索中…'),
+                h(
+                  'p',
+                  null,
+                  `模拟延迟：防抖 ${timing.debounce}ms + kiln 查询 ${timing.latency}ms`,
+                ),
+              )
+            : h(SearchResults, {
+                rows: visibleSearchRows,
+                query,
+                selected: searchIndex,
+                onPick: pickSearch,
+              })
         } else if (tabId === 'timeline') {
           content = h(TimelinePanel, {
             rows: shownRows,
@@ -2520,6 +2608,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, searchIssues, matchRanges, mergeRanges, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, searchIssues, matchRanges, mergeRanges, searchTiming, css: CSS } } : {}) }
   },
 })

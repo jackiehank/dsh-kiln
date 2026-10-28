@@ -991,6 +991,34 @@ await check('搜索：切词、AND、排序与高亮区间', async () => {
   assert.deepEqual(found[0].titleRanges, [[9, 11]], '高亮落在展示的那条标题上')
 })
 
+await check('搜索延迟实验：真机 120+100ms，测试环境为 0，可被控制台覆盖', () => {
+  const reactStub = {
+    createElement: () => null,
+    Fragment: 'fragment',
+    useRef: (value) => ({ current: value }),
+    useState: (value) => [value, () => {}],
+    useEffect: () => {},
+    useMemo: (fn) => fn(),
+  }
+  const { searchTiming } = loaded.factory((name) => {
+    if (name === 'react') return reactStub
+    throw new Error('unexpected require: ' + name)
+  }).__internals ?? {}
+  assert.equal(typeof searchTiming, 'function', '需要 __DSH_KILN_TEST__ 暴露 searchTiming')
+  assert.deepEqual(searchTiming(), { debounce: 0, latency: 0 }, '测试里不能真的等 220ms')
+
+  const saved = globalThis.__DSH_KILN_TEST__
+  globalThis.__DSH_KILN_TEST__ = false
+  try {
+    assert.deepEqual(searchTiming(), { debounce: 120, latency: 100 }, '真机默认值')
+    globalThis.__DSH_KILN_SEARCH_DELAY__ = { debounce: 40, latency: 60 }
+    assert.deepEqual(searchTiming(), { debounce: 40, latency: 60 }, '控制台可覆盖，便于对比')
+  } finally {
+    delete globalThis.__DSH_KILN_SEARCH_DELAY__
+    globalThis.__DSH_KILN_TEST__ = saved
+  }
+})
+
 await check('搜索框真居中：页头是左右等宽的三栏网格，输入框占中间那栏', async () => {
   const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
   const css = loaded.factory((name) => {
