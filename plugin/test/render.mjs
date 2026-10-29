@@ -181,6 +181,13 @@ const timelineFixture = {
   count: 4,
 }
 
+/** 词表 fixture：与 `.kilnconfig.jsonc` 同形；折叠 issue 索引判 done / 起点都靠它。 */
+const vocabFixture = {
+  names: ['ask', 'hypothesize', 'collect', 'test', 'conclude', 'apply'],
+  start: 'ask',
+  terminal: ['conclude', 'apply'],
+}
+
 let loaded = null
 globalThis.window = {
   __ModuleLoader__: {
@@ -213,6 +220,7 @@ function render({
   query = '',
   search = null,
   timeline = timelineFixture,
+  vocab = vocabFixture,
 }) {
   const React = makeReact([
     {
@@ -233,6 +241,11 @@ function render({
     filters, //                    filters（issue 页：领域 / 状态）
     rowFilters, //                 rowFilters（时间线：动作 / 领域）
     query, //                      query（搜索框的输入）
+    -1, //                         searchIndex（选中的搜索结果）
+    null, //                       scrollTo（要滚到的动作）
+    null, //                       rawSearch（搜索结果的原始状态；测试走 fixture）
+    null, //                       timeline（流状态；测试走 timeline fixture）
+    vocab === null ? null : { ...vocab, terminal: new Set(vocab.terminal) }, // vocab（start / terminal）
   ])
   const requireOf = (name) => {
     if (name === 'react') return React
@@ -247,9 +260,11 @@ function render({
   // 搜索与时间线都是 effect + fetch；渲染替身不跑 effect，直接喂宿主的产物。
   globalThis.__DSH_KILN_SEARCH_FIXTURE__ = search
   globalThis.__DSH_KILN_TIMELINE_FIXTURE__ = timeline
+  globalThis.__DSH_KILN_VOCAB_FIXTURE__ = vocab
   const tree = expand(KilnView({ cwd: '/repo' }))
   globalThis.__DSH_KILN_SEARCH_FIXTURE__ = null
   globalThis.__DSH_KILN_TIMELINE_FIXTURE__ = null
+  globalThis.__DSH_KILN_VOCAB_FIXTURE__ = null
   return tree
 }
 
@@ -764,6 +779,90 @@ check('timeline 快照外的 issue：不给聚焦按钮，改给说明', () => {
   assert.ok(outside !== undefined, '快照外的行仍要出现')
   assert.equal(byClass(outside, 'dkf-focusbtn').length, 0, '没有结构可聚焦就不给按钮')
   assert.equal(textOf(byClass(outside, 'dkf-afaint')[0]), '快照外')
+})
+
+// ---------------------------------------------------------------- issue 页复用 action 流
+
+/** 时间线 fixture + 一条只在流里出现的 issue（zzz）：最近 apply、最早 ask。 */
+const outsideIssueRows = [
+  {
+    issueId: 'zzz',
+    action: 'apply',
+    id: 'd'.repeat(40),
+    short: 'ddddddd',
+    date: '2026-10-06T00:00:00+08:00',
+    title: 'zzz 收尾',
+    domain: 'integration',
+    tags: [],
+  },
+  ...timelineFixture.rows,
+  {
+    issueId: 'zzz',
+    action: 'ask',
+    id: 'e'.repeat(40),
+    short: 'eeeeeee',
+    date: '2026-09-01T00:00:00+08:00',
+    title: 'zzz 开题',
+    domain: 'integration',
+    tags: [],
+  },
+]
+
+check('issue 页：流里多出来的 issue 也进列表，色条来自流、done 认终点词表', () => {
+  const view = render({
+    tabId: 'issue',
+    timeline: { rows: outsideIssueRows, phase: 'done', error: null, ms: 4, count: outsideIssueRows.length },
+  })
+  const rows = byClass(view, 'dkf-row')
+  assert.equal(rows.length, 4, '快照 3 条 + 流里 1 条')
+  const zzz = rows.find((row) => textOf(byClass(row, 'dkf-id')[0]) === 'zzz')
+  assert.ok(zzz !== undefined, '快照外的 issue 要出现在无焦点列表里')
+  assert.equal(textOf(byClass(rows[0], 'dkf-id')[0]), 'zzz', '按最近动作排序，最新的在最上面')
+  assert.equal(byClass(zzz, 'dkf-block').length, 2, '色条按流里读到的动作画（apply + ask）')
+  assert.equal(byClass(zzz, 'dkf-chip-done').length, 1, 'apply ∈ terminal → done')
+  assert.equal(byClass(zzz, 'dkf-focusbtn').length, 0, '没有关系边，聚焦仍是死路，不给按钮')
+  assert.equal(textOf(byClass(zzz, 'dkf-afaint')[0]), '快照外')
+})
+
+check('issue 页：流里多出来的 issue 能展开完整动作链', () => {
+  const view = render({
+    tabId: 'issue',
+    expanded: { kind: 'issue', id: 'zzz' },
+    timeline: { rows: outsideIssueRows, phase: 'done', error: null, ms: 4, count: outsideIssueRows.length },
+  })
+  const zzz = byClass(view, 'dkf-row').find((row) => textOf(byClass(row, 'dkf-id')[0]) === 'zzz')
+  const lines = byClass(view, 'dkf-subrow')
+  assert.equal(lines.length, 2)
+  assert.match(textOf(lines[0]), /apply/, '展开后仍是时间倒序（最新在上）')
+  assert.match(textOf(lines[1]), /ask/)
+})
+
+check('issue 页：流没读完时，筛选不给「没有符合条件」的假空态', () => {
+  const view = render({
+    tabId: 'issue',
+    filters: { domains: ['不存在的领域'], states: [] },
+    timeline: { rows: outsideIssueRows, phase: 'streaming', error: null, ms: 3, count: outsideIssueRows.length },
+  })
+  assert.equal(byClass(view, 'dkf-row').length, 0)
+  assert.match(textOf(byClass(view, 'dkf-empty')[0]), /筛选中，继续加载/)
+})
+
+check('issue 页：流没读完且无筛选时，计数标「读取中」', () => {
+  const view = render({
+    tabId: 'issue',
+    timeline: { rows: outsideIssueRows.slice(0, 2), phase: 'streaming', error: null, ms: 3, count: 2 },
+  })
+  assert.match(textOf(byClass(view, 'dkf-count')[0]), /读取中/)
+})
+
+check('timeline：流没读完时，动作筛选同样不给假空态', () => {
+  const view = render({
+    tabId: 'timeline',
+    rowFilters: { actions: ['conclude'], domains: [] },
+    timeline: { rows: [], phase: 'streaming', error: null, ms: 0, count: 0 },
+  })
+  assert.equal(byClass(view, 'dkf-arow').length, 0)
+  assert.match(textOf(byClass(view, 'dkf-empty')[0]), /筛选中，继续加载/)
 })
 
 // ---------------------------------------------------------------- 汇总

@@ -1,18 +1,25 @@
 # @local/dsh-kiln
 
 DSH × kiln 的插件初稿：在会话顶部标签排（对话 / 轨迹 / 上下文）**之后**加一个 `kiln` 标签，
-只读展示 kiln 仓库的 Flow 视图。**插件版本 0.4.0**：Flow 取数需 kiln v0.2.0+（批量 `path` 与
-`commit` 键），**搜索需 v0.2.1+**（`rank` / `hit.total` / `hit.date`），**时间线需 v0.3.0+**
-（`action log --jsonl`）；旧版会在对应面明确报错，其余两页不受影响。
+只读展示 kiln 仓库的 Flow 视图。**插件版本 0.5.0**：Flow 取数需 kiln v0.2.0+（批量 `path` 与
+`commit` 键），**搜索需 v0.2.1+**（`rank` / `hit.total` / `hit.date`），**时间线与流折叠的 issue
+列表需 v0.3.0+**（`action log --jsonl`、`action list --json`）；旧版会在对应面明确报错，
+其余页面不受影响。
 
-- 数据来源：宿主路由 `GET /kiln/flow`（快照）、`GET /kiln/search`（一次搜索）与
-  `GET /kiln/timeline`（NDJSON 流）。宿主进程里跑 `kiln graph --json`、一次批量
-  `kiln path <id> … --json`、`kiln list --search <q> --json`，以及 `kiln action log --jsonl`。
+- 数据来源：宿主路由 `GET /kiln/flow`（快照）、`GET /kiln/search`（一次搜索）、
+  `GET /kiln/timeline`（NDJSON 流）与 `GET /kiln/actions`（动作词表）。宿主进程里跑
+  `kiln graph --json`、一次批量 `kiln path <id> … --json`、`kiln list --search <q> --json`、
+  `kiln action log --jsonl` 与一次 `kiln action list --json`。
 - 浏览器半不直接读文件，也不调 CLI；仓库根 = 当前会话的工作区目录。
 - 视图语义：三页共享一个焦点 issue。issue 页无焦点时一行一个 issue；有焦点时读出结构——
   part-of 作母/子分组与面包屑，`blocks` → `supersedes` → `caused-by` 按强弱排，弱关联（relates-to）
   默认展开，行内带方向与关系名。关系页只有图（全局 / 聚焦），hover 节点弹出该 issue 的 ask 标题。
   焦点切换只在内存里，不落盘。
+- **无焦点的 issue 列表吃同一条 action 流**（见 `docs/issues/kiln-input-streams.md`）：按 issue
+  折叠出「首现 = 最近动作」的行——顺序天然是 recency，色条随流增长，`done` 用 `action list` 的
+  终点词表判定，`domain`/`tags` 按 kiln 的聚合规则折叠（最新非空 / 全量并集）。所以列表**不再受
+  快照 80 条限制**；流里多出来的 issue 能展开动作，但没有关系边，行尾显示「快照外」而不是聚焦按钮。
+  流没读完时筛选空结果显示「筛选中，继续加载…」，不会拿半截数据说“没有符合条件”。
 - 筛选（见 `docs/issues/kiln-issue-filter.md`、`kiln-timeline-filter.md`）：两页各筛自己的行。
   issue 页按 **领域 / 状态**，时间线页按 **动作 / 领域**；同组多选是 OR、组间是 AND，
   某个维度在本仓没有可选项时整组不出现。筛选是纯客户端过滤（不调 `kiln list`），状态按仓库记在内存里。
@@ -57,6 +64,9 @@ DSH × kiln 的插件初稿：在会话顶部标签排（对话 / 轨迹 / 上�
   第一批提交到达即出（本仓 142 行 101ms、`~/kiln` 350 行 115ms），EOF 才算读完；没有首屏缓存，
   切页/刷新/卸载即 abort 并 kill 子进程。好处是**不再受 80 条快照限制**：快照外的 issue 也能在
   时间线里看到并展开，只是没有结构可聚焦（行尾显示「快照外」而不是按钮）。
+  同一条流还折叠出**无焦点的 issue 列表**（首现 = 最近动作；`domain`/`tags`/`done` 按 kiln 的聚合
+  规则算），所以列表也是“边读边长”；词表（start/terminal）另走一次 `GET /kiln/actions`，
+  按仓库缓存，拿不到时 done 显示为未知而不是猜。
 - 搜索的代价：输入停 120ms 后，宿主调一次 `kiln list --search`（本机 103–112ms），端到端约
   220ms；不复用快照缓存，每次都是当前历史。这是「一套搜索算法」的价格——换来 rank/顺序/hit
   与 kiln 完全一致，客户端只做高亮与交互。每键一个子进程由防抖 + abort 挡住。
@@ -106,13 +116,14 @@ node plugin/test/probe-perf.mjs . C:\Users\jacki\kiln
 ## 已知边界
 
 - 只读；不写 issue、不提交。
-- **Flow 取数需 kiln v0.2.0+，搜索需 v0.2.1+，时间线需 v0.3.0+**。一次快照 = 1 次 `graph` +
-  1 次批量 `path`（≤80 条）；搜索 = 1 次 `list --search` / 查询；时间线 = 1 条常驻流
-  （`action log --jsonl`，EOF 结束，切页即 kill）。旧版对多 id 会静默只回第一条、搜索行没有
-  `rank`、没有 `action` 子命令，插件会直接报对应版本，不会退回逐条或自己补排序。
-- **快照上限 80 条只约束 issue 页与关系图**：时间线走全仓动作流，不受这个上限影响；快照外的
-  issue 在时间线里能看到动作、展开详情，但没有结构可聚焦。把 issue 页也做成分页/按需详情，
-  要继续等上游 `list --json` 带 `date` 与 `limit/offset`（见 `kiln-many-issues`）。
+- **Flow 取数需 kiln v0.2.0+，搜索需 v0.2.1+，流式两路（时间线 + 无焦点的 issue 列表）需
+  v0.3.0+**。一次快照 = 1 次 `graph` + 1 次批量 `path`（≤80 条）；搜索 = 1 次 `list --search` /
+  查询；时间线 = 1 条常驻流（`action log --jsonl`，EOF 结束，切页即 kill）；issue 列表的折叠
+  复用同一条流，另加 1 次 `action list --json`（取词表，按仓库缓存）。旧版对多 id 会静默只回
+  第一条、搜索行没有 `rank`、没有 `action` 子命令，插件会直接报对应版本，不会退回逐条或自己补排序。
+- **快照上限 80 条只约束关系图与聚焦结构**：时间线（全仓动作流）与无焦点的 issue 列表（流折叠）
+  都不受它限制；快照外的 issue 能看到完整动作、能展开，但没有关系边可读结构——行尾显示「快照外」，
+  聚焦仍要等按需详情（`kiln-input-streams` 的第 2 步）。
 - 关系词表按 kiln 0.2.0 的内置词表硬编码在 `client.js` 的 `GROUPS` 里；等 kiln 支持
   `.kilnconfig.jsonc` 配置 `relations` 后改成读配置。
 - Flow 布局是初稿，Triage / Genealogy 尚未实现。

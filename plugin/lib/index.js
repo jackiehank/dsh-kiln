@@ -5,7 +5,7 @@
  * 快照按 HEAD 失效（见 snapshot.js）：HEAD 没动就完全不碰子进程，动了只重取受影响的 issue。
  * 路由走与 open-in-app 相同的信任栅栏（connection.requestRejection），不额外做鉴权。
  */
-import { readSearch, repoProblem, resolveKiln } from './flow.js'
+import { readActions, readSearch, repoProblem, resolveKiln } from './flow.js'
 import { createSnapshotCache } from './snapshot.js'
 import { actionLogProblem, consumeActionLog, spawnActionLog } from './timeline.js'
 
@@ -18,6 +18,7 @@ export const inject = ['webServer', 'connection']
 const FLOW_PATH = '/kiln/flow'
 const SEARCH_PATH = '/kiln/search'
 const TIMELINE_PATH = '/kiln/timeline'
+const ACTIONS_PATH = '/kiln/actions'
 
 /** 进程内缓存：不落盘，重启即失效。 */
 const cache = createSnapshotCache()
@@ -178,6 +179,54 @@ export function apply(ctx) {
         },
       }),
     `kiln: GET ${TIMELINE_PATH}`,
+  )
+
+  /**
+   * 动作词表：给客户端折叠 issue 索引用（done = 最近动作 ∈ terminal；“读到起点”= 看到 start）。
+   * 一次进程、不读历史；客户端按仓库缓存，不随刷新重取。老版本没有这个命令时明确报 v0.3.0+，
+   * 客户端退化成“done 未知”，不影响列表本身。
+   */
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: ACTIONS_PATH,
+        handler: async (req, res) => {
+          const rejection = connectionOf(ctx).requestRejection(req)
+          if (rejection !== undefined) {
+            res.statusCode = rejection
+            res.end()
+            return
+          }
+          if (req.method !== 'GET') {
+            res.statusCode = 405
+            res.setHeader('allow', 'GET')
+            res.end()
+            return
+          }
+
+          const url = new URL(String(req.url ?? '/'), 'http://localhost')
+          const cwd = url.searchParams.get('cwd') ?? ''
+          if (cwd === '') {
+            sendJson(res, 400, { ok: false, reason: 'missing-cwd' })
+            return
+          }
+
+          try {
+            const result = await readActions(cwd)
+            sendJson(res, 200, { ...result, repo: cwd, generatedAt: new Date().toISOString() })
+          } catch (error) {
+            sendJson(res, 500, {
+              ok: false,
+              repo: cwd,
+              reason: 'internal',
+              message: String(error?.message ?? error),
+              generatedAt: new Date().toISOString(),
+            })
+          }
+        },
+      }),
+    `kiln: GET ${ACTIONS_PATH}`,
   )
 
   /** 搜索：每次查询一个进程，不缓存；客户端负责防抖与取消。 */

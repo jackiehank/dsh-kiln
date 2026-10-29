@@ -356,6 +356,40 @@ export async function readHistories(repo, ids) {
 }
 
 /**
+ * 动作词表：`kiln action list --json`（不读历史、只读配置）。
+ *
+ * 客户端把 action 流折叠成 issue 索引时，要用它做两个判断：
+ * - `done`：最近动作 ∈ `terminal`；
+ * - “这条 issue 读完了”：看到 `start`（本仓是 `ask`，但词表是每个项目的自定义点，不硬编码）。
+ */
+export async function readActions(repo) {
+  const dir = typeof repo === 'string' ? repo : ''
+  const invalid = repoProblem(dir)
+  if (invalid !== null) return { ok: false, reason: invalid }
+  const bin = ensureKiln()
+  if (bin === null) return { ok: false, reason: 'kiln-missing' }
+  try {
+    const doc = JSON.parse(await runKiln(bin, ['action', 'list', '--json'], dir))
+    const actions = doc?.actions ?? {}
+    if (
+      !Array.isArray(actions.names) ||
+      typeof actions.start !== 'string' ||
+      actions.start === '' ||
+      !Array.isArray(actions.terminal)
+    ) {
+      return {
+        ok: false,
+        reason: 'kiln-too-old',
+        message: '需要 kiln v0.3.0+：action list --json 缺少 names/start/terminal',
+      }
+    }
+    return { ok: true, actions }
+  } catch (error) {
+    return { ok: false, reason: 'kiln-error', message: String(error?.message ?? error) }
+  }
+}
+
+/**
  * 读取一个仓库的 Flow 快照（**不带缓存**；缓存与失效在 snapshot.js）。
  *
  * @param repo - 绝对路径，必须是 kiln 仓库根。

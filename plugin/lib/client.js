@@ -26,12 +26,15 @@ window.__ModuleLoader__.load({
     const FLOW_URL = '/kiln/flow'
     const SEARCH_URL = '/kiln/search'
     const TIMELINE_URL = '/kiln/timeline'
+    const ACTIONS_URL = '/kiln/actions'
     /** 搜索走宿主 → kiln，每次约 100ms；输入停 120ms 再发，连击只留最后一轮。 */
     const SEARCH_DEBOUNCE_MS = 120
     /** 时间线边收边渲染：最多 20fps，350 行动作不会把 React 刷 350 次。 */
     const TIMELINE_FLUSH_MS = 50
     const EMPTY_SEARCH = { query: '', rows: [], pending: false, ms: 0, count: 0, error: null }
     const EMPTY_TIMELINE = { rows: [], phase: 'idle', error: null, ms: 0, count: 0 }
+    /** 动作词表按仓库缓存：一次进程、不读历史，重挂载不重取。 */
+    const actionsCache = new Map()
 
     /** NDJSON 按行切：chunk 不保证按行到，半行留到下一块（与宿主 timeline.js 同一套规则）。 */
     function createLineSplitter() {
@@ -840,6 +843,90 @@ window.__ModuleLoader__.load({
       return rows.filter((row) => view.ids.has(row.issueId))
     }
 
+    /** `action list --json` → 折叠要用的词表；形状不对就当没有（done 未知，不猜）。 */
+    function normalizeVocab(document) {
+      const actions = document?.actions ?? document
+      const names = Array.isArray(actions?.names) ? actions.names.map(String) : []
+      const start = typeof actions?.start === 'string' ? actions.start : ''
+      const terminal = Array.isArray(actions?.terminal) ? actions.terminal.map(String) : []
+      if (names.length === 0 || start === '') return null
+      return { names, start, terminal: new Set(terminal) }
+    }
+
+    /**
+     * 把 action 流折叠成 issue 索引（无焦点的 issue 页用它）。
+     *
+     * 规则对着 kiln 的聚合实现（`engine.Build` / `Issue.Last` / `isDone`）：
+     * - 流是 author-date 倒序 → issue 的**首现**就是它的最近动作，首现顺序就是 recency；
+     * - `domain`：kiln 在时间序里用最后一个非空覆盖 → 倒序流的**首个非空**；
+     * - `tags`：全部动作的并集，按时间序 appendUnique（这里先倒着收、翻正后再去重）；
+     * - `done`：最近动作 ∈ `terminal`（词表来自 `action list --json`，不硬编码 conclude/apply）；
+     * - `ordinal`：要等看到 `start`（这条 issue 读完了）或流结束才回填，否则会先小后大。
+     *
+     * 返回顺序 = 首现顺序（最新动作在前）；调用方可以再按 date 排，但不必。
+     */
+    function foldIssues(rows, options = {}) {
+      const start = typeof options?.start === 'string' ? options.start : ''
+      const terminal = options?.terminal instanceof Set ? options.terminal : null
+      const complete = options?.complete === true
+      const byId = new Map()
+      const order = []
+      for (const row of Array.isArray(rows) ? rows : []) {
+        const id = typeof row?.issueId === 'string' ? row.issueId : ''
+        if (id === '') continue
+        let issue = byId.get(id)
+        if (issue === undefined) {
+          issue = {
+            id,
+            domain: '',
+            action: '',
+            done: false,
+            /** 词表拿不到时 done 不可知：不画 done chip，也不参与状态筛选。 */
+            doneKnown: terminal !== null,
+            title: '',
+            tags: [],
+            actions: [],
+            last: null,
+          }
+          byId.set(id, issue)
+          order.push(id)
+        }
+        if (issue.domain === '' && typeof row.domain === 'string' && row.domain !== '') issue.domain = row.domain
+        issue.actions.push({
+          action: row.action,
+          id: row.id,
+          short: row.short,
+          date: row.date,
+          title: row.title ?? '',
+          /** 动作级标签只在折叠时用来合并 issue 级 tags，渲染不看它。 */
+          tags: Array.isArray(row.tags) ? row.tags : [],
+          refs: [],
+        })
+      }
+
+      const issues = []
+      for (const id of order) {
+        const issue = byId.get(id)
+        // 倒序流 → 翻成时间升序，与快照的 actions 同向（strip / ActionLines 都按升序读）
+        issue.actions.reverse()
+        const last = issue.actions[issue.actions.length - 1] ?? null
+        issue.last = last
+        issue.action = last?.action ?? ''
+        issue.title = last?.title ?? ''
+        issue.done = terminal !== null && last !== null && terminal.has(last.action)
+        const tags = []
+        for (const action of issue.actions) {
+          for (const tag of action.tags) if (!tags.includes(tag)) tags.push(tag)
+        }
+        issue.tags = tags
+        // 看到起点（最早那条动作 = start）或整条流结束，动作数才不会再变，序号可以定稿
+        const finished = complete || (start !== '' && issue.actions[0]?.action === start)
+        if (finished) issue.actions.forEach((action, index) => { action.ordinal = index + 1 })
+        issues.push(issue)
+      }
+      return issues
+    }
+
     /** 按最近动作排序；有焦点时把焦点的行钉在第一条。 */
     function sortIssues(issues, pinId) {
       const sorted = issues.slice().sort(byRecency)
@@ -933,6 +1020,8 @@ window.__ModuleLoader__.load({
       if (filters.domains.length > 0 && !filters.domains.includes(issue.domain ?? '')) return false
 
       if (filters.states.length > 0) {
+        // done 不可知（词表没取到）时不猜：这条 issue 不进任何状态筛选结果
+        if (issue.doneKnown === false) return false
         const state = issue.done === true ? 'done' : 'open'
         if (!filters.states.includes(state)) return false
       }
@@ -954,6 +1043,7 @@ window.__ModuleLoader__.load({
       for (const issue of issues) {
         const domain = issue.domain ?? ''
         domains.set(domain, (domains.get(domain) ?? 0) + 1)
+        if (issue.doneKnown === false) continue
         const state = issue.done === true ? 'done' : 'open'
         states.set(state, (states.get(state) ?? 0) + 1)
       }
@@ -1084,16 +1174,18 @@ window.__ModuleLoader__.load({
       const older = start
       const newer = actions.length - end
       const anchor = hitIndex >= start && hitIndex < end ? hitIndex - start : visible.length - 1
+      /** 流里还没读到起点时没有 ordinal：序号缺了就省略，不编一个。 */
+      const label = (action) => `${Number.isInteger(action.ordinal) ? `${action.ordinal}. ` : ''}${action.action}`
       return h(
         'span',
-        { className: 'dkf-strip', 'data-hint': actions.map((action) => `${action.ordinal}. ${action.action}`).join('\n') },
+        { className: 'dkf-strip', 'data-hint': actions.map(label).join('\n') },
         older > 0 ? h('span', { className: 'dkf-ago' }, `+${older}`) : null,
         visible.map((action, index) =>
           h('span', {
-            key: `${action.ordinal}-${index}`,
+            key: `${action.ordinal ?? action.id ?? index}-${index}`,
             className: cls('dkf-block', index === anchor && 'dkf-block-current'),
             style: { background: colorOf(action.action) },
-            'data-hint': `${action.ordinal}. ${action.action} · ${action.date} · ${action.title ?? ''}`,
+            'data-hint': `${label(action)} · ${action.date} · ${action.title ?? ''}`,
           }),
         ),
         newer > 0 ? h('span', { className: 'dkf-ago', 'data-hint': `还有 ${newer} 条更新的动作没画下` }, `+${newer}`) : null,
@@ -1113,7 +1205,7 @@ window.__ModuleLoader__.load({
           .map((action) =>
             h(
               'div',
-              { className: 'dkf-subrow', key: `${action.ordinal}-${action.short || ''}`, style: { '--dkf-row-color': colorOf(action.action) } },
+              { className: 'dkf-subrow', key: `${action.ordinal ?? action.id ?? index}-${action.short || ''}`, style: { '--dkf-row-color': colorOf(action.action) } },
               h('span', { className: 'dkf-abar' }),
               h('span', { className: 'dkf-achip' }, action.action || '?'),
               h('span', { className: 'dkf-atitle', 'data-hint': action.title }, action.title || '（无标题）'),
@@ -1174,24 +1266,27 @@ window.__ModuleLoader__.load({
             { className: 'dkf-badges' },
             issue.domain ? h('span', { className: 'dkf-chip' }, issue.domain) : null,
             h('span', { className: 'dkf-chip dkf-chip-action' }, issue.action || '?'),
-            issue.done ? h('span', { className: 'dkf-chip dkf-chip-done' }, 'done') : null,
+            issue.done && issue.doneKnown !== false ? h('span', { className: 'dkf-chip dkf-chip-done' }, 'done') : null,
           ),
           h('span', { className: 'dkf-title', 'data-hint': last?.title || issue.title || '（无标题）' }, last?.title || issue.title || '（无标题）'),
           h('span', { className: 'dkf-ago' }, ago(last?.date)),
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'dkf-focusbtn',
-              tabIndex: -1,
-              'data-hint': `聚焦 ${issue.id}（快捷键 f）`,
-              onClick: (event) => {
-                event.stopPropagation()
-                props.onFocus()
-              },
-            },
-            '⌖ 聚焦',
-          ),
+          // 快照外的 issue（流里多出来的）：能看、能展开动作，但没有关系边可读结构，不给假按钮。
+          props.known !== false
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dkf-focusbtn',
+                  tabIndex: -1,
+                  'data-hint': `聚焦 ${issue.id}（快捷键 f）`,
+                  onClick: (event) => {
+                    event.stopPropagation()
+                    props.onFocus()
+                  },
+                },
+                '⌖ 聚焦',
+              )
+            : h('span', { className: 'dkf-afaint', 'data-hint': '不在本次快照（关系边只取了前 80 条），只能看动作' }, '快照外'),
         ),
         expanded ? h(ActionLines, { actions: issue.actions }) : null,
       )
@@ -1442,6 +1537,8 @@ window.__ModuleLoader__.load({
             key: issue.id,
             issue,
             focus: issue.id === props.focusId,
+            /** 关系边只取了快照那 80 条：流里多出来的 issue 没有结构可聚焦，不给假按钮。 */
+            known: props.knownOf === undefined ? true : props.knownOf(issue.id),
             expanded: props.expanded !== null && props.expanded.kind === 'issue' && props.expanded.id === issue.id,
             onToggle: () => props.onToggle({ kind: 'issue', id: issue.id }),
             onFocus: () => props.onFocus(issue.id),
@@ -1885,6 +1982,8 @@ window.__ModuleLoader__.load({
       const searchFixture = globalThis.__DSH_KILN_TEST__ === true ? globalThis.__DSH_KILN_SEARCH_FIXTURE__ : null
       /** 同一条缝：时间线流在渲染用例里也不跑，喂一份已收完的流（生产恒为 null）。 */
       const timelineFixture = globalThis.__DSH_KILN_TEST__ === true ? globalThis.__DSH_KILN_TIMELINE_FIXTURE__ : null
+      /** 词表在渲染用例里也不跑：直接喂 names/start/terminal（生产恒为 null）。 */
+      const vocabFixture = globalThis.__DSH_KILN_TEST__ === true ? globalThis.__DSH_KILN_VOCAB_FIXTURE__ : null
       const idBase = 'dsh-kiln-view'
       const memory = readViewState(cwd)
       const [state, setState] = React.useState(() => {
@@ -1917,6 +2016,8 @@ window.__ModuleLoader__.load({
       const [rawSearch, setRawSearch] = React.useState(EMPTY_SEARCH)
       /** 时间线：宿主 NDJSON 流收下来的行 + 阶段；测试里由 __DSH_KILN_TIMELINE_FIXTURE__ 覆盖。 */
       const [timeline, setTimeline] = React.useState(EMPTY_TIMELINE)
+      /** 动作词表（start / terminal）：折叠 issue 索引要用；拿不到时 done 未知，不猜。 */
+      const [vocab, setVocab] = React.useState(() => normalizeVocab(vocabFixture) ?? actionsCache.get(cwd) ?? null)
       const rootRef = React.useRef(null)
       const searchRef = React.useRef(null)
       /** 中文输入法组合期间，回车是"上屏"不是"确认"，别让键盘处理抢先。 */
@@ -2149,6 +2250,44 @@ window.__ModuleLoader__.load({
         }
       }, [cwd, nonce, timelineFixture])
 
+      /**
+       * 动作词表：折叠 issue 索引要判断 done（最近动作 ∈ terminal）与“读到起点”（start）。
+       * 一次进程、不读历史；按仓库缓存，重挂载不重取。拿不到就保持 null——done 未知，列表照常。
+       */
+      React.useEffect(() => {
+        if (vocabFixture !== null && vocabFixture !== undefined) {
+          setVocab(normalizeVocab(vocabFixture))
+          return undefined
+        }
+        if (cwd === '') {
+          setVocab(null)
+          return undefined
+        }
+        const cached = actionsCache.get(cwd)
+        if (cached !== undefined) {
+          setVocab(cached)
+          return undefined
+        }
+        const controller = new AbortController()
+        ;(async () => {
+          try {
+            const response = await fetch(`${ACTIONS_URL}?cwd=${encodeURIComponent(cwd)}`, {
+              signal: controller.signal,
+              cache: 'no-store',
+            })
+            const body = await response.json()
+            if (body?.ok !== true) return
+            const next = normalizeVocab(body.actions)
+            if (next === null) return
+            actionsCache.set(cwd, next)
+            setVocab(next)
+          } catch {
+            // 旧版没有 action list，或宿主还没重启：done 未知，不猜也不挡列表
+          }
+        })()
+        return () => controller.abort()
+      }, [cwd, vocabFixture])
+
       // 切焦点时收起附属展开，并把焦点行重新展开：换焦点等于换一批邻居与一份动作
       React.useEffect(() => {
         setExpandedChildren(false)
@@ -2169,7 +2308,35 @@ window.__ModuleLoader__.load({
       const rows = React.useMemo(() => scopeTimeline(timelineState.rows, view), [timelineState.rows, view])
       const timelineStreaming = timelineState.phase === 'streaming'
       const timelineError = timelineState.error ?? null
-      const issueList = React.useMemo(() => sortIssues(scoped, focus === null ? null : focus.id), [scoped, focus])
+
+      /** 流折叠出的 issue 索引：无焦点列表的成员与顺序由它决定（快照只兜底它已经知道的字段）。 */
+      const streamIssues = React.useMemo(
+        () =>
+          foldIssues(timelineState.rows, {
+            start: vocab?.start ?? '',
+            terminal: vocab?.terminal ?? null,
+            complete: timelineState.phase === 'done',
+          }),
+        [timelineState.rows, timelineState.phase, vocab],
+      )
+
+      /**
+       * 无焦点时的列表 = 流折叠 + 快照兜底：快照已经读到的 issue 用快照字段
+       * （动作完整、带 ordinal/refs），流负责“多出来的那部分”，首屏也不会先空再闪。
+       */
+      const issuePool = React.useMemo(() => {
+        const merged = new Map()
+        for (const issue of streamIssues) merged.set(issue.id, byId.get(issue.id) ?? issue)
+        for (const issue of issues) if (!merged.has(issue.id)) merged.set(issue.id, issue)
+        return [...merged.values()]
+      }, [streamIssues, issues, byId])
+
+      const issueList = React.useMemo(
+        () => sortIssues(focus === null ? issuePool : scoped, focus === null ? null : focus.id),
+        [issuePool, scoped, focus],
+      )
+      /** issue 页的“还在读”：无焦点时列表来自流，读数要说清。 */
+      const issueStreaming = focus === null && timelineStreaming
 
       /**
        * 搜索：宿主路由 → `kiln list --search --json`；整仓范围，不看筛选与焦点。
@@ -2502,7 +2669,9 @@ window.__ModuleLoader__.load({
         h(
           'span',
           { key: 'count', className: 'dkf-count' },
-          filterOn && canFilter ? `${shownIssues.length} / ${issueList.length} issue` : `${issueList.length} 个 issue`,
+          filterOn && canFilter
+            ? `${shownIssues.length} / ${issueList.length} issue${issueStreaming ? ' · 读取中…' : ''}`
+            : `${issueList.length} 个 issue${issueStreaming ? ' · 读取中…' : ''}`,
         ),
       ]
 
@@ -2600,7 +2769,9 @@ window.__ModuleLoader__.load({
             onToggle: toggleExpand,
             onFocus: focusIssue,
             emptyText: rowFilterOn
-              ? '没有符合筛选条件的动作。'
+              ? timelineStreaming
+                ? '筛选中，继续加载…'
+                : '没有符合筛选条件的动作。'
               : timelineStreaming
                 ? '正在读取动作…'
                 : timelineError !== null
@@ -2617,9 +2788,16 @@ window.__ModuleLoader__.load({
                   issues: shownIssues,
                   focusId: null,
                   expanded,
+                  knownOf,
                   onToggle: toggleExpand,
                   onFocus: focusIssue,
-                  emptyText: filterOn ? '没有符合筛选条件的 issue。' : '这个仓库还没有 issue。',
+                  emptyText: filterOn
+                    ? issueStreaming
+                      ? '筛选中，继续加载…'
+                      : '没有符合筛选条件的 issue。'
+                    : issueStreaming
+                      ? '正在读取 issue…'
+                      : '这个仓库还没有 issue。',
                 })
               : h(IssueFocusList, {
                   focus,
@@ -2659,7 +2837,7 @@ window.__ModuleLoader__.load({
           !searching && tabId === 'timeline' && timelineError !== null
             ? h('p', { className: 'dkf-note' }, timelineError)
             : null,
-          payload?.truncated === true
+          payload?.truncated === true && !(tabId === 'issue' && focus === null && timelineError === null)
             ? h('p', { className: 'dkf-note' }, `共 ${payload.total ?? issues.length} 条 issue，只展示前 ${issues.length} 条。`)
             : null,
           h(
@@ -2749,6 +2927,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, css: CSS } } : {}) }
   },
 })

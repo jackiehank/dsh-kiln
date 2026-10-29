@@ -1162,6 +1162,78 @@ await check('时间线：逐条回调、跨块拼行、坏行不吞、done 只�
   assert.deepEqual(errors, ['spawn kiln ENOENT', 'done'], 'error 之后 close 不能把 done 再说一遍')
 })
 
+// ---------------------------------------------------------------- issue 索引折叠（客户端纯函数）
+
+function clientInternals() {
+  const reactStub = {
+    createElement: () => null,
+    Fragment: 'fragment',
+    useRef: (v) => ({ current: v }),
+    useState: (v) => [v, () => {}],
+    useEffect: () => {},
+    useMemo: (f) => f(),
+  }
+  return (
+    loaded.factory((name) => {
+      if (name === 'react') return reactStub
+      throw new Error('unexpected require: ' + name)
+    }).__internals ?? {}
+  )
+}
+
+await check('issue 折叠：首现=最近动作、domain 取首个非空、tags 并集、done 认终点词表', () => {
+  const { foldIssues, normalizeVocab } = clientInternals()
+  const vocab = normalizeVocab({
+    names: ['ask', 'test', 'conclude', 'apply'],
+    start: 'ask',
+    terminal: ['conclude', 'apply'],
+  })
+  assert.ok(vocab !== null)
+  const SHA_C = 'c'.repeat(40)
+  const rows = [
+    { issueId: 'a', action: 'apply', id: SHA_A, short: 'aaaaaaa', date: '2026-10-05T00:00:00+08:00', title: 'a apply', domain: 'newest', tags: ['t1'] },
+    { issueId: 'b', action: 'test', id: SHA_B, short: 'bbbbbbb', date: '2026-10-04T00:00:00+08:00', title: 'b test', tags: [] },
+    { issueId: 'a', action: 'ask', id: SHA_C, short: 'ccccccc', date: '2026-10-01T00:00:00+08:00', title: 'a ask', domain: 'oldest', tags: ['t2'] },
+  ]
+  const issues = foldIssues(rows, { start: vocab.start, terminal: vocab.terminal, complete: true })
+  assert.deepEqual(issues.map((issue) => issue.id), ['a', 'b'], '首现顺序 = 最近动作顺序')
+  assert.equal(issues[0].action, 'apply')
+  assert.equal(issues[0].title, 'a apply')
+  assert.equal(issues[0].done, true, '最近动作 apply ∈ terminal')
+  assert.equal(issues[1].done, false)
+  assert.equal(issues[0].domain, 'newest', 'domain 取最新一个非空（= 时间序的最后一个非空）')
+  assert.deepEqual(issues[0].tags, ['t2', 't1'], 'tags 按时间序取并集')
+  assert.deepEqual(issues[0].actions.map((action) => action.ordinal), [1, 2], '读到起点后 ordinal 定稿')
+  assert.deepEqual(issues[0].actions.map((action) => action.action), ['ask', 'apply'], 'actions 翻成时间升序')
+  assert.equal(issues[0].last.action, 'apply')
+})
+
+await check('issue 折叠：没读到起点、流也没结束时，ordinal 不提前编', () => {
+  const { foldIssues } = clientInternals()
+  const rows = [
+    { issueId: 'a', action: 'apply', id: SHA_A, short: 'aaaaaaa', date: '2026-10-05T00:00:00+08:00', title: 'a apply', tags: [] },
+    { issueId: 'a', action: 'test', id: SHA_B, short: 'bbbbbbb', date: '2026-10-04T00:00:00+08:00', title: 'a test', tags: [] },
+  ]
+  const partial = foldIssues(rows, { start: 'ask', terminal: new Set(['apply']), complete: false })
+  assert.equal(partial[0].done, true)
+  assert.deepEqual(partial[0].actions.map((action) => action.ordinal), [undefined, undefined])
+  const finished = foldIssues(rows, { start: 'ask', terminal: new Set(['apply']), complete: true })
+  assert.deepEqual(finished[0].actions.map((action) => action.ordinal), [1, 2], 'EOF 兜底定稿')
+})
+
+await check('issue 折叠：词表缺失时 done 不可知，不猜', () => {
+  const { foldIssues, normalizeVocab } = clientInternals()
+  assert.equal(normalizeVocab(null), null)
+  assert.equal(normalizeVocab({ names: [], start: 'ask', terminal: [] }), null)
+  assert.equal(normalizeVocab({ names: ['ask'], start: '', terminal: [] }), null)
+  const issues = foldIssues(
+    [{ issueId: 'a', action: 'apply', id: SHA_A, short: 'aaaaaaa', date: '2026-10-05T00:00:00+08:00', title: '', tags: [] }],
+    { start: 'ask', terminal: null, complete: true },
+  )
+  assert.equal(issues[0].done, false)
+  assert.equal(issues[0].doneKnown, false, 'UI 据此不画 done chip、状态筛选也不把它算成 open')
+})
+
 // ---------------------------------------------------------------- 汇总
 console.log('')
 if (failures.length === 0) {
