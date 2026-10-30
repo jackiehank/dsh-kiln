@@ -592,6 +592,12 @@ await check('页头窄宽：border-box 与两档容器查询都在（防回退�
   assert.match(css, /@container \(max-width:360px\)/, '第二档：刷新降成字形')
   assert.match(css, /\.dkf-focuschip-x\{[^}]*flex:none/, '× 不参与收缩')
   assert.ok(!/\.dkf-focuschip\{[^}]*text-overflow/.test(css), 'chip 自己不再截断，交给 label 段')
+  assert.match(css, /\.dkf-refresh\{[^}]*grid-column:2/, '刷新独占第二列：位置与有没有焦点无关')
+  assert.ok(!/\.dkf-refresh\{[^}]*min-width:0/.test(css), '刷新不许被压窄——压窄后文字会向右溢出')
+  assert.match(css, /\.dkf-focuschip\{[^}]*grid-column:1/, 'chip 在第一列，靠右贴着刷新')
+  assert.match(css, /\.dkf-focuschip\{[^}]*max-width:min\(320px,100%\)/, 'chip 宽度不能超过自己的格子（否则会向左溢出被裁）')
+  assert.match(css, /\.dkf-head-actions\{[^}]*grid-template-columns:minmax\(0,1fr\) auto/, '一列给 chip、一列给刷新')
+  assert.match(css, /\.dkf-head-actions\{[^}]*overflow:hidden/, '要溢出的只能是 chip，而且只许被裁')
 })
 
 await check('图例淡化：未画类别压到 15%（与图上淡化分开调）', async () => {  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }

@@ -215,3 +215,31 @@ content-box，实际比所在的网格轨道宽 16px，那 16px 就画在第三�
 
 **顺带修掉的坑**：CSS 里写注释时别用反引号——这整段 CSS 是模板字符串，反引号会提前结束它
 （本轮踩了两次，`node --check` 报 `Unexpected identifier 'container'` 才反应过来）。
+
+## 落地（apply 第二轮）：刷新按钮不再随焦点挪位
+
+用户复现：窄窗口下从「没有焦点」切到「有焦点」，`刷新` 会向右挪一点点。仍记在这个 issue 里。
+
+**机制**：`.dkf-refresh` 与 `.dkf-focuschip` 原本挤在同一条 flex 行里，两者都带 `min-width:0`；
+chip 一出现这行就进入负空间，刷新跟着被压窄，而它里面的「刷新」文字是 `flex:none`——文字从变窄
+的盒子里**向右溢出**，看起来就是按钮挪了位。刷新本不该参与收缩：它的右边缘应当就是页头右边界。
+
+**改法（结构性，不赌 flex 的溢出方向）**：右侧动作区从 flex 改成两列网格。
+
+```css
+.dkf-head-actions{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;overflow:hidden}
+.dkf-focuschip{grid-column:1;justify-self:end;max-width:min(320px,100%);min-width:0}
+.dkf-refresh{grid-column:2;justify-self:end}
+```
+
+- 刷新被明确摆在 `auto` 列：有没有 chip 都落同一格，宽度只由内容决定，不参与伸缩；
+- chip 独占 `1fr` 列，是这一排里唯一会被压的东西；`max-width:min(320px,100%)` 把它的宽度封在
+  自己的格子里，超出时交给 label 省略——向左的溢出被 `overflow:hidden` 裁掉，碰不到刷新；
+- 顺带消掉了「flex 负空间往哪边溢出」这种依赖浏览器实现的假设。
+
+测试：仍 **86 + 63**。`run.mjs` 的页头用例补了四条结构断言：刷新在 `grid-column:2`、不许带
+`min-width:0`；chip 在 `grid-column:1` 且宽度不超过格子；动作区是两列模板 + `overflow:hidden`。
+
+**本轮没能在本机验证布局**：Edge headless 在这个沙箱里起不来（`--single-process` 也挂死，
+`crashpad ... OpenProcess: 拒绝访问`）。所以只有结构断言 + CSS 机制推理，最终仍需在 GUI 里
+拖窄对比「有焦点 / 无焦点」两态下刷新的位置。

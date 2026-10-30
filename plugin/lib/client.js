@@ -440,7 +440,11 @@ window.__ModuleLoader__.load({
    container-type:inline-size 让分档跟着**头部自己的宽度**走（拖侧栏也生效，媒体查询不行）。 */
 .dkf-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(96px,min(360px,40%)) minmax(0,1fr);align-items:center;gap:8px;padding:0 12px;min-height:34px;border-bottom:.5px solid var(--dkf-line);flex:none;container-type:inline-size;overflow:hidden}
 .dkf-repo{font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body);font-weight:600;color:var(--dkf-fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.dkf-head-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
+/* 右侧动作区：两列网格。[1fr] 给 chip（可被压），[auto] 专给刷新——
+   刷新被**明确摆在第二列**，所以它的右边缘永远是页头右边界；有焦点 / 没焦点都落同一格，
+   不会因为多了一个 chip 而挪位（早先两者挤在一条 flex 行里，负空间时刷新被压窄，
+   里面的 flex:none 文字就向右溢出去）。 */
+.dkf-head-actions{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;min-width:0;overflow:hidden}
 /* 搜索框：占满中间那栏。box-sizing:border-box 不能省——输入框是 content-box，
    少了它 width:100% + 左右各 8px 内边距就会比轨道宽 16px，那 16px 正好画在第三列上（压叠的根因）。 */
 .dkf-search{width:100%;min-width:0;box-sizing:border-box;height:22px;padding:0 8px;border:0;border-radius:var(--dkf-r);background:var(--dkf-bg2);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line);font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
@@ -459,13 +463,15 @@ window.__ModuleLoader__.load({
 .dkf-hit-on{background-image:var(--dkf-hover-layer)}
 .dkf-hit-go{color:var(--dkf-fg3);flex:none;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-hl{color:var(--dkf-fg);border-radius:var(--dkf-r);background:color-mix(in srgb,var(--dkf-accent) 18%,transparent)}
-.dkf-refresh,.dkf-focuschip{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:var(--dkf-r);color:var(--dkf-fg2);white-space:nowrap;font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta);min-width:0;flex:0 1 auto}
-/* chip 拆三段：只有 label（issue id）参与省略，× 是独立元素、永远完整——它是关闭的唯一标识 */
-.dkf-focuschip{font-family:var(--dkf-mono);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line-2);max-width:320px}
+.dkf-refresh,.dkf-focuschip{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:var(--dkf-r);color:var(--dkf-fg2);white-space:nowrap;font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+/* chip 拆三段：只有 label（issue id）参与省略，× 是独立元素、永远完整——它是关闭的唯一标识。
+   chip 固定在第一列、靠右贴住刷新，是这一排里**唯一允许被压**的东西。 */
+.dkf-focuschip{grid-column:1;justify-self:end;font-family:var(--dkf-mono);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line-2);max-width:min(320px,100%);min-width:0}
 .dkf-focuschip-prefix{flex:none}
 .dkf-focuschip-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dkf-focuschip-x{flex:none;margin-left:4px;color:var(--dkf-fg3)}
-/* 刷新同理：窄到一定程度只剩字形，语义留给 data-hint */
+/* 刷新固定在第二列，不参与任何伸缩：它的右边缘就是整条页头的右边界 */
+.dkf-refresh{grid-column:2;justify-self:end}
 .dkf-refresh-label{flex:none}
 .dkf-refresh-icon{display:none;flex:none;font-family:var(--dkf-mono)}
 /* 两档收缩：先砍长期不变的信息（仓库名、chip 前缀），再砍低频动作的文字（刷新） */
