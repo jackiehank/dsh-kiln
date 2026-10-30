@@ -53,7 +53,7 @@ HEAD 用文件直读，命中时宿主只花 1–2ms。）
   安全条件（缺一即全量）：旧 HEAD 是新 HEAD 的祖先；`旧..新` 区间里所有提交的 author 时间
   都晚于缓存首行（挡住 cherry-pick / rebase 带进来的旧日期提交）；缓存 ≥ 5000 行
   （小仓全读更快）；区间提交数 ≤ 2000。单仓超 **12 万行 / 32MB** 两端都不存；
-  两端各有 **56MB 总预算**，跨仓按 LRU 淘汰（单仓超限只降级它自己）。
+  两端各有 **64MB 总预算**，跨仓按 LRU 淘汰（单仓超限只降级它自己）。
   `DSH_KILN_TIMELINE_CACHE=off` 一键关掉宿主那份，`?fresh=1` / 「刷新」清掉两份。
 - **行的形状（0.13.0）**：`[issueId, action, commit, date, title, domain, tags]`，标签存连接串、
   `short` 由 commit 现切、重复的 issueId/action/domain 走驻留池。宿主存的数组就是发出去的字节，
@@ -103,7 +103,7 @@ kiln 的缓存省的是“git 进程”，插件省的是“kiln 进程”。两
 | `lib/flow.js` | 宿主半的数据层：调 kiln CLI（graph / path 单条 / list --search / action list） |
 | `lib/timeline.js` | 宿主半的时间线：spawn `kiln action log --jsonl`、按行切、失败文案 |
 | `lib/timelineHandler.js` | 宿主半的时间线路由体：命中内存重发 / 构建 / bypass 三条路 |
-| `lib/rowsCache.js` | 宿主半的动作流缓存：HEAD / 配置 / 二进制失效，12 万行 / 32MB 单仓 + 56MB 总预算 |
+| `lib/rowsCache.js` | 宿主半的动作流缓存：HEAD / 配置 / 二进制失效，12 万行 / 32MB 单仓 + 64MB 总预算 |
 | `lib/snapshot.js` | 宿主半的图缓存：HEAD / 配置 / 二进制三元组失效，同仓并发合并 |
 | `lib/git.js` | 宿主半的 git 探测：直读 HEAD、配置/二进制令牌 |
 | `lib/client.js` | 浏览器半：`conversation.view` 插槽条目，名字 `kiln`；折叠与渲染 |
@@ -166,7 +166,7 @@ node plugin/test/probe-perf.mjs . C:\Users\jacki\kiln
   动作流是“跟 HEAD 一致”，切页、换会话都复用它，新提交只在 HEAD 前进后重新读。
   想让两层都作废，按「刷新」或用 `?fresh=1`。
 - **动作流缓存占内存**：客户端与宿主各留一份（10 万行约 35MB/份，7 槽数组实测 356B/行）。
-  单仓超 12 万行 / 32MB 不存，两端各 56MB 总预算按 LRU 淘汰（单仓超限只降级它自己）；
+  单仓超 12 万行 / 32MB 不存，两端各 64MB 总预算按 LRU 淘汰（单仓超限只降级它自己）；
   浏览器堆没有可靠的测量 API，页头显示的是自报字节数，不是实测堆。
 - 关系词表按 kiln 0.2.0 的内置词表硬编码在 `client.js` 的 `GROUPS` 里；等 kiln 支持
   `.kilnconfig.jsonc` 配置 `relations` 后改成读配置。

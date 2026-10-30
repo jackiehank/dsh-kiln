@@ -1582,12 +1582,12 @@ await check('动作流客户端缓存：按仓库记 HEAD，超限/换仓/刷新
   clearRepoCaches('/x')
   assert.equal(timelineCache.has('/x'), false, '刷新要连动作流缓存一起清')
 
-  // 总预算：两份 40MB 超过 64MB，挤掉最久没用的那份
+  // 总预算：预置一份 40MB，再记一份 30MB（单仓都合法）→ 70MB > 64MB，挤掉旧的那份
   timelineCache.clear()
-  assert.equal(rememberTimeline('/big1', 'h1', rows, 30 * 1024 * 1024), true)
-  assert.equal(rememberTimeline('/big2', 'h1', rows, 30 * 1024 * 1024), true)
-  assert.equal(timelineCache.has('/big1'), false, '总预算 56MB：两份 30MB 只能留最近的一份')
-  assert.equal(timelineCache.has('/big2'), true)
+  timelineCache.set('/seed', { head: 'h0', rows, bytes: 40 * 1024 * 1024 })
+  assert.equal(rememberTimeline('/big', 'h1', rows, 30 * 1024 * 1024), true)
+  assert.equal(timelineCache.has('/seed'), false, '总预算 64MB 按 LRU 挤掉旧仓')
+  assert.equal(timelineCache.has('/big'), true)
   timelineCache.clear()
 })
 

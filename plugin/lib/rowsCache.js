@@ -34,9 +34,10 @@ export const ROWS_LIMIT = 120_000
 export const BYTES_LIMIT = 32 * 1024 * 1024
 /**
  * 两端的总预算：所有仓加起来不超过这个数，超了按 LRU 挤掉最久没用的仓。
- * 单仓上限 × 仓数是乘法，这里按**总和**再兜一道——两个 10 万行仓约 47MB，离 56MB 还有余量。
+ * 取 64MB = 单仓上限 32MB × 2 个仓，正好是默认配置的上界（两个 10 万行仓约 47MB，
+ * 余量足够）；它防的是以后放宽仓数/单仓上限时，乘积一路涨上去。
  */
-export const TOTAL_BYTES_LIMIT = 56 * 1024 * 1024
+export const TOTAL_BYTES_LIMIT = 64 * 1024 * 1024
 /** 最多留几个仓库（按最后访问淘汰）。 */
 export const REPO_LIMIT = 2
 /**

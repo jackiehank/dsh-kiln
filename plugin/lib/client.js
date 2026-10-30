@@ -65,18 +65,18 @@ window.__ModuleLoader__.load({
      * 动作流行缓存（0.11.0）：按仓库记住「这份行对应哪个 HEAD」。
      *
      * 切页 / 换会话时先拿它渲染，再带 `?head=` 去问宿主：HEAD 没变就一个字节都不传
-     * （宿主回 `x-kiln-mode: unchanged`）。上限见下——12 万行 / 32MB 单仓、总预算 56MB，
+     * （宿主回 `x-kiln-mode: unchanged`）。上限见下——12 万行 / 32MB 单仓、总预算 64MB，
      * 超了不存或按 LRU 挤掉，退回每次流式（大仓在浏览器里再留一份不划算）。
      */
     const timelineCache = new Map()
     /**
-     * 上限与宿主同一口径：12 万行 / 32MB 单仓，**两端总预算 56MB**。
+     * 上限与宿主同一口径：12 万行 / 32MB 单仓，**两端总预算 64MB**（= 32MB × 2 仓）。
      * 超了不存（大仓不划算）或按 LRU 挤掉最久没用的仓——不留给用户配。
      */
     const TIMELINE_CACHE_ROWS = 120_000
     const TIMELINE_CACHE_BYTES = 32 * 1024 * 1024
     const TIMELINE_CACHE_REPOS = 2
-    const TIMELINE_CACHE_TOTAL_BYTES = 56 * 1024 * 1024
+    const TIMELINE_CACHE_TOTAL_BYTES = 64 * 1024 * 1024
 
     /**
      * 记一份动作流（只在流完整读完时调用）。
