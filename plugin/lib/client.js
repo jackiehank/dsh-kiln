@@ -14,7 +14,8 @@
  *   · 图上点节点 = 聚焦（节点没有“第二层”可展开，这是三页里唯一的手势差异）
  *
  * 焦点、展开项与当前页都只存在内存里（按仓库）：切页会卸载视图，靠这份内存把状态接回来；
- * 刷新页面即清空，不进 URL。数据来自宿主路由 `/kiln/flow`。
+ * 刷新页面即清空，不进 URL。数据按视图取：动作流 `/kiln/timeline`、关系图 `/kiln/graph`、
+ * 详情 `/kiln/issue`、搜索 `/kiln/search`、词表 `/kiln/actions`。
  */
 window.__ModuleLoader__.load({
   id: '@local/dsh-kiln',
@@ -23,16 +24,19 @@ window.__ModuleLoader__.load({
     const h = React.createElement
 
     const STYLE_ID = 'dsh-kiln-flow-style'
-    const FLOW_URL = '/kiln/flow'
+    const GRAPH_URL = '/kiln/graph'
+    const ISSUE_URL = '/kiln/issue'
     const SEARCH_URL = '/kiln/search'
     const TIMELINE_URL = '/kiln/timeline'
     const ACTIONS_URL = '/kiln/actions'
-    /** 搜索走宿主 → kiln，每次约 100ms；输入停 120ms 再发，连击只留最后一轮。 */
+    /** 搜索走宿主 → kiln；输入停 120ms 再发，连击只留最后一轮。 */
     const SEARCH_DEBOUNCE_MS = 120
     /** 时间线边收边渲染：最多 20fps，350 行动作不会把 React 刷 350 次。 */
     const TIMELINE_FLUSH_MS = 50
     const EMPTY_SEARCH = { query: '', rows: [], pending: false, ms: 0, count: 0, error: null }
     const EMPTY_TIMELINE = { rows: [], phase: 'idle', error: null, ms: 0, count: 0 }
+    const EMPTY_GRAPH = { phase: 'idle', payload: null, error: null }
+    const EMPTY_DETAIL = { id: null, phase: 'idle', issue: null, error: null }
     /** 动作词表按仓库缓存：一次进程、不读历史，重挂载不重取。 */
     const actionsCache = new Map()
 
@@ -174,23 +178,6 @@ window.__ModuleLoader__.load({
       while (viewStates.size > VIEW_STATE_LIMIT) {
         const oldest = viewStates.keys().next().value
         viewStates.delete(oldest)
-      }
-    }
-
-    /**
-     * 最近一份成功快照（按仓库路径）：重挂载先渲染它再后台刷新（stale-while-revalidate）。
-     * 只存在内存，刷新页面即清空。
-     */
-    const SNAPSHOT_CACHE_LIMIT = 4
-    const snapshotCache = new Map()
-
-    function rememberSnapshot(cwd, payload) {
-      if (cwd === '' || payload?.ok !== true) return
-      if (snapshotCache.has(cwd)) snapshotCache.delete(cwd)
-      snapshotCache.set(cwd, payload)
-      while (snapshotCache.size > SNAPSHOT_CACHE_LIMIT) {
-        const oldest = snapshotCache.keys().next().value
-        snapshotCache.delete(oldest)
       }
     }
 
@@ -1113,12 +1100,48 @@ window.__ModuleLoader__.load({
       return known[reason] ?? (reason === '' ? 'kiln 搜索失败' : `搜索失败：${reason}`)
     }
 
+    /** 详情失败时的可读文案：优先用宿主带来的 message，其次按 reason 翻成人话。 */
+    function detailFailureText(body) {
+      if (typeof body?.message === 'string' && body.message !== '') return body.message
+      const reason = String(body?.reason ?? '')
+      const known = {
+        'kiln-missing': '宿主进程里找不到 kiln 可执行文件。把 kiln 放进 PATH，或设置 DSH_KILN_BIN。',
+        'not-kiln-repo': '这个工作区不是 kiln 仓库（缺 .kilnconfig.jsonc）。',
+        'invalid-dir': '工作区路径无效。',
+        'missing-id': '缺少 issue id。',
+      }
+      return known[reason] ?? (reason === '' ? 'kiln path 失败' : `详情读取失败：${reason}`)
+    }
+
+    /** 关系图失败文案。 */
+    function graphFailureText(body) {
+      if (typeof body?.message === 'string' && body.message !== '') return body.message
+      const reason = String(body?.reason ?? '')
+      const known = {
+        'kiln-missing': '宿主进程里找不到 kiln 可执行文件。把 kiln 放进 PATH，或设置 DSH_KILN_BIN。',
+        'not-kiln-repo': '这个工作区不是 kiln 仓库（缺 .kilnconfig.jsonc）。',
+        'invalid-dir': '工作区路径无效。',
+      }
+      return known[reason] ?? (reason === '' ? 'kiln graph 失败' : `关系图读取失败：${reason}`)
+    }
+
+    /** 整个视图不可用（不是 kiln 仓库 / 找不到 kiln / 路径无效）时的说明。 */
+    function unavailableText(problem) {
+      const known = {
+        'kiln-missing': '宿主进程里找不到 kiln 可执行文件。把 kiln 放进 PATH，或设置 DSH_KILN_BIN。',
+        'not-kiln-repo': '这个工作区不是 kiln 仓库（缺 .kilnconfig.jsonc）。以仓库根目录打开会话后再看。',
+        'invalid-dir': '工作区路径无效。',
+      }
+      return problem?.message !== '' && typeof problem?.message === 'string'
+        ? problem.message
+        : known[String(problem?.reason ?? '')] ?? `未知原因：${problem?.reason ?? 'unknown'}`
+    }
+
     /**
      * `kiln list --search --json` 的行 → 搜索结果视图需要的字段。
      *
      * **顺序、rank、hit 全部由 kiln 给**，这里只做字段改名与高亮区间；不再自己匹配/排序。
-     * 快照里有该 issue 时带上 actions（色条、n/m、跳转要靠它）；没有就退化成一个最小行——
-     * 搜索可以跨出快照的 80 条上限，但那一行只能看、不能展开动作详情。
+     * 命中的 issue 总在动作流里（列表不再有 80 条上限），所以行上带得到它的 actions。
      */
     function mapSearchRows(document, byId, terms) {
       const rows = Array.isArray(document?.issues) ? document.issues : []
@@ -1270,23 +1293,21 @@ window.__ModuleLoader__.load({
           ),
           h('span', { className: 'dkf-title', 'data-hint': last?.title || issue.title || '（无标题）' }, last?.title || issue.title || '（无标题）'),
           h('span', { className: 'dkf-ago' }, ago(last?.date)),
-          // 快照外的 issue（流里多出来的）：能看、能展开动作，但没有关系边可读结构，不给假按钮。
-          props.known !== false
-            ? h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dkf-focusbtn',
-                  tabIndex: -1,
-                  'data-hint': `聚焦 ${issue.id}（快捷键 f）`,
-                  onClick: (event) => {
-                    event.stopPropagation()
-                    props.onFocus()
-                  },
-                },
-                '⌖ 聚焦',
-              )
-            : h('span', { className: 'dkf-afaint', 'data-hint': '不在本次快照（关系边只取了前 80 条），只能看动作' }, '快照外'),
+          // 列表里的 issue 都能聚焦：结构由详情（path 单条）现取，不再有“快照外”这条死路。
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dkf-focusbtn',
+              tabIndex: -1,
+              'data-hint': `聚焦 ${issue.id}（快捷键 f）`,
+              onClick: (event) => {
+                event.stopPropagation()
+                props.onFocus()
+              },
+            },
+            '⌖ 聚焦',
+          ),
         ),
         expanded ? h(ActionLines, { actions: issue.actions }) : null,
       )
@@ -1316,23 +1337,20 @@ window.__ModuleLoader__.load({
           h('span', { className: 'dkf-atitle', 'data-hint': row.title }, row.title || '（无标题）'),
           h('span', { className: 'dkf-ashort' }, row.short || ''),
           h('span', { className: 'dkf-ago' }, ago(row.date)),
-          // 快照外的 issue（>80 条）能看、能展开，但没有结构可聚焦：给一个说明，不放假按钮。
-          props.known !== false
-            ? h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dkf-focusbtn',
-                  tabIndex: -1,
-                  'data-hint': `聚焦 ${row.issueId}（快捷键 f）`,
-                  onClick: (event) => {
-                    event.stopPropagation()
-                    props.onFocus()
-                  },
-                },
-                '⌖ 聚焦',
-              )
-            : h('span', { className: 'dkf-afaint', 'data-hint': '不在本次快照（超过 80 条 issue），只能时间线里看' }, '快照外'),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dkf-focusbtn',
+              tabIndex: -1,
+              'data-hint': `聚焦 ${row.issueId}（快捷键 f）`,
+              onClick: (event) => {
+                event.stopPropagation()
+                props.onFocus()
+              },
+            },
+            '⌖ 聚焦',
+          ),
         ),
         props.expanded === true ? h(ActionDetail, { row }) : null,
       )
@@ -1518,7 +1536,6 @@ window.__ModuleLoader__.load({
           h(ActionRow, {
             key: `${row.issueId}-${row.ordinal ?? row.id ?? index}-${index}`,
             row,
-            known: props.knownOf(row.issueId),
             expanded: props.expanded !== null && props.expanded.kind === 'action' && props.expanded.id === actionKey(row),
             onToggle: () => props.onToggle({ kind: 'action', id: actionKey(row) }),
             onFocus: () => props.onFocus(row.issueId),
@@ -1537,8 +1554,6 @@ window.__ModuleLoader__.load({
             key: issue.id,
             issue,
             focus: issue.id === props.focusId,
-            /** 关系边只取了快照那 80 条：流里多出来的 issue 没有结构可聚焦，不给假按钮。 */
-            known: props.knownOf === undefined ? true : props.knownOf(issue.id),
             expanded: props.expanded !== null && props.expanded.kind === 'issue' && props.expanded.id === issue.id,
             onToggle: () => props.onToggle({ kind: 'issue', id: issue.id }),
             onFocus: () => props.onFocus(issue.id),
@@ -1984,14 +1999,13 @@ window.__ModuleLoader__.load({
       const timelineFixture = globalThis.__DSH_KILN_TEST__ === true ? globalThis.__DSH_KILN_TIMELINE_FIXTURE__ : null
       /** 词表在渲染用例里也不跑：直接喂 names/start/terminal（生产恒为 null）。 */
       const vocabFixture = globalThis.__DSH_KILN_TEST__ === true ? globalThis.__DSH_KILN_VOCAB_FIXTURE__ : null
+      /** 关系图与详情同样留测试缝：渲染用例不跑 effect，直接喂宿主会返回的文档。 */
+      const graphFixture = globalThis.__DSH_KILN_TEST__ === true ? globalThis.__DSH_KILN_GRAPH_FIXTURE__ : null
+      const detailFixture = globalThis.__DSH_KILN_TEST__ === true ? globalThis.__DSH_KILN_DETAIL_FIXTURE__ : null
       const idBase = 'dsh-kiln-view'
       const memory = readViewState(cwd)
-      const [state, setState] = React.useState(() => {
-        const cached = cwd === '' ? undefined : snapshotCache.get(cwd)
-        return cached === undefined
-          ? { phase: 'loading', payload: null, error: null }
-          : { phase: 'ready', payload: cached, error: null }
-      })
+      /** 关系图只在关系页取；详情只在聚焦/展开时取。首屏不再预取整仓。 */
+      const [graph, setGraph] = React.useState(EMPTY_GRAPH)
       const [nonce, setNonce] = React.useState(0)
       const [tabId, setTabId] = React.useState(memory.tabId)
       const [focusId, setFocusId] = React.useState(memory.focusId)
@@ -2018,6 +2032,10 @@ window.__ModuleLoader__.load({
       const [timeline, setTimeline] = React.useState(EMPTY_TIMELINE)
       /** 动作词表（start / terminal）：折叠 issue 索引要用；拿不到时 done 未知，不猜。 */
       const [vocab, setVocab] = React.useState(() => normalizeVocab(vocabFixture) ?? actionsCache.get(cwd) ?? null)
+      /** 聚焦/详情的动作与边；点开才取，拿不到时只影响焦点区，不影响两个列表。 */
+      const [detail, setDetail] = React.useState(EMPTY_DETAIL)
+      /** 仓库级不可用（不是 kiln 仓库 / 找不到 kiln / 路径无效）：词表路由最先能判定。 */
+      const [unavailable, setUnavailable] = React.useState(null)
       const rootRef = React.useRef(null)
       const searchRef = React.useRef(null)
       /** 中文输入法组合期间，回车是"上屏"不是"确认"，别让键盘处理抢先。 */
@@ -2109,46 +2127,80 @@ window.__ModuleLoader__.load({
         writeViewState(cwd, { expanded: value })
       }
 
+      /**
+       * 关系图：只在关系页取（`kiln graph --json`）。
+       * 宿主按 HEAD 缓存；切回页签重取一次（热读约 40ms），有旧图时保留着换，不闪空。
+       */
       React.useEffect(() => {
-        if (cwd === '') {
-          setState({ phase: 'no-workspace', payload: null, error: null })
+        if (graphFixture !== null && graphFixture !== undefined) return undefined
+        if (cwd === '' || tabId !== 'relation') return undefined
+        const controller = new AbortController()
+        setGraph((previous) => {
+          // 换了仓库就不能拿上一份图顶着；同一仓库则保留旧图后台刷新，不闪空
+          const reusable = previous.payload !== null && previous.payload.repo === cwd ? previous.payload : null
+          return { phase: reusable === null ? 'loading' : 'refreshing', payload: reusable, error: null }
+        })
+        ;(async () => {
+          try {
+            const response = await fetch(`${GRAPH_URL}?cwd=${encodeURIComponent(cwd)}`, {
+              credentials: 'same-origin',
+              signal: controller.signal,
+              cache: 'no-store',
+            })
+            const body = await response.json()
+            if (!response.ok) throw new Error(body?.message ?? `HTTP ${response.status}`)
+            if (body?.ok !== true) {
+              setGraph({ phase: 'error', payload: null, error: graphFailureText(body) })
+              return
+            }
+            setGraph({ phase: 'ready', payload: body, error: null })
+          } catch (error) {
+            if (controller.signal.aborted) return
+            setGraph({ phase: 'error', payload: null, error: String(error?.message ?? error) })
+          }
+        })()
+        return () => controller.abort()
+      }, [cwd, nonce, tabId, graphFixture])
+
+      /**
+       * 详情：聚焦一个 issue 时才取（`kiln path <id> --json`）。
+       *
+       * 动作、序号和这个 issue 的全部边都在这一份文档里，所以聚焦页与时间线收窄
+       * 都不再需要关系图；换焦点 / 刷新即重取，不维护第二套缓存。
+       */
+      React.useEffect(() => {
+        if (detailFixture !== null && detailFixture !== undefined) return undefined
+        if (cwd === '' || focusId === null) {
+          setDetail(EMPTY_DETAIL)
           return undefined
         }
         const controller = new AbortController()
-        const cached = snapshotCache.get(cwd)
-        setState((previous) => {
-          // 只在仓库没变时沿用上一份；换了仓库就不能拿旧仓的数据顶着
-          const reusable = previous.payload?.repo === cwd ? previous.payload : (cached ?? null)
-          return { phase: reusable === null ? 'loading' : 'ready', payload: reusable, error: null }
-        })
-        const url = `${FLOW_URL}?cwd=${encodeURIComponent(cwd)}`
-        fetch(url, { credentials: 'same-origin', signal: controller.signal })
-          .then(async (response) => {
-            const text = await response.text()
-            try {
-              return { response, payload: JSON.parse(text) }
-            } catch {
-              throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`)
-            }
-          })
-          .then(({ response, payload }) => {
-            if (!response.ok) throw new Error(payload?.message ?? `HTTP ${response.status}`)
-            if (payload?.ok !== true) {
-              setState({ phase: 'unavailable', payload, error: null })
+        setDetail((previous) => ({
+          id: focusId,
+          phase: 'loading',
+          issue: previous.id === focusId ? previous.issue : null,
+          error: null,
+        }))
+        ;(async () => {
+          try {
+            const response = await fetch(
+              `${ISSUE_URL}?cwd=${encodeURIComponent(cwd)}&id=${encodeURIComponent(focusId)}`,
+              { credentials: 'same-origin', signal: controller.signal, cache: 'no-store' },
+            )
+            const body = await response.json()
+            if (!response.ok) throw new Error(body?.message ?? `HTTP ${response.status}`)
+            if (body?.ok !== true) {
+              setDetail({ id: focusId, phase: 'error', issue: null, error: detailFailureText(body) })
               return
             }
-            rememberSnapshot(cwd, payload)
-            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
-              console.debug('[kiln] snapshot', payload.cache?.action ?? 'unknown', payload.generatedAt)
-            }
-            setState({ phase: 'ready', payload, error: null })
-          })
-          .catch((error) => {
+            setDetail({ id: focusId, phase: 'ready', issue: body.issue, error: null })
+          } catch (error) {
             if (controller.signal.aborted) return
-            setState({ phase: 'error', payload: null, error: String(error?.message ?? error) })
-          })
+            setDetail({ id: focusId, phase: 'error', issue: null, error: String(error?.message ?? error) })
+          }
+        })()
         return () => controller.abort()
-      }, [cwd, nonce])
+      }, [cwd, focusId, nonce, detailFixture])
 
       /**
        * 时间线：订阅宿主 `/kiln/timeline`（宿主把 `kiln action log --jsonl` 原样转出来）。
@@ -2276,7 +2328,15 @@ window.__ModuleLoader__.load({
               cache: 'no-store',
             })
             const body = await response.json()
-            if (body?.ok !== true) return
+            if (body?.ok !== true) {
+              // 仓库级不可用（不是 kiln 仓库 / 找不到 kiln / 路径无效）要整块提示；
+              // 旧版没有 action list 只影响 done 未知，不挡列表。
+              if (body?.reason === 'not-kiln-repo' || body?.reason === 'invalid-dir' || body?.reason === 'kiln-missing') {
+                setUnavailable({ reason: body.reason, message: body?.message ?? '' })
+              }
+              return
+            }
+            setUnavailable(null)
             const next = normalizeVocab(body.actions)
             if (next === null) return
             actionsCache.set(cwd, next)
@@ -2294,22 +2354,19 @@ window.__ModuleLoader__.load({
         setFocusOpen(true)
       }, [focusId])
 
-      const payload = state.payload
-      const issues = payload?.ok === true && Array.isArray(payload.issues) ? payload.issues : []
-      const edges = payload?.ok === true && Array.isArray(payload.edges) ? payload.edges : []
-      const byId = React.useMemo(() => new Map(issues.map((issue) => [issue.id, issue])), [issues])
-      const missingFocus = focusId !== null && !byId.has(focusId)
-      const focus = focusId !== null && byId.has(focusId) ? byId.get(focusId) : null
+      // 关系图只服务关系页；两个列表都不依赖它。
+      const graphPayload = graph.payload
+      const graphIssues =
+        graphPayload?.ok === true && Array.isArray(graphPayload.issues) ? graphPayload.issues : []
+      const graphEdges =
+        graphPayload?.ok === true && Array.isArray(graphPayload.edges) ? graphPayload.edges : []
+      const relations = React.useMemo(() => canonicalEdges(graphEdges), [graphEdges])
 
-      const relations = React.useMemo(() => canonicalEdges(edges), [edges])
-      const view = React.useMemo(() => (focus === null ? null : relatedOf(focus.id, relations)), [focus, relations])
-      const scoped = React.useMemo(() => scopedIssues(issues, view), [issues, view])
       const timelineState = timelineFixture ?? timeline
-      const rows = React.useMemo(() => scopeTimeline(timelineState.rows, view), [timelineState.rows, view])
       const timelineStreaming = timelineState.phase === 'streaming'
       const timelineError = timelineState.error ?? null
 
-      /** 流折叠出的 issue 索引：无焦点列表的成员与顺序由它决定（快照只兜底它已经知道的字段）。 */
+      /** issue 索引只来自动作流：折叠规则已在真仓对齐 list（23/23、70/70），不再和快照合并。 */
       const streamIssues = React.useMemo(
         () =>
           foldIssues(timelineState.rows, {
@@ -2319,24 +2376,35 @@ window.__ModuleLoader__.load({
           }),
         [timelineState.rows, timelineState.phase, vocab],
       )
+      const byId = React.useMemo(() => new Map(streamIssues.map((issue) => [issue.id, issue])), [streamIssues])
 
-      /**
-       * 无焦点时的列表 = 流折叠 + 快照兜底：快照已经读到的 issue 用快照字段
-       * （动作完整、带 ordinal/refs），流负责“多出来的那部分”，首屏也不会先空再闪。
-       */
-      const issuePool = React.useMemo(() => {
-        const merged = new Map()
-        for (const issue of streamIssues) merged.set(issue.id, byId.get(issue.id) ?? issue)
-        for (const issue of issues) if (!merged.has(issue.id)) merged.set(issue.id, issue)
-        return [...merged.values()]
-      }, [streamIssues, issues, byId])
-
+      /** 详情只补“这个 issue 的边”（以及 path 给出的序号/refs）；动作在流里本来就有。 */
+      const detailIssue = detailFixture ?? (detail.id === focusId ? detail.issue : null)
+      const detailPhase =
+        detailFixture !== null && detailFixture !== undefined
+          ? 'ready'
+          : detail.id === focusId
+            ? detail.phase
+            : 'idle'
+      const focusRow = focusId === null ? null : (byId.get(focusId) ?? null)
+      const focus = React.useMemo(() => {
+        if (focusRow === null) return null
+        const fromDetail = Array.isArray(detailIssue?.actions) ? detailIssue.actions : []
+        const actions = fromDetail.length > 0 ? fromDetail : focusRow.actions
+        return { ...focusRow, actions, last: actions[actions.length - 1] ?? null }
+      }, [focusRow, detailIssue])
+      const view = React.useMemo(() => {
+        if (focus === null) return null
+        const edges = Array.isArray(detailIssue?.relations) ? detailIssue.relations : []
+        return relatedOf(focus.id, canonicalEdges(edges))
+      }, [focus, detailIssue])
+      const rows = React.useMemo(() => scopeTimeline(timelineState.rows, view), [timelineState.rows, view])
       const issueList = React.useMemo(
-        () => sortIssues(focus === null ? issuePool : scoped, focus === null ? null : focus.id),
-        [issuePool, scoped, focus],
+        () => sortIssues(view === null ? streamIssues : scopedIssues(streamIssues, view), focus?.id ?? null),
+        [streamIssues, view, focus],
       )
-      /** issue 页的“还在读”：无焦点时列表来自流，读数要说清。 */
-      const issueStreaming = focus === null && timelineStreaming
+      /** issue 页的“还在读”：列表来自流，读数要说清。 */
+      const issueStreaming = timelineStreaming
 
       /**
        * 搜索：宿主路由 → `kiln list --search --json`；整仓范围，不看筛选与焦点。
@@ -2484,8 +2552,13 @@ window.__ModuleLoader__.load({
       }, [scrollTo, rows.length])
 
       const refresh = () => setNonce((value) => value + 1)
-      /** 时间线行的「聚焦」只对快照里的 issue 有意义；快照外的给说明，不给假按钮。 */
-      const knownOf = (issueId) => byId.has(issueId)
+
+      const graphHint =
+        graph.phase === 'ready'
+          ? `${graphPayload?.cache?.action ?? 'ready'}${typeof graphPayload?.cache?.ms === 'number' ? ` · ${graphPayload.cache.ms}ms` : ''}`
+          : graph.phase === 'error'
+            ? '读取失败'
+            : '未取'
 
       const header = h(
         'div',
@@ -2495,11 +2568,9 @@ window.__ModuleLoader__.load({
           {
             className: 'dkf-repo',
             'data-hint':
-              payload?.ok === true
-                ? `${cwd}\n快照：${payload.cache?.action ?? 'unknown'}${
-                    typeof payload.cache?.ms === 'number' ? ` · ${payload.cache.ms}ms` : ''
-                  } · ${payload.generatedAt ?? ''}`
-                : cwd,
+              unavailable !== null
+                ? `${cwd}\n${unavailableText(unavailable)}`
+                : `${cwd}\n动作流：${timelineState.rows.length} 条${timelineStreaming ? '（读取中）' : ''} · ${timelineState.ms}ms\n关系图：${graphHint}`,
           },
           basename(cwd) || 'kiln',
         ),
@@ -2536,7 +2607,7 @@ window.__ModuleLoader__.load({
                 `焦点：${focus.id} ×`,
               )
             : null,
-          h('button', { type: 'button', className: 'dkf-refresh', onClick: refresh, 'data-hint': '重新读取 kiln 快照' }, '刷新'),
+          h('button', { type: 'button', className: 'dkf-refresh', onClick: refresh, 'data-hint': '重新读取动作流、关系图与详情' }, '刷新'),
         ),
       )
 
@@ -2676,7 +2747,7 @@ window.__ModuleLoader__.load({
       ]
 
       const bar =
-        payload?.ok === true
+        cwd !== '' && unavailable === null
           ? h(
               'div',
               { className: 'dkf-bar' },
@@ -2692,9 +2763,7 @@ window.__ModuleLoader__.load({
                       : h(
                           'span',
                           { key: 'hits', className: 'dkf-count' },
-                          `${searchRows.length} 条命中 · ${searchMs}ms · 仓库共 ${
-                            typeof payload?.total === 'number' ? payload.total : issues.length
-                          } 条`,
+                          `${searchRows.length} 条命中 · ${searchMs}ms · 仓库共 ${issueList.length} 条`,
                         )
                   : pageTools !== null
                     ? pageTools
@@ -2706,36 +2775,19 @@ window.__ModuleLoader__.load({
           : null
 
       let body = null
-      if (state.phase === 'loading' && payload === null) {
-        body = h('p', { className: 'dkf-note' }, '读取 kiln 快照…')
-      } else if (state.phase === 'no-workspace') {
+      if (cwd === '') {
         body = h(
           'div',
           { className: 'dkf-error' },
           h('p', { className: 'dkf-error-title' }, '当前会话没有工作区路径'),
           h('p', { className: 'dkf-error-detail' }, 'Flow 以会话工作区为仓库根；请在一个 kiln 仓库里打开会话。'),
         )
-      } else if (state.phase === 'error') {
+      } else if (unavailable !== null) {
         body = h(
           'div',
           { className: 'dkf-error' },
-          h('p', { className: 'dkf-error-title' }, '读取失败'),
-          h('p', { className: 'dkf-error-detail' }, state.error),
-        )
-      } else if (state.phase === 'unavailable') {
-        const reason = payload?.reason
-        const detail =
-          {
-            'not-kiln-repo': '这个工作区不是 kiln 仓库（缺 .kilnconfig.jsonc）。以仓库根目录打开会话后再看。',
-            'kiln-missing': '宿主进程里找不到 kiln 可执行文件。把 kiln 放进 PATH，或设置 DSH_KILN_BIN。',
-            'kiln-error': payload?.message ?? 'kiln 命令失败。',
-            'invalid-dir': '工作区路径无效。',
-          }[reason] ?? `未知原因：${reason ?? 'unknown'}`
-        body = h(
-          'div',
-          { className: 'dkf-error' },
-          h('p', { className: 'dkf-error-title' }, 'Flow 暂不可用'),
-          h('p', { className: 'dkf-error-detail' }, detail),
+          h('p', { className: 'dkf-error-title' }, 'kiln 暂不可用'),
+          h('p', { className: 'dkf-error-detail' }, unavailableText(unavailable)),
           h('p', { className: 'dkf-error-detail' }, cwd),
         )
       } else {
@@ -2764,7 +2816,6 @@ window.__ModuleLoader__.load({
         } else if (tabId === 'timeline') {
           content = h(TimelinePanel, {
             rows: shownRows,
-            knownOf,
             expanded,
             onToggle: toggleExpand,
             onFocus: focusIssue,
@@ -2781,64 +2832,74 @@ window.__ModuleLoader__.load({
                     : '焦点与相关 issue 还没有动作。',
           })
         } else if (tabId === 'issue') {
-          // 有焦点 = 读结构（母 / 子 / 强关系 / 弱关联）；没焦点 = 一行一个 issue
-          content =
-            focus === null
-              ? h(IssuePanel, {
-                  issues: shownIssues,
-                  focusId: null,
-                  expanded,
-                  knownOf,
-                  onToggle: toggleExpand,
-                  onFocus: focusIssue,
-                  emptyText: filterOn
-                    ? issueStreaming
-                      ? '筛选中，继续加载…'
-                      : '没有符合筛选条件的 issue。'
-                    : issueStreaming
-                      ? '正在读取 issue…'
-                      : '这个仓库还没有 issue。',
-                })
-              : h(IssueFocusList, {
-                  focus,
-                  view,
-                  byId,
-                  expanded,
-                  focusOpen,
-                  expandedChildren,
-                  onToggle: toggleExpand,
-                  onToggleFocus: () => setFocusOpen((value) => !value),
-                  onFocus: focusIssue,
-                  onToggleChildren: () => setExpandedChildren((value) => !value),
-                })
+          // 有焦点 = 读结构（母 / 子 / 强关系 / 弱关联），边由详情现取；没焦点 = 一行一个 issue
+          if (focusId !== null && focus === null) {
+            content = h(
+              'p',
+              { className: 'dkf-empty' },
+              issueStreaming
+                ? '正在读取焦点 issue…'
+                : `焦点 ${focusId} 不在动作流里（可能已删除或改名）。`,
+            )
+          } else if (focus === null) {
+            content = h(IssuePanel, {
+              issues: shownIssues,
+              focusId: null,
+              expanded,
+              onToggle: toggleExpand,
+              onFocus: focusIssue,
+              emptyText: filterOn
+                ? issueStreaming
+                  ? '筛选中，继续加载…'
+                  : '没有符合筛选条件的 issue。'
+                : issueStreaming
+                  ? '正在读取 issue…'
+                  : '这个仓库还没有 issue。',
+            })
+          } else {
+            content = h(
+              React.Fragment,
+              null,
+              detailPhase === 'error' && detail !== null && detail.error !== null
+                ? h('p', { className: 'dkf-note' }, detail.error)
+                : null,
+              h(IssueFocusList, {
+                focus,
+                view,
+                byId,
+                expanded,
+                focusOpen,
+                expandedChildren,
+                onToggle: toggleExpand,
+                onToggleFocus: () => setFocusOpen((value) => !value),
+                onFocus: focusIssue,
+                onToggleChildren: () => setExpandedChildren((value) => !value),
+              }),
+            )
+          }
         } else {
-          content = h(GraphPanel, {
-            issues,
-            relations,
-            focusId: focus === null ? null : focus.id,
-            direction: graphDirection,
-            graphView,
-            depth: graphDepth,
-            onFocus: focusIssue,
-          })
+          if (graph.payload === null && graph.phase === 'loading') {
+            content = h('p', { className: 'dkf-empty' }, '读取关系图…')
+          } else if (graph.payload === null && graph.phase === 'error') {
+            content = h('p', { className: 'dkf-note' }, graph.error)
+          } else {
+            content = h(GraphPanel, {
+              issues: graphIssues,
+              relations,
+              focusId: focus === null ? null : focus.id,
+              direction: graphDirection,
+              graphView,
+              depth: graphDepth,
+              onFocus: focusIssue,
+            })
+          }
         }
 
         body = h(
           React.Fragment,
           null,
-          missingFocus
-            ? h(
-                'p',
-                { className: 'dkf-warn' },
-                `焦点 ${focusId} 不在本次快照里（可能被截断或已消失）。`,
-                h('button', { type: 'button', className: 'dkf-toggle', onClick: clearFocus }, ' 回到全局'),
-              )
-            : null,
           !searching && tabId === 'timeline' && timelineError !== null
             ? h('p', { className: 'dkf-note' }, timelineError)
-            : null,
-          payload?.truncated === true && !(tabId === 'issue' && focus === null && timelineError === null)
-            ? h('p', { className: 'dkf-note' }, `共 ${payload.total ?? issues.length} 条 issue，只展示前 ${issues.length} 条。`)
             : null,
           h(
             'div',

@@ -221,13 +221,33 @@ function render({
   search = null,
   timeline = timelineFixture,
   vocab = vocabFixture,
+  graph = payload,
+  detail = undefined,
 }) {
+  // 详情：默认按焦点从固定数据里派生，等价于宿主 `path <id>` 会返回的那份
+  const focusIssue = focusId === null ? null : payload.issues.find((item) => item.id === focusId)
+  const detailState =
+    detail !== undefined
+      ? detail
+      : focusId === null
+        ? { id: null, phase: 'idle', issue: null, error: null }
+        : {
+            id: focusId,
+            phase: 'ready',
+            error: null,
+            issue: focusIssue === null || focusIssue === undefined
+              ? null
+              : {
+                  id: focusId,
+                  done: focusIssue.done,
+                  actions: focusIssue.actions.map((item) => ({ ...item, refs: [] })),
+                  relations: payload.edges
+                    .filter((edge) => edge.from === focusId || edge.to === focusId)
+                    .map((edge) => ({ ...edge, directed: edge.directed !== false })),
+                },
+          }
   const React = makeReact([
-    {
-      phase: 'ready',
-      payload,
-      error: null,
-    }, //                          state：直接给成 ready
+    { phase: 'ready', payload: graph, error: null }, //  graph（关系页数据；已就绪）
     0, //                          nonce
     tabId, //                      tabId
     focusId, //                    focusId
@@ -246,6 +266,8 @@ function render({
     null, //                       rawSearch（搜索结果的原始状态；测试走 fixture）
     null, //                       timeline（流状态；测试走 timeline fixture）
     vocab === null ? null : { ...vocab, terminal: new Set(vocab.terminal) }, // vocab（start / terminal）
+    detailState, //                detail（聚焦 issue 的动作与边；已有则直接 ready）
+    null, //                       unavailable（仓库级不可用）
   ])
   const requireOf = (name) => {
     if (name === 'react') return React
@@ -261,10 +283,14 @@ function render({
   globalThis.__DSH_KILN_SEARCH_FIXTURE__ = search
   globalThis.__DSH_KILN_TIMELINE_FIXTURE__ = timeline
   globalThis.__DSH_KILN_VOCAB_FIXTURE__ = vocab
+  globalThis.__DSH_KILN_GRAPH_FIXTURE__ = graph
+  globalThis.__DSH_KILN_DETAIL_FIXTURE__ = detailState.issue
   const tree = expand(KilnView({ cwd: '/repo' }))
   globalThis.__DSH_KILN_SEARCH_FIXTURE__ = null
   globalThis.__DSH_KILN_TIMELINE_FIXTURE__ = null
   globalThis.__DSH_KILN_VOCAB_FIXTURE__ = null
+  globalThis.__DSH_KILN_GRAPH_FIXTURE__ = null
+  globalThis.__DSH_KILN_DETAIL_FIXTURE__ = null
   return tree
 }
 
@@ -352,7 +378,7 @@ check('提示框：渲染树里没有原生 title，提示一律走 data-hint', 
   })
   assert.deepEqual(withTitle, [], '原生 title 会弹出第二个提示框（系统样式）')
   assert.ok(hints.includes('点开看这条提交的详情'), '时间线行要带提示')
-  assert.ok(hints.includes('重新读取 kiln 快照'), '刷新按钮要带提示')
+  assert.ok(hints.includes('重新读取动作流、关系图与详情'), '刷新按钮要带提示')
 })
 
 check('提示框：被截断的 id / 标题也有提示', () => {
@@ -432,16 +458,20 @@ check('搜索：没有命中时给明确空态', () => {
 })
 
 check('筛选：本仓没有可筛维度时不给空壳按钮', () => {
-  // 测试数据只有一个领域、一个状态、没有标签 —— 三组都筛不出东西
-  const view = render({ tabId: 'issue' })
+  // 只用 b、c 两条（都进行中、同一领域、没有标签）：领域与状态各只有一个值，没有可筛的
+  const rows = timelineFixture.rows.filter((row) => row.issueId !== 'a')
+  const view = render({
+    tabId: 'issue',
+    timeline: { rows, phase: 'done', error: null, ms: 4, count: rows.length },
+  })
   const labels = byClass(view, 'dkf-modebtn').map(textOf)
   assert.ok(!labels.includes('筛选'), '没有可选项时不该出现筛选按钮')
   assert.equal(byClass(view, 'dkf-filters').length, 0, '也不该有筛选条')
 })
 
 check('筛选：命中为空时说「没有符合筛选」，不是「还没有 issue」', () => {
-  const view = render({ tabId: 'issue', filters: { domains: [], tags: [], states: ['done'] } })
-  assert.equal(byClass(view, 'dkf-row').length, 0, '测试数据全是进行中，按已完成筛就空了')
+  const view = render({ tabId: 'issue', filters: { domains: ['不存在的领域'], tags: [], states: [] } })
+  assert.equal(byClass(view, 'dkf-row').length, 0, '领域筛一个不存在的值就空了')
   assert.match(textOf(byClass(view, 'dkf-empty')[0]), /没有符合筛选/)
 })
 
@@ -497,11 +527,11 @@ check('聚焦 b：出现可点击的焦点 chip', () => {
   assert.match(textOf(chips[0]), /焦点：b/)
 })
 
-check('焦点不在快照里：给出提示并可回全局', () => {
-  const focused = render({ focusId: 'zzz' })
-  const warnings = byClass(focused, 'dkf-warn')
-  assert.equal(warnings.length, 1)
-  assert.match(textOf(warnings[0]), /zzz/)
+check('焦点不在动作流里：给出提示，不假装有内容', () => {
+  const focused = render({ tabId: 'issue', focusId: 'zzz' })
+  const empty = byClass(focused, 'dkf-empty')[0]
+  assert.match(textOf(empty), /zzz/)
+  assert.match(textOf(empty), /不在动作流里/)
 })
 
 // ---------------------------------------------------------------- issue 页
@@ -756,10 +786,15 @@ check('timeline 流失败：给出可读错误，其余页面照常', () => {
     tabId: 'issue',
     timeline: { rows: [], phase: 'error', error: 'x', ms: 0, count: 0 },
   })
-  assert.equal(byClass(issuePage, 'dkf-row').length, 3, 'issue 页不依赖时间线流')
+  assert.equal(byClass(issuePage, 'dkf-row').length, 0, 'issue 列表来自流：流没有行就没有 issue')
+  const relationPage = render({
+    tabId: 'relation',
+    timeline: { rows: [], phase: 'error', error: 'x', ms: 0, count: 0 },
+  })
+  assert.equal(byClass(relationPage, 'dkf-graph').length, 1, '关系页不依赖时间线流')
 })
 
-check('timeline 快照外的 issue：不给聚焦按钮，改给说明', () => {
+check('timeline 里流中的 issue 也能聚焦（不再有「快照外」）', () => {
   const rows = timelineFixture.rows.concat([
     {
       issueId: 'zzz',
@@ -776,9 +811,9 @@ check('timeline 快照外的 issue：不给聚焦按钮，改给说明', () => {
     timeline: { rows, phase: 'done', error: null, ms: 4, count: rows.length },
   })
   const outside = byClass(view, 'dkf-arow').find((row) => textOf(byClass(row, 'dkf-aissue')[0]) === 'zzz')
-  assert.ok(outside !== undefined, '快照外的行仍要出现')
-  assert.equal(byClass(outside, 'dkf-focusbtn').length, 0, '没有结构可聚焦就不给按钮')
-  assert.equal(textOf(byClass(outside, 'dkf-afaint')[0]), '快照外')
+  assert.ok(outside !== undefined, '流里的行仍要出现')
+  assert.equal(byClass(outside, 'dkf-focusbtn').length, 1, '结构由详情现取，任何行都能聚焦')
+  assert.equal(byClass(outside, 'dkf-afaint').length, 0, '不再有「快照外」这条死路')
 })
 
 // ---------------------------------------------------------------- issue 页复用 action 流
@@ -820,8 +855,8 @@ check('issue 页：流里多出来的 issue 也进列表，色条来自流、don
   assert.equal(textOf(byClass(rows[0], 'dkf-id')[0]), 'zzz', '按最近动作排序，最新的在最上面')
   assert.equal(byClass(zzz, 'dkf-block').length, 2, '色条按流里读到的动作画（apply + ask）')
   assert.equal(byClass(zzz, 'dkf-chip-done').length, 1, 'apply ∈ terminal → done')
-  assert.equal(byClass(zzz, 'dkf-focusbtn').length, 0, '没有关系边，聚焦仍是死路，不给按钮')
-  assert.equal(textOf(byClass(zzz, 'dkf-afaint')[0]), '快照外')
+  assert.equal(byClass(zzz, 'dkf-focusbtn').length, 1, '结构由详情现取：流里的 issue 也能聚焦')
+  assert.equal(byClass(zzz, 'dkf-afaint').length, 0, '不再有「快照外」')
 })
 
 check('issue 页：流里多出来的 issue 能展开完整动作链', () => {

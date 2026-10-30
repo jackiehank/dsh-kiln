@@ -1,5 +1,5 @@
 /**
- * 性能探针：量冷启动、命中、批量取数与旧逐条取法的差距。
+ * 性能探针：量关系图冷/热、详情单条、以及旧“按 issue 预取”的对照。
  *
  * 用法：node plugin/test/probe-perf.mjs [repo...]（默认当前目录）
  * 只读：只跑 `kiln --json` 与直读 HEAD，不写任何文件。数字打到 stdout，供 issue 文档引用。
@@ -8,7 +8,7 @@ import { execFile } from 'node:child_process'
 import { cpus } from 'node:os'
 import { isAbsolute, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { buildFlow, readGraph, readHistories, resolveKiln } from '../lib/flow.js'
+import { readGraph, readIssue, resolveKiln } from '../lib/flow.js'
 import { createSnapshotCache } from '../lib/snapshot.js'
 
 const run = promisify(execFile)
@@ -34,7 +34,12 @@ async function legacyPerId(repo, ids, limit = 8) {
     const workers = Array.from({ length: Math.min(limit, ids.length) }, async () => {
       while (next < ids.length) {
         const id = ids[next++]
-        await run(bin, ['path', id, '--json'], { cwd: repo, timeout: 20_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true })
+        await run(bin, ['path', id, '--json'], {
+          cwd: repo,
+          timeout: 20_000,
+          maxBuffer: 8 * 1024 * 1024,
+          windowsHide: true,
+        })
       }
     })
     await Promise.all(workers)
@@ -54,7 +59,9 @@ async function main() {
     }
     const nodes = Array.isArray(graph.graph?.nodes) ? graph.graph.nodes : []
     const ids = nodes.map((node) => node.id)
-    console.log(`graph: ${graphRead.ms.toFixed(0)} ms · nodes=${nodes.length} · edges=${graph.graph?.edges?.length ?? 0} · bytes=${JSON.stringify(graph.graph).length}`)
+    console.log(
+      `graph: ${graphRead.ms.toFixed(0)} ms · nodes=${nodes.length} · edges=${graph.graph?.edges?.length ?? 0} · bytes=${JSON.stringify(graph.graph).length}`,
+    )
 
     const cache = createSnapshotCache()
     const cold = await timeIt(() => cache.get(repo))
@@ -65,13 +72,10 @@ async function main() {
     console.log(`hit get: ${hit.ms.toFixed(1)} ms · cache=${hit.value.cache?.action}`)
     cache.clear()
 
-    const perCall = await timeIt(() => readHistories(repo, ids.slice(0, 1)))
-    console.log(`readHistories(1)：${perCall.ms.toFixed(0)} ms（单条形状，1 个进程）`)
-    const hist = await timeIt(() => readHistories(repo, ids))
-    console.log(`readHistories(${ids.length})：${hist.ms.toFixed(0)} ms（批量，1 个进程）`)
-
-    const built = await timeIt(() => buildFlow({ repo, graph: graph.graph, histories: hist.value }))
-    console.log(`buildFlow: ${built.ms.toFixed(1)} ms`)
+    const detail = await timeIt(() => readIssue(repo, ids[0]))
+    console.log(
+      `详情 path ${ids[0]}: ${detail.ms.toFixed(0)} ms · ok=${detail.value.ok} · bytes=${JSON.stringify(detail.value).length}`,
+    )
 
     // 单飞：冷缓存上同时发两个请求，应该只跑一轮构建
     const shared = createSnapshotCache()

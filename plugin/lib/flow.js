@@ -1,9 +1,12 @@
 /**
- * Flow 数据层：把一个 kiln 仓库读成一份只读快照。
+ * 数据层：宿主只通过 `kiln <cmd> --json` 取数，一个视图一条命令。
  *
- * 这里只做两件事——调 `kiln graph --json` 取 issue 与折叠后的关系边，调
- * `kiln path <id> … --json`（v0.2.0 的批量形态）一次取多条 issue 的动作序列。语义（关系强弱、层级、
- * 方向）全部留给定词表的前端，宿主不判断“什么算重要”。
+ * - 关系图：`kiln graph --json`（节点 + 折叠后的边），只在打开关系页时取；
+ * - 详情：`kiln path <id> --json`（动作序列 + 这个 issue 的全部边），点开才取；
+ * - 搜索 / 词表：`list --search` / `action list`。
+ *
+ * 关系强弱、层级、方向这些语义留给定词表的前端；这里不判断“什么算重要”，
+ * 也不复刻 kiln 的折叠规则（流里的 `relations` 是声明，不是边）。
  */
 import { execFile } from 'node:child_process'
 import { existsSync, statSync } from 'node:fs'
@@ -14,9 +17,6 @@ const execFileAsync = promisify(execFile)
 
 const RUN_TIMEOUT_MS = 20_000
 const MAX_BUFFER = 8 * 1024 * 1024
-const DEFAULT_MAX_ISSUES = 80
-/** 插件只支持 v0.2.0+：批量 `path` 的契约从这一版开始（旧版对多 id 静默只回第一条）。 */
-const KILN_MIN_VERSION = '0.2.0'
 const MAX_TITLE = 200
 
 /** 一次 kiln 调用失败时携带可读原因，方便路由层原样透出。 */
@@ -72,8 +72,8 @@ export function forgetKiln() {
 }
 
 /**
- * 跑一次 kiln，**不因退出码非零就丢掉 stdout**：`path` 批量在部分 issue 取不到时
- * 仍会给出完整文档（`errors` 数组 + exit 1），调用方要自己判断能不能解析。
+ * 跑一次 kiln，**不因退出码非零就丢掉 stdout**：`path` 在 issue 不存在时仍可能
+ * 给出部分文档，调用方要自己判断能不能解析。
  *
  * ENOENT / EACCES 这类「根本没跑起来」的错误没有数字退出码，仍抛 KilnError。
  */
@@ -108,19 +108,10 @@ async function runKiln(bin, args, cwd) {
   return result.stdout
 }
 
-/** 目录是不是一个 kiln 仓库：只有 .kilnconfig.jsonc 是登记在仓库里的判据。 */
-export function isKilnRepo(dir) {
-  try {
-    return isAbsolute(dir) && statSync(dir).isDirectory() && existsSync(join(dir, '.kilnconfig.jsonc'))
-  } catch {
-    return false
-  }
-}
-
 /**
  * `kiln path --json` 的 actions → 视图需要的字段（保留完整 sha 与短哈希）。
  *
- * v0.2.0 的哈希键是 `commit`（`id` 只指 issue）；没有提交时给空串，不猜旧键。
+ * 哈希键是 `commit`（`id` 只指 issue）；没有提交时给空串，不猜旧键。
  */
 export function mapActions(document) {
   const actions = Array.isArray(document?.actions) ? document.actions : []
@@ -129,115 +120,79 @@ export function mapActions(document) {
     return {
       ordinal: action.ordinal,
       action: action.action,
-      /** 完整提交 sha：缓存增量失效与 timeline 的“跳回提交”都要它。 */
+      /** 完整提交 sha：timeline 的“跳回提交”与详情都靠它。 */
       id: sha,
       /** 展示用的短哈希（7 位）；空提交没有 id，保持空串而不是猜。 */
       short: sha.slice(0, 7),
       date: action.date,
       title: truncateTitle(action.title),
-      /** 该动作声明的 refs：timeline 展开时显示，空就是空，不补默认值。 */
+      /** 该动作声明的 refs：详情展开时显示，空就是空，不补默认值。 */
       refs: Array.isArray(action.refs) ? action.refs.map((ref) => String(ref)) : [],
     }
   })
 }
 
-/**
- * 解析 `kiln path` 的 JSON：单条与批量两种形状。
- *
- * - 给多个 id 时必须是 `{ issues: [...], errors?: [...] }`（v0.2.0+）；
- * - 给一个 id 时是裸 pathDoc——v0.2.0 也这样，单条形状本身不是「旧版」的证据。
- *
- * `errors`（`unknown-issue` / `stat-failed`）里的 issue 不产生动作序列，保持空。
- */
-export function parsePathDocument(document) {
-  if (Array.isArray(document?.issues)) {
-    const histories = new Map()
-    for (const doc of document.issues) {
-      if (typeof doc?.issue !== 'string') continue
-      histories.set(doc.issue, mapActions(doc))
-    }
-    return { kind: 'batch', histories }
-  }
-  if (typeof document?.issue === 'string' && Array.isArray(document?.actions)) {
-    return { kind: 'single', histories: new Map([[document.issue, mapActions(document)]]) }
-  }
-  return { kind: 'unknown', histories: new Map() }
+/** 边统一成客户端认识的形状（缺 directed 时按有向处理）。 */
+function mapEdges(edges) {
+  return (Array.isArray(edges) ? edges : []).map((edge) => ({
+    from: edge.from,
+    to: edge.to,
+    name: edge.name,
+    directed: edge.directed !== false,
+  }))
 }
 
 /**
- * 多 id 请求的形状校验：返回错误文案，合格返回 null。
+ * 纯变换：`kiln graph --json` → 关系页的节点与边。
  *
- * v0.1.1 对多余 id **静默只回第一条**（exit 0、文档还是裸 pathDoc），所以「多条却拿到
- * 单条」必须报错，不能把第一条当全部——这是旧版兼容最危险的坑，也是版本下限的判据。
+ * 不再截断（80 条上限随批量 path 一起删掉）；节点只有结构字段，动作在详情里。
  */
-export function pathShapeError(parsed, requestedCount) {
-  if (parsed.kind === 'batch') return null
-  if (parsed.kind === 'single' && requestedCount === 1) return null
-  if (parsed.kind === 'single') {
-    return `需要 kiln v${KILN_MIN_VERSION}+：path 批量只回了单条文档（旧版会静默丢弃其余 id）`
-  }
-  return 'kiln path 输出形状不认识（既不是批量文档，也不是单条 pathDoc）'
-}
-
-/**
- * 纯变换：把已经拿到的 graph 文档与每条 issue 的动作序列折成 Flow 快照。
- *
- * 与 `readFlow` 分开导出，便于在没有子进程的环境（沙箱、测试）里用真实
- * kiln 输出离线验证布局所需的每个字段。
- *
- * @param input - { repo, graph, histories: Map<id, actions>, focus, maxIssues }
- */
-export function buildFlow(input) {
+export function buildGraph(input) {
   const repo = String(input?.repo ?? '')
   const graph = input?.graph ?? {}
-  const histories = input?.histories instanceof Map ? input.histories : new Map()
-  const maxIssues =
-    Number.isInteger(input?.maxIssues) && input.maxIssues > 0 ? input.maxIssues : DEFAULT_MAX_ISSUES
-
   const nodes = Array.isArray(graph.nodes) ? graph.nodes : []
   const edges = Array.isArray(graph.edges) ? graph.edges : []
-  const kept = nodes.slice(0, maxIssues)
-
-  const issues = kept.map((node) => {
-    const actions = Array.isArray(histories.get(node.id)) ? histories.get(node.id) : []
-    const last = actions.length > 0 ? actions[actions.length - 1] : null
-    return {
+  return {
+    repo,
+    generatedAt: new Date().toISOString(),
+    ok: true,
+    issues: nodes.map((node) => ({
       id: node.id,
       domain: node.domain ?? '',
       action: node.action ?? '',
       done: node.done === true,
       title: truncateTitle(node.title),
       tags: Array.isArray(node.tags) ? node.tags : [],
-      actions,
-      last,
-    }
-  })
-
-  const ids = new Set(issues.map((issue) => issue.id))
-  const keptEdges = edges
-    .filter((edge) => ids.has(edge.from) && ids.has(edge.to))
-    .map((edge) => ({ from: edge.from, to: edge.to, name: edge.name, directed: edge.directed !== false }))
-
-  let focus = typeof input?.focus === 'string' && ids.has(input.focus) ? input.focus : null
-  if (focus === null) {
-    let newest = null
-    for (const issue of issues) {
-      const date = issue.last?.date
-      if (typeof date !== 'string' || date === '') continue
-      if (newest === null || date > newest.date) newest = { date, issue }
-    }
-    focus = newest?.issue.id ?? issues[0]?.id ?? null
+    })),
+    edges: mapEdges(edges),
   }
+}
 
+/**
+ * 纯变换：`kiln path <id> --json` → 详情。
+ *
+ * 单条文档是裸 pathDoc（`issue` / `action` / `done` / `actions` / `relations`）。
+ * 形状不认识、或回来的不是请求的那个 id，都明确报错，不静默换人。
+ */
+export function parseIssueDocument(document, requestedId) {
+  if (typeof document?.issue !== 'string' || !Array.isArray(document?.actions)) {
+    return { ok: false, reason: 'shape', message: 'kiln path 输出不是单个 issue 的文档' }
+  }
+  if (typeof requestedId === 'string' && document.issue !== requestedId) {
+    return {
+      ok: false,
+      reason: 'mismatch',
+      message: `kiln path 返回了 ${document.issue}，不是 ${requestedId}`,
+    }
+  }
   return {
-    repo,
-    generatedAt: new Date().toISOString(),
     ok: true,
-    focus,
-    issues,
-    edges: keptEdges,
-    total: nodes.length,
-    truncated: nodes.length > kept.length,
+    issue: {
+      id: document.issue,
+      done: document.done === true,
+      actions: mapActions(document),
+      relations: mapEdges(document.relations),
+    },
   }
 }
 
@@ -256,10 +211,7 @@ export function repoProblem(dir) {
   return null
 }
 
-/**
- * 取关系图（节点 + 折叠边）。
- * 与 `readHistories` 拆开，是为了让快照缓存能“只重取受影响的 issue”而不重跑 graph 之外的东西。
- */
+/** 取关系图（节点 + 折叠边）。关系页唯一的数据来源。 */
 export async function readGraph(repo) {
   const dir = typeof repo === 'string' ? repo : ''
   const invalid = repoProblem(dir)
@@ -269,6 +221,32 @@ export async function readGraph(repo) {
   try {
     const graph = JSON.parse(await runKiln(bin, ['graph', '--json'], dir))
     return { ok: true, graph }
+  } catch (error) {
+    return { ok: false, reason: 'kiln-error', message: String(error?.message ?? error) }
+  }
+}
+
+/**
+ * 取一个 issue 的详情：只起 **1 个** `kiln path` 进程（单条形态，v0.2.0 起稳定）。
+ *
+ * 返回的 `relations` 是折叠后的边（进+出），聚焦页的分组与时间线收窄都用它，
+ * 不需要再取 graph。
+ */
+export async function readIssue(repo, id) {
+  const dir = typeof repo === 'string' ? repo : ''
+  const issueId = typeof id === 'string' ? id.trim() : ''
+  if (issueId === '') return { ok: false, reason: 'missing-id' }
+  const invalid = repoProblem(dir)
+  if (invalid !== null) return { ok: false, reason: invalid }
+  const bin = ensureKiln()
+  if (bin === null) return { ok: false, reason: 'kiln-missing' }
+  try {
+    const document = JSON.parse(await runKiln(bin, ['path', issueId, '--json'], dir))
+    const parsed = parseIssueDocument(document, issueId)
+    if (parsed.ok !== true) {
+      return { ok: false, reason: 'kiln-error', message: parsed.message }
+    }
+    return { ok: true, issue: parsed.issue }
   } catch (error) {
     return { ok: false, reason: 'kiln-error', message: String(error?.message ?? error) }
   }
@@ -322,40 +300,6 @@ export async function readSearch(repo, query) {
 }
 
 /**
- * 取若干 issue 的动作序列：只起 **1 个** `kiln path` 进程（v0.2.0 批量，一次读全）。
- *
- * 只支持 kiln v0.2.0+：多 id 请求却拿到单条文档时抛 KilnError（v0.1.1 会静默只回第一条，
- * 按单条解析会丢数据）。批量里个别 issue 取不到时上游走 `errors`，这里保持空序列，
- * 不拖垮整份快照。
- */
-export async function readHistories(repo, ids) {
-  const dir = typeof repo === 'string' ? repo : ''
-  const histories = new Map()
-  if (!Array.isArray(ids) || ids.length === 0) return histories
-  const unique = [...new Set(ids)]
-  for (const id of unique) histories.set(id, [])
-  const bin = ensureKiln()
-  if (bin === null) return histories
-
-  // 部分 issue 取不到时 kiln 仍输出完整文档（exit 1），所以不要求退出码为 0。
-  const result = await execKiln(bin, ['path', ...unique, '--json'], dir)
-  if (result.code !== 0 && result.code !== 1) throw new KilnError(reasonOf(result))
-  let document
-  try {
-    document = JSON.parse(result.stdout)
-  } catch {
-    throw new KilnError(result.stderr !== '' ? reasonOf(result) : 'kiln path 输出不是 JSON')
-  }
-  const parsed = parsePathDocument(document)
-  const shapeError = pathShapeError(parsed, unique.length)
-  if (shapeError !== null) throw new KilnError(shapeError)
-  for (const [id, actions] of parsed.histories) {
-    if (histories.has(id)) histories.set(id, actions)
-  }
-  return histories
-}
-
-/**
  * 动作词表：`kiln action list --json`（不读历史、只读配置）。
  *
  * 客户端把 action 流折叠成 issue 索引时，要用它做两个判断：
@@ -387,39 +331,4 @@ export async function readActions(repo) {
   } catch (error) {
     return { ok: false, reason: 'kiln-error', message: String(error?.message ?? error) }
   }
-}
-
-/**
- * 读取一个仓库的 Flow 快照（**不带缓存**；缓存与失效在 snapshot.js）。
- *
- * @param repo - 绝对路径，必须是 kiln 仓库根。
- * @param options - focus（可选 issue id）与 maxIssues（默认 80）。
- * @returns 永远 resolve：失败时带 ok:false 与 reason，前端据此显示降级提示。
- */
-export async function readFlow(repo, options = {}) {
-  const dir = typeof repo === 'string' ? repo : ''
-  const base = { repo: dir, generatedAt: new Date().toISOString() }
-  const graphResult = await readGraph(dir)
-  if (graphResult.ok !== true) {
-    return {
-      ...base,
-      ok: false,
-      reason: graphResult.reason,
-      ...(graphResult.message === undefined ? {} : { message: graphResult.message }),
-    }
-  }
-  const nodes = Array.isArray(graphResult.graph?.nodes) ? graphResult.graph.nodes : []
-  const maxIssues =
-    Number.isInteger(options.maxIssues) && options.maxIssues > 0 ? options.maxIssues : DEFAULT_MAX_ISSUES
-  const kept = nodes.slice(0, maxIssues)
-  let histories
-  try {
-    histories = await readHistories(
-      dir,
-      kept.map((node) => node.id),
-    )
-  } catch (error) {
-    return { ...base, ok: false, reason: 'kiln-error', message: String(error?.message ?? error) }
-  }
-  return buildFlow({ repo: dir, graph: graphResult.graph, histories, focus: options.focus, maxIssues })
 }

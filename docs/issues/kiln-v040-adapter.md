@@ -246,7 +246,7 @@ v0.4.0 让单条 kiln 命令落到进程地板（热读 42ms/条，其中约 15m
 **80 条上限、快照/流双源合并、「快照外」死链、按 issue 增量重取 ~200 行缓存逻辑**。
 这些复杂度今天都不再必要——详情单取只要 42ms。
 
-### 实测（Node spawn，与宿主同形态；本仓 25 issue / 153 动作）
+### 实测（Node spawn，与宿主同形态；本仓 24 issue / 153 动作）
 
 | 调用 | 热 42ms 档 | 冷（clear 后） | 输出 |
 | --- | --- | --- | --- |
@@ -342,3 +342,38 @@ HEAD 探测走 `readHeadFast` 读文件约 2ms，只有 packed-refs 等形状才
 - 不换 `path --all` 当快照（缺 domain/tags，且 77 KB 换 11 KB 不值）；
 - 不引入 daemon、常驻进程、WebSocket 或磁盘缓存；
 - 不改 UI 信息架构与三页分工，只换取数方式。
+
+## apply（2026-10-30）：按视图取数落地，插件 0.6.0
+
+按 hypothesize 的形态直接做完（S1+S2），没有留半截：
+
+| 位置 | 改了什么 |
+| --- | --- |
+| `plugin/lib/flow.js` | 删批量 `path` / `buildFlow` / `readHistories` / `DEFAULT_MAX_ISSUES`；新增 `buildGraph`（节点+边，不截断）与 `parseIssueDocument`/`readIssue`（单条 `path`，校验 id 不回错人） |
+| `plugin/lib/snapshot.js` | 缓存收成一张图：HEAD / 配置 / 二进制三元组失效，HEAD 动了整图重取；删 `maxIssues`、按 issue 增量、`applyFocus` |
+| `plugin/lib/git.js` | 删 `isAncestor` / `newIssueIds` / `parseTrailerRange`（不再需要“哪些 issue 被碰过”），只留直读 HEAD 与两个令牌 |
+| `plugin/lib/index.js` | 路由换成 `GET /kiln/graph` + `GET /kiln/issue?id=`；删 `/kiln/flow`；时间线/词表/搜索不动 |
+| `plugin/lib/client.js` | issue 列表单一流源（删快照兜底、`knownOf`、`快照外`、截断提示、`missingFocus`）；聚焦改吃 `/kiln/issue`（边 + 动作），关系页切到时才取图；首屏不再预取整仓 |
+| `plugin/test/run.mjs` | 删批量 path / 增量 / trailer 区间用例，补 `buildGraph`、`parseIssueDocument`、图缓存（冷/热/HEAD 前进/并发合并） |
+| `plugin/test/render.mjs` | 预置换成 graph + detail 两段；「快照外不给按钮」改成「都能聚焦」；焦点不存在 / 流失败的语义按新行为改 |
+| `plugin/README.md`、根 `README.md`、`AGENTS.md`、`plugin/package.json` | 版本 0.6.0；数据来源、按视图取数表、v0.4.0 缓存边界、已知规模上界 |
+
+### 验证
+
+- **两套用例全绿**：宿主 52、渲染 53；`node --check` 覆盖 9 个文件。
+- **路由注册**：`/kiln/graph,/kiln/issue,/kiln/timeline,/kiln/actions,/kiln/search`（假的 ctx 收集到的顺序）。
+- **真仓对照**（v0.4.0，Node spawn）：`buildGraph` 把本仓 `graph --json` 读成 24 节点 / 36 边 / 7.3 KB；
+  `parseIssueDocument` 对 `path kiln-v040-adapter --json` 得到 4 条动作（序号 1–4）、3 条边、`done=false`。
+- **issue 列表只剩流**：直接把 `action log --jsonl` 的行喂 `foldIssues`，与 `kiln list --json` 对齐——
+  本仓 **24/24**、`~/kiln` **84/84**，`id/action/domain/done/title/tags` 全等，首现顺序严格 date-desc。
+- **取数账**（本仓，热）：mount = 动作流 42ms / 60KB（+ 首次词表 28ms）；详情 42ms / 3.5KB；
+  关系图 42ms / 11KB。对照改造前：mount 的 flow = `graph` + 批量 `path` 串行 85ms / 88KB，
+  且每条请求都要先探 HEAD。第 81 个 issue 现在与第 1 个同价。
+
+### 已知代价
+
+- 首屏不再有“已完整的快照”：流收口前计数标「读取中」、序号等看到起点或 EOF 才回填；
+  热读一帧内完成，冷读 120ms 是可感知的等待。
+- 点开一个 issue 多一跳 42ms（换掉 80 条上限与双源合并）。
+- 规模上界仍是整条动作流（O(动作数)）：100k 动作约 29MB，等上游分页（`kiln-many-issues`）。
+- 关系图与详情不再由宿主按 issue 缓存；重复点同一条会重取（42ms），换来没有第二套失效逻辑。

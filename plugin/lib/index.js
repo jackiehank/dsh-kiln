@@ -1,11 +1,15 @@
 /**
- * Host half：给浏览器半提供一条只读路由，`GET /kiln/flow?cwd=<绝对路径>&focus=<issue>`。
+ * Host half：只读路由，一个视图一条命令。
  *
- * 浏览器里没有 kiln，但宿主进程有；插件只在宿主侧调 CLI，把结果当成一次快照返回。
- * 快照按 HEAD 失效（见 snapshot.js）：HEAD 没动就完全不碰子进程，动了只重取受影响的 issue。
+ * - `GET /kiln/graph`：关系图（`kiln graph --json`），HEAD 没动就用缓存；
+ * - `GET /kiln/issue?id=`：详情（`kiln path <id> --json`），点开才取；
+ * - `GET /kiln/timeline`：动作流（`kiln action log --jsonl`，NDJSON）；
+ * - `GET /kiln/actions`：词表；`GET /kiln/search`：整仓搜索。
+ *
+ * 浏览器里没有 kiln，但宿主进程有；插件只在宿主侧调 CLI。
  * 路由走与 open-in-app 相同的信任栅栏（connection.requestRejection），不额外做鉴权。
  */
-import { readActions, readSearch, repoProblem, resolveKiln } from './flow.js'
+import { readActions, readIssue, readSearch, repoProblem, resolveKiln } from './flow.js'
 import { createSnapshotCache } from './snapshot.js'
 import { actionLogProblem, consumeActionLog, spawnActionLog } from './timeline.js'
 
@@ -15,7 +19,8 @@ export const name = 'kiln'
 /** 需要宿主提供：HTTP 路由载体与请求信任栅栏。 */
 export const inject = ['webServer', 'connection']
 
-const FLOW_PATH = '/kiln/flow'
+const GRAPH_PATH = '/kiln/graph'
+const ISSUE_PATH = '/kiln/issue'
 const SEARCH_PATH = '/kiln/search'
 const TIMELINE_PATH = '/kiln/timeline'
 const ACTIONS_PATH = '/kiln/actions'
@@ -34,13 +39,13 @@ function connectionOf(ctx) {
   return Reflect.get(ctx, 'connection')
 }
 
-/** 注册只读 Flow 路由；disposer 由 ctx.effect 持有，插件卸载即摘除。 */
+/** 注册只读路由；disposer 由 ctx.effect 持有，插件卸载即摘除。 */
 export function apply(ctx) {
   ctx.effect(
     () =>
       ctx.webServer.register({
         kind: 'exact',
-        path: FLOW_PATH,
+        path: GRAPH_PATH,
         handler: async (req, res) => {
           const rejection = connectionOf(ctx).requestRejection(req)
           if (rejection !== undefined) {
@@ -67,10 +72,9 @@ export function apply(ctx) {
             return
           }
 
-          const focus = url.searchParams.get('focus') ?? undefined
           try {
-            const payload = await cache.get(cwd, { focus, bin })
-            // 便于在浏览器 / 日志里确认缓存行为：hit · incremental · build
+            const payload = await cache.get(cwd, { bin })
+            // 便于在浏览器 / 日志里确认缓存行为：hit · build · coalesced
             const mode = typeof payload?.cache?.action === 'string' ? payload.cache.action : 'build'
             res.setHeader('x-kiln-cache', mode)
             sendJson(res, 200, payload)
@@ -85,7 +89,67 @@ export function apply(ctx) {
           }
         },
       }),
-    `kiln: GET ${FLOW_PATH}`,
+    `kiln: GET ${GRAPH_PATH}`,
+  )
+
+  /**
+   * 详情：`kiln path <id> --json` 单条，点开一个 issue 才取。
+   *
+   * 一次进程（v0.4.0 热读约 30–40ms）；不缓存——HEAD 键控的图缓存管结构，
+   * 详情按需读才简单，也天然是新的。
+   */
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: ISSUE_PATH,
+        handler: async (req, res) => {
+          const rejection = connectionOf(ctx).requestRejection(req)
+          if (rejection !== undefined) {
+            res.statusCode = rejection
+            res.end()
+            return
+          }
+          if (req.method !== 'GET') {
+            res.statusCode = 405
+            res.setHeader('allow', 'GET')
+            res.end()
+            return
+          }
+
+          const url = new URL(String(req.url ?? '/'), 'http://localhost')
+          const cwd = url.searchParams.get('cwd') ?? ''
+          const id = url.searchParams.get('id') ?? ''
+          if (cwd === '') {
+            sendJson(res, 400, { ok: false, reason: 'missing-cwd' })
+            return
+          }
+          if (id === '') {
+            sendJson(res, 400, { ok: false, repo: cwd, reason: 'missing-id' })
+            return
+          }
+          const bin = resolveKiln()
+          if (bin === null) {
+            sendJson(res, 200, { ok: false, repo: cwd, id, reason: 'kiln-missing', generatedAt: new Date().toISOString() })
+            return
+          }
+
+          try {
+            const result = await readIssue(cwd, id)
+            sendJson(res, 200, { ...result, repo: cwd, id, generatedAt: new Date().toISOString() })
+          } catch (error) {
+            sendJson(res, 500, {
+              ok: false,
+              repo: cwd,
+              id,
+              reason: 'internal',
+              message: String(error?.message ?? error),
+              generatedAt: new Date().toISOString(),
+            })
+          }
+        },
+      }),
+    `kiln: GET ${ISSUE_PATH}`,
   )
 
   /**

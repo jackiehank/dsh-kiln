@@ -7,9 +7,8 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 
-import { buildFlow, mapActions, parsePathDocument, pathShapeError, searchDocumentError } from '../lib/flow.js'
-import { applyFocus, createSnapshotCache, evaluateCache } from '../lib/snapshot.js'
-import { parseTrailerRange } from '../lib/git.js'
+import { buildGraph, mapActions, parseIssueDocument, searchDocumentError } from '../lib/flow.js'
+import { createSnapshotCache, evaluateCache } from '../lib/snapshot.js'
 import {
   actionLogArgs,
   actionLogProblem,
@@ -45,26 +44,15 @@ const graphOf = () => ({
   edges: [{ from: 'b', to: 'a', name: 'caused-by' }],
 })
 
-const historyOf = (id, date) => [
-  { ordinal: 1, action: 'ask', id: id === 'a' ? SHA_A : SHA_B, short: id === 'a' ? 'aaaaaaa' : 'bbbbbbb', date, title: `first ${id}` },
-]
-
 function makeFakeFlow() {
   const state = {
     graph: graphOf(),
-    histories: new Map([
-      ['a', historyOf('a', '2026-01-01T00:00:00+08:00')],
-      ['b', historyOf('b', '2026-02-01T00:00:00+08:00')],
-    ]),
     calls: [],
     graphFails: false,
-    /** 头几次 graph 调用直接失败（验证“预取失败要重取”）。 */
-    graphFailures: 0,
     /** 闸门：把取数挂起来，用来排并发请求的时序。 */
     graphGate: null,
-    historyGate: null,
     /** 取数层抛错（例如 kiln 版本过旧）；保持 null 表示正常返回。 */
-    historyError: null,
+    graphError: null,
     /** 每次调用时通知测试（排“是否同时发出”）。 */
     onCall: null,
   }
@@ -76,36 +64,16 @@ function makeFakeFlow() {
     readGraph: async () => {
       note('graph')
       if (state.graphGate !== null) await state.graphGate
-      if (state.graphFailures > 0) {
-        state.graphFailures -= 1
-        return { ok: false, reason: 'kiln-error' }
-      }
+      if (state.graphError !== null) throw state.graphError
       return state.graphFails ? { ok: false, reason: 'not-kiln-repo' } : { ok: true, graph: state.graph }
     },
-    readHistories: async (_repo, ids) => {
-      note(`histories:${ids.join(',')}`)
-      if (state.historyGate !== null) await state.historyGate
-      if (state.historyError !== null) throw state.historyError
-      const out = new Map()
-      for (const id of ids) out.set(id, state.histories.get(id) ?? [])
-      return out
-    },
-    buildFlow: (input) => buildFlow(input),
+    buildGraph: (input) => buildGraph(input),
   }
   return { flow, state }
 }
 
 function makeFakeGit() {
-  const state = {
-    head: 'h1',
-    config: 'c1',
-    bin: 'b1',
-    ancestor: true,
-    delta: { ok: true, ids: new Set() },
-    calls: [],
-    probeGate: null,
-    onCall: null,
-  }
+  const state = { head: 'h1', config: 'c1', bin: 'b1', calls: [], onCall: null }
   const note = (name) => {
     state.calls.push(name)
     if (typeof state.onCall === 'function') state.onCall(name)
@@ -117,22 +85,12 @@ function makeFakeGit() {
     },
     configToken: () => state.config,
     binaryToken: () => state.bin,
-    isAncestor: async () => {
-      note('ancestor')
-      if (state.probeGate !== null) await state.probeGate
-      return state.ancestor
-    },
-    newIssueIds: async () => {
-      note('delta')
-      if (state.probeGate !== null) await state.probeGate
-      return state.delta
-    },
   }
   return { git, state }
 }
 
-const probe = (over = {}) => ({ repo: 'r', head: 'h1', maxIssues: 80, configToken: 'c1', binToken: 'b1', ...over })
-const previous = (over = {}) => ({ repo: 'r', head: 'h1', maxIssues: 80, configToken: 'c1', binToken: 'b1', histories: new Map(), payload: {}, ...over })
+const probe = (over = {}) => ({ repo: 'r', head: 'h1', configToken: 'c1', binToken: 'b1', ...over })
+const previous = (over = {}) => ({ repo: 'r', head: 'h1', configToken: 'c1', binToken: 'b1', payload: {}, ...over })
 
 // ---------------------------------------------------------------- 失效决策
 
@@ -143,146 +101,108 @@ await check('evaluateCache：冷启动 → build', () => {
 await check('evaluateCache：四元组全同 → hit', () => {
   const decision = evaluateCache(previous(), probe())
   assert.equal(decision.action, 'hit')
+  assert.equal(decision.reason, 'head-unchanged')
 })
 
-await check('evaluateCache：HEAD 前进 → changed（交给 ancestor 判断）', () => {
-  const decision = evaluateCache(previous(), probe({ head: 'h2' }))
-  assert.equal(decision.action, 'changed')
+await check('evaluateCache：HEAD 前进 → changed（直接全量重建）', () => {
+  assert.equal(evaluateCache(previous(), probe({ head: 'h2' })).action, 'changed')
 })
 
 await check('evaluateCache：配置变了 → build（未提交也会失效）', () => {
-  const decision = evaluateCache(previous(), probe({ configToken: 'c2' }))
-  assert.equal(decision.action, 'build')
-  assert.equal(decision.reason, 'config-changed')
+  assert.equal(evaluateCache(previous(), probe({ configToken: 'c2' })).reason, 'config-changed')
 })
 
 await check('evaluateCache：kiln 二进制变了 → build', () => {
   assert.equal(evaluateCache(previous(), probe({ binToken: 'b2' })).reason, 'binary-changed')
 })
 
-await check('evaluateCache：容量变了 → build', () => {
-  assert.equal(evaluateCache(previous(), probe({ maxIssues: 40 })).reason, 'capacity-changed')
+await check('evaluateCache：仓库变了 → build', () => {
+  assert.equal(evaluateCache(previous(), probe({ repo: 'other' })).reason, 'repo-changed')
 })
 
-// ---------------------------------------------------------------- focus 叠加
+// ---------------------------------------------------------------- 文档变换
 
-await check('applyFocus：已知 issue 才覆盖', () => {
-  const payload = { focus: 'b', issues: [{ id: 'a' }, { id: 'b' }] }
-  assert.equal(applyFocus(payload, 'a').focus, 'a')
+await check('buildGraph：节点只带结构字段，边缺 directed 时按有向处理', () => {
+  const payload = buildGraph({ repo: 'r', graph: graphOf() })
+  assert.equal(payload.ok, true)
+  assert.equal(payload.issues.length, 2)
+  assert.equal(payload.issues[0].id, 'a')
+  assert.equal(payload.issues[0].done, true)
+  assert.equal(payload.issues[0].actions, undefined, '动作在详情里，不在图节点上')
+  assert.equal(payload.edges[0].directed, true)
+  assert.equal(payload.total, undefined, '不再有 80 条上限与截断标记')
+  assert.equal(payload.truncated, undefined)
 })
 
-await check('applyFocus：未知 issue 原样返回（不静默换人）', () => {
-  const payload = { focus: 'b', issues: [{ id: 'a' }, { id: 'b' }] }
-  assert.equal(applyFocus(payload, 'zzz'), payload)
+await check('buildGraph：长标题按 200 字截断（与列表同一套渲染口径）', () => {
+  const long = 'x'.repeat(260)
+  const payload = buildGraph({ repo: 'r', graph: { nodes: [{ id: 'a', title: long }], edges: [] } })
+  assert.equal(payload.issues[0].title.length, 200)
+  assert.ok(payload.issues[0].title.endsWith('…'))
 })
-
-await check('applyFocus：没有 focus 参数时不动', () => {
-  const payload = { focus: 'b', issues: [{ id: 'b' }] }
-  assert.equal(applyFocus(payload, undefined), payload)
-})
-
-// ---------------------------------------------------------------- 数据层
 
 await check('mapActions：commit 保留完整 sha 并派生短哈希', () => {
-  const actions = mapActions({ actions: [{ ordinal: 1, action: 'ask', commit: SHA_A, date: 'd', title: 't' }] })
-  assert.equal(actions[0].id, SHA_A)
-  assert.equal(actions[0].short, 'aaaaaaa')
+  const mapped = mapActions({
+    actions: [{ ordinal: 1, action: 'ask', commit: SHA_A, date: 'd', title: 't', refs: ['x'] }],
+  })
+  assert.equal(mapped[0].id, SHA_A)
+  assert.equal(mapped[0].short, 'aaaaaaa')
+  assert.deepEqual(mapped[0].refs, ['x'])
 })
 
 await check('mapActions：没有 commit 时给空串（不再读 v0.1.1 的 id）', () => {
-  const actions = mapActions({ actions: [{ ordinal: 1, action: 'ask', id: SHA_B, date: 'd', title: 't' }] })
-  assert.equal(actions[0].id, '')
-  assert.equal(actions[0].short, '')
+  const mapped = mapActions({ actions: [{ ordinal: 1, action: 'ask' }] })
+  assert.equal(mapped[0].id, '')
+  assert.equal(mapped[0].short, '')
 })
 
-await check('parsePathDocument：批量形状 → 每条 issue 的动作；errors 不产生历史', () => {
-  const parsed = parsePathDocument({
-    issues: [
-      { issue: 'a', actions: [{ ordinal: 1, action: 'ask', commit: SHA_A, date: 'd', title: 't' }] },
-      { issue: 'b', actions: [] },
-    ],
-    errors: [{ issue: 'c', error: 'unknown-issue' }],
-  })
-  assert.equal(parsed.kind, 'batch')
-  assert.equal(parsed.histories.get('a')[0].id, SHA_A)
-  assert.deepEqual(parsed.histories.get('b'), [])
-  assert.equal(parsed.histories.has('c'), false)
-})
-
-await check('parsePathDocument：单条形状（一个 id 的合法响应）→ kind=single', () => {
-  const parsed = parsePathDocument({
-    issue: 'a',
-    action: 'ask',
-    done: false,
-    actions: [{ ordinal: 1, action: 'ask', commit: SHA_A, date: 'd', title: 't' }],
-  })
-  assert.equal(parsed.kind, 'single')
-  assert.equal(parsed.histories.get('a')[0].id, SHA_A)
-})
-
-await check('parsePathDocument：形状不认识 → unknown', () => {
-  assert.equal(parsePathDocument({}).kind, 'unknown')
-  assert.equal(parsePathDocument({ issues: 'nope' }).kind, 'unknown')
-  assert.equal(parsePathDocument(null).kind, 'unknown')
-})
-
-await check('pathShapeError：批量 / 单 id 单条放行', () => {
-  assert.equal(pathShapeError({ kind: 'batch' }, 20), null)
-  assert.equal(pathShapeError({ kind: 'single' }, 1), null)
-})
-
-await check('pathShapeError：多 id 却拿到单条 → 明说需要 v0.2.0+（旧版会静默丢 id）', () => {
-  const message = pathShapeError({ kind: 'single' }, 20)
-  assert.match(message, /v0\.2\.0\+/)
-  assert.match(message, /静默丢弃/)
-})
-
-await check('pathShapeError：形状不认识 → 单独报错，不猜', () => {
-  assert.match(pathShapeError({ kind: 'unknown' }, 2), /形状不认识/)
-})
-
-await check('buildFlow：默认焦点取最近动作，边按保留的节点过滤', () => {
-  const payload = buildFlow({ repo: 'r', graph: graphOf(), histories: new Map([['a', historyOf('a', '2026-01-01T00:00:00+08:00')], ['b', historyOf('b', '2026-02-01T00:00:00+08:00')]]) })
-  assert.equal(payload.focus, 'b')
-  assert.equal(payload.edges.length, 1)
-  assert.equal(payload.issues[0].last.title, 'first a')
-})
-
-// ---------------------------------------------------------------- trailer 解析
-
-await check('parseTrailerRange：正常提交 → issue 集合', () => {
-  const stdout = `\u001e${SHA_A}\u001fkiln-a,klin-b\u001fcollect\u001e${SHA_B}\u001fkiln-a\u001fapply`
-  const parsed = parseTrailerRange(stdout)
+await check('parseIssueDocument：单条 pathDoc → 动作 + 这个 issue 的全部边', () => {
+  const parsed = parseIssueDocument(
+    {
+      issue: 'a',
+      action: 'apply',
+      done: true,
+      actions: [{ ordinal: 1, action: 'ask', commit: SHA_A, date: 'd', title: 't' }],
+      relations: [
+        { from: 'a', to: 'b', name: 'relates-to', directed: false },
+        { from: 'c', to: 'a', name: 'part-of' },
+      ],
+    },
+    'a',
+  )
   assert.equal(parsed.ok, true)
-  assert.deepEqual([...parsed.ids].sort(), ['kiln-a', 'klin-b'])
+  assert.equal(parsed.issue.id, 'a')
+  assert.equal(parsed.issue.done, true)
+  assert.equal(parsed.issue.actions.length, 1)
+  assert.equal(parsed.issue.relations.length, 2)
+  assert.equal(parsed.issue.relations[1].directed, true)
 })
 
-await check('parseTrailerRange：chore 提交（两个 trailer 都空）→ 忽略', () => {
-  const parsed = parseTrailerRange(`\u001e${SHA_A}\u001f\u001f`)
-  assert.equal(parsed.ok, true)
-  assert.equal(parsed.ids.size, 0)
+await check('parseIssueDocument：回来的不是请求的 id → 明说，不静默换人', () => {
+  const parsed = parseIssueDocument({ issue: 'b', actions: [] }, 'a')
+  assert.equal(parsed.ok, false)
+  assert.equal(parsed.reason, 'mismatch')
+  assert.match(parsed.message, /b/)
 })
 
-await check('parseTrailerRange：有 action 没 issue → 不可判定', () => {
-  assert.equal(parseTrailerRange(`\u001e${SHA_A}\u001f\u001fcollect`).ok, false)
+await check('parseIssueDocument：形状不认识 → 报 shape（旧版 / 坏输出）', () => {
+  assert.equal(parseIssueDocument({}, 'a').reason, 'shape')
+  assert.equal(parseIssueDocument(null, 'a').reason, 'shape')
+  assert.equal(parseIssueDocument({ issue: 'a', actions: 'nope' }, 'a').reason, 'shape')
 })
 
-await check('parseTrailerRange：字段错位 / 坏 sha → 不可判定', () => {
-  assert.equal(parseTrailerRange(`\u001enot-a-sha\u001fkiln-a\u001fcollect`).ok, false)
-  assert.equal(parseTrailerRange('\u001egarbage').ok, false)
-})
+// ---------------------------------------------------------------- 编排（图缓存）
 
-// ---------------------------------------------------------------- 编排
-
-await check('缓存：首次构建取全部 issue，第二次 HEAD 未动 → 0 次取数', async () => {
+await check('缓存：先探 HEAD 再取图；第二次 HEAD 未动 → 0 次取数', async () => {
   const { flow, state } = makeFakeFlow()
-  const { git } = makeFakeGit()
+  const { git, state: gitState } = makeFakeGit()
   const cache = createSnapshotCache({ git, flow })
 
   const first = await cache.get('r', { bin: 'b1' })
   assert.equal(first.ok, true)
   assert.equal(first.cache.action, 'build')
-  assert.deepEqual(state.calls, ['graph', 'histories:a,b'])
+  assert.deepEqual(gitState.calls, ['head'])
+  assert.deepEqual(state.calls, ['graph'])
 
   state.calls.length = 0
   const second = await cache.get('r', { bin: 'b1' })
@@ -290,53 +210,19 @@ await check('缓存：首次构建取全部 issue，第二次 HEAD 未动 → 0 
   assert.deepEqual(state.calls, [], '命中时不应再取任何数据')
 })
 
-await check('缓存：HEAD 前进且只碰了 a → 只重取 a 的 path', async () => {
+await check('缓存：HEAD 前进 → 整张图重取（不再按 issue 增量）', async () => {
   const { flow, state } = makeFakeFlow()
   const { git, state: gitState } = makeFakeGit()
   const cache = createSnapshotCache({ git, flow })
   await cache.get('r', { bin: 'b1' })
 
   gitState.head = 'h2'
-  gitState.delta = { ok: true, ids: new Set(['a']) }
-  state.histories.set('a', [
-    ...historyOf('a', '2026-01-01T00:00:00+08:00'),
-    { ordinal: 2, action: 'apply', id: SHA_B, short: 'bbbbbbb', date: '2026-03-01T00:00:00+08:00', title: 'second a' },
-  ])
   state.calls.length = 0
-
-  const result = await cache.get('r', { bin: 'b1' })
-  assert.equal(result.cache.action, 'incremental')
-  assert.deepEqual(result.cache.issues, ['a'])
-  assert.deepEqual(state.calls, ['graph', 'histories:a'])
-  assert.equal(result.issues.find((issue) => issue.id === 'a').actions.length, 2)
-})
-
-await check('缓存：历史被改写（不是祖先）→ 全量重建', async () => {
-  const { flow, state } = makeFakeFlow()
-  const { git, state: gitState } = makeFakeGit()
-  const cache = createSnapshotCache({ git, flow })
-  await cache.get('r', { bin: 'b1' })
-
-  gitState.head = 'h9'
-  gitState.ancestor = false
-  state.calls.length = 0
-
   const result = await cache.get('r', { bin: 'b1' })
   assert.equal(result.cache.action, 'build')
-  assert.equal(result.cache.reason, 'history-rewritten')
-  assert.deepEqual(state.calls, ['graph', 'histories:a,b'])
-})
-
-await check('缓存：增量不可判定（trailer 解析失败）→ 全量', async () => {
-  const { flow } = makeFakeFlow()
-  const { git, state: gitState } = makeFakeGit()
-  const cache = createSnapshotCache({ git, flow })
-  await cache.get('r', { bin: 'b1' })
-
-  gitState.head = 'h3'
-  gitState.delta = { ok: false }
-  const result = await cache.get('r', { bin: 'b1' })
-  assert.equal(result.cache.reason, 'delta-unusable')
+  assert.equal(result.cache.reason, 'head-moved')
+  assert.deepEqual(state.calls, ['graph'])
+  assert.equal(result.issues.length, 2)
 })
 
 await check('缓存：配置未提交改动 → 重建（不用等新提交）', async () => {
@@ -349,7 +235,7 @@ await check('缓存：配置未提交改动 → 重建（不用等新提交）',
   state.calls.length = 0
   const result = await cache.get('r', { bin: 'b1' })
   assert.equal(result.cache.reason, 'config-changed')
-  assert.deepEqual(state.calls, ['graph', 'histories:a,b'])
+  assert.deepEqual(state.calls, ['graph'])
 })
 
 await check('缓存：构建失败不写缓存，下次会重试', async () => {
@@ -358,10 +244,8 @@ await check('缓存：构建失败不写缓存，下次会重试', async () => {
   const cache = createSnapshotCache({ git, flow })
   await cache.get('r', { bin: 'b1' })
 
-  // 先制造一次“需要重建”（配置变更），再让 graph 失败
   gitState.config = 'c2'
   state.graphFails = true
-  state.calls.length = 0
   const failed = await cache.get('r', { bin: 'b1' })
   assert.equal(failed.ok, false)
   assert.equal(failed.reason, 'not-kiln-repo')
@@ -370,23 +254,6 @@ await check('缓存：构建失败不写缓存，下次会重试', async () => {
   const retried = await cache.get('r', { bin: 'b1' })
   assert.equal(retried.ok, true)
   assert.equal(retried.cache.reason, 'config-changed')
-})
-
-await check('缓存：取数抛错（如 kiln 版本过旧）→ 带出原因，不写缓存', async () => {
-  const { flow, state } = makeFakeFlow()
-  const { git } = makeFakeGit()
-  const cache = createSnapshotCache({ git, flow })
-  state.historyError = new Error('需要 kiln v0.2.0+：path 批量只回了单条文档')
-
-  const failed = await cache.get('r', { bin: 'b1' })
-  assert.equal(failed.ok, false)
-  assert.equal(failed.reason, 'kiln-error')
-  assert.match(failed.message, /v0\.2\.0\+/)
-
-  state.historyError = null
-  const retried = await cache.get('r', { bin: 'b1' })
-  assert.equal(retried.ok, true)
-  assert.equal(retried.cache.action, 'build')
 })
 
 await check('缓存：读不到 HEAD 时不缓存，但功能不降级', async () => {
@@ -419,15 +286,14 @@ await check('缓存：同仓并发请求只构建一次（连点刷新不跑两�
   const { git } = makeFakeGit()
   const cache = createSnapshotCache({ git, flow })
 
-  // 把取数挂在闸门上：两个请求都进来之后再放行，模拟「构建中又点了一次刷新」
   let release = null
-  state.historyGate = new Promise((resolve) => {
+  state.graphGate = new Promise((resolve) => {
     release = resolve
   })
 
   const first = cache.get('r', { bin: 'b1' })
   const second = cache.get('r', { bin: 'b1' })
-  state.historyGate = null
+  state.graphGate = null
   release()
   const [a, b] = await Promise.all([first, second])
 
@@ -435,7 +301,7 @@ await check('缓存：同仓并发请求只构建一次（连点刷新不跑两�
   assert.equal(b.ok, true)
   assert.equal(a.cache.action, 'build')
   assert.equal(b.cache.action, 'coalesced')
-  assert.deepEqual(state.calls, ['graph', 'histories:a,b'], '一轮构建只该取一遍数')
+  assert.deepEqual(state.calls, ['graph'], '一轮构建只该取一遍图')
   assert.equal(a.issues.length, 2)
   assert.equal(b.issues.length, 2)
 })
@@ -446,16 +312,15 @@ await check('缓存：合并只认同一 HEAD（构建期间 HEAD 又动了就�
   const cache = createSnapshotCache({ git, flow })
 
   let release = null
-  state.historyGate = new Promise((resolve) => {
+  state.graphGate = new Promise((resolve) => {
     release = resolve
   })
 
   const first = cache.get('r', { bin: 'b1' })
-  // 等第一个请求读过 HEAD 并进入构建，再让 HEAD 前进
   await new Promise((resolve) => setImmediate(resolve))
   gitState.head = 'h2'
   const second = cache.get('r', { bin: 'b1' })
-  state.historyGate = null
+  state.graphGate = null
   release()
   const [a, b] = await Promise.all([first, second])
 
@@ -463,55 +328,6 @@ await check('缓存：合并只认同一 HEAD（构建期间 HEAD 又动了就�
   assert.notEqual(b.cache.action, 'coalesced', '不同 HEAD 的记录不能顶给新请求')
   assert.equal(b.ok, true)
   assert.equal(state.calls.filter((call) => call === 'graph').length, 2, '第二个请求要自己取一遍')
-})
-
-await check('缓存：增量时 graph 与两条 git 探测同时发出（不排队）', async () => {
-  const { flow, state } = makeFakeFlow()
-  const { git, state: gitState } = makeFakeGit()
-  const cache = createSnapshotCache({ git, flow })
-  await cache.get('r', { bin: 'b1' })
-
-  gitState.head = 'h2'
-  gitState.delta = { ok: true, ids: new Set(['a']) }
-
-  // 三探都拦在同一个闸门上：串行实现永远等不到「三个都开始」，只能靠超时收场
-  const started = new Set()
-  let release = null
-  const gate = new Promise((resolve) => {
-    release = resolve
-  })
-  const touch = (name) => {
-    if (name !== 'graph' && name !== 'ancestor' && name !== 'delta') return
-    started.add(name)
-    if (started.size === 3) release()
-  }
-  state.onCall = touch
-  gitState.onCall = touch
-  state.graphGate = gate
-  gitState.probeGate = gate
-
-  const timeout = new Promise((_resolve, reject) => {
-    setTimeout(() => reject(new Error('三探没有同时发出（串行会死等）')), 1500).unref?.()
-  })
-  const result = await Promise.race([cache.get('r', { bin: 'b1' }), timeout])
-  assert.equal(result.cache.action, 'incremental')
-  assert.deepEqual([...started].sort(), ['ancestor', 'delta', 'graph'])
-})
-
-await check('缓存：预取的 graph 失败时会重取一次（重试语义不丢）', async () => {
-  const { flow, state } = makeFakeFlow()
-  const { git, state: gitState } = makeFakeGit()
-  const cache = createSnapshotCache({ git, flow })
-  await cache.get('r', { bin: 'b1' })
-
-  gitState.head = 'h2'
-  gitState.delta = { ok: true, ids: new Set(['a']) }
-  state.calls.length = 0
-  state.graphFailures = 1
-
-  const result = await cache.get('r', { bin: 'b1' })
-  assert.equal(result.ok, true, '预取的 graph 失败不该让整次请求失败')
-  assert.equal(state.calls.filter((call) => call === 'graph').length, 2, '失败后要真的重取一次')
 })
 
 let loaded = null

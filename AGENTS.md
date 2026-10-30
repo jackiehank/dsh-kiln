@@ -3,7 +3,7 @@
 本文件是接手 dsh-kiln 的 agent 的工作约定：**这个仓库用 kiln 管理 issue**，所有功能、缺陷、调研
 都由带 `issue:` + `action:` 的提交记录。代码在 diff 里，**为什么这么做只能在提交历史里找到**。
 
-- kiln 手册：本机 `~/kiln/README.md`（v0.3.0，已发布）；上游 <https://github.com/jackiehank/kiln>
+- kiln 手册：本机 `~/kiln/README.md`（v0.4.0，已发布）；上游 <https://github.com/jackiehank/kiln>
 - issue 文档：[`docs/issues/`](docs/issues/)；配图放 `docs/issues/assets/`，文档里用 `assets/<file>.png` 引用
 - 配置：[`.kilnconfig.jsonc`](.kilnconfig.jsonc)
 
@@ -12,11 +12,14 @@
 ## 1. 项目定位
 
 dsh-kiln 是 **DSH（DeepSeek Harness）× kiln** 的接入仓。**形态已定**：一个 DSH profile bundle
-（Host 半 + 浏览器半），只读地把 kiln 的 trailer 投影成会话内的 Flow 视图；代码在 `plugin/`，
+（Host 半 + 浏览器半），只读地把 kiln 的 trailer 投影成会话内的三页视图；代码在 `plugin/`，
 形态结论见 [`docs/issues/kiln-dsh-integration.md`](docs/issues/kiln-dsh-integration.md)。由此：
 
-- **插件只读**：不写 trailer、不造提交、不装 git 钩子、不落盘（拔掉插件，仓库零残留）；
-- **数据只走** `kiln <cmd> --json` 子进程；不在插件里复刻 kiln 的状态解析，也不自建第二份状态；
+- **插件只读**：不写 trailer、不造提交、不装 git 钩子、不落盘（kiln v0.4.0 自己会在 `.git/kiln`
+  写提交记录缓存，那是 kiln 的行为，不是插件的）；
+- **数据只走** `kiln <cmd> --json` 子进程，**一个视图一条命令**：动作流管时间线与 issue 列表、
+  `path <id>` 管详情、`graph` 管关系图、`list --search` 管搜索；不在插件里复刻 kiln 的状态解析，
+  也不自建第二份状态；
 - 视图语义（强弱、层级、方向）从词表推导，不把关系名硬编码进业务判断。
 
 建仓时的规矩留作历史：不预置技术栈、不为填目录写空实现；第一个 issue 的 `ask` 先写清
@@ -32,7 +35,7 @@ kiln 把“问题 → 动作 → 结论”编码成 git commit 的 trailer，`ki
 识别规则只有一条：**一个提交是 kiln 动作，当且仅当同时带 `issue:` 与 `action:`**。普通提交
 （无 trailer）被忽略，所以杂务提交不会污染 issue 列表。
 
-二进制：`kiln`（在 PATH 上，插件 Flow 取数需 v0.2.0+、搜索需 v0.2.1+、时间线需 v0.3.0+）。可用 `DSH_KILN_BIN` 指向本地构建；`kiln --version` 确认。
+二进制：`kiln`（在 PATH 上；插件取数需 v0.2.0+，搜索需 v0.2.1+，动作流与词表需 v0.3.0+）。可用 `DSH_KILN_BIN` 指向本地构建；`kiln --version` 确认。
 安装：`go install github.com/jackiehank/kiln/cmd/kiln@latest`。
 
 ## 3. 配置（仓库根 `.kilnconfig.jsonc`，随仓库提交）

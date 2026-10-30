@@ -16,9 +16,6 @@ const MAX_BUFFER = 1 << 20
 
 /** sha1（40）或 sha256（64）仓库都能匹配。 */
 const HASH = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i
-/** 记录分隔符 / 字段分隔符：比按行解析稳，不依赖 trailer 值的换行形态。 */
-const RECORD = '\u001e'
-const FIELD = '\u001f'
 
 export class GitError extends Error {
   constructor(message) {
@@ -119,47 +116,4 @@ export function binaryToken(bin) {
   } catch {
     return `${bin}:unknown`
   }
-}
-
-/** ancestor 是不是 descendant 的祖先；false 意味着历史被改写或换了分支。 */
-export async function isAncestor(repo, ancestor, descendant) {
-  if (ancestor === descendant) return true
-  const result = await run(repo, ['merge-base', '--is-ancestor', ancestor, descendant])
-  if (result.code === 0) return true
-  if (result.code === 1) return false
-  throw new GitError(`merge-base 失败（exit ${result.code}）`)
-}
-
-/**
- * 纯解析：`git log --format='\x1e%H\x1f<issues>\x1f<actions>'` 的输出 → issue 集合。
- *
- * 不合约定的提交（带 `action:` 却没有 `issue:`）一律判为“不可判定”，
- * 让调用方退回全量重建——宁可多跑，不出错数据。
- */
-export function parseTrailerRange(stdout) {
-  const ids = new Set()
-  for (const chunk of String(stdout ?? '').split(RECORD)) {
-    const text = chunk.trim()
-    if (text === '') continue
-    const fields = text.split(FIELD)
-    if (fields.length < 3) return { ok: false }
-    const sha = fields[0].trim()
-    if (!HASH.test(sha)) return { ok: false }
-    const issues = fields[1].split(',').map((value) => value.trim()).filter(Boolean)
-    const actions = fields[2].split(',').map((value) => value.trim()).filter(Boolean)
-    if (issues.length === 0 && actions.length > 0) return { ok: false }
-    for (const id of issues) ids.add(id)
-  }
-  return { ok: true, ids }
-}
-
-/** 取 `from..to` 区间里每个提交的 issue trailer；失败或不可判定时 ok:false。 */
-export async function newIssueIds(repo, from, to) {
-  const format =
-    `${RECORD}%H${FIELD}` +
-    `%(trailers:key=issue,valueonly,separator=%x2C)${FIELD}` +
-    `%(trailers:key=action,valueonly,separator=%x2C)`
-  const result = await run(repo, ['log', `--format=${format}`, `${from}..${to}`])
-  if (result.code !== 0) return { ok: false }
-  return parseTrailerRange(result.stdout)
 }
