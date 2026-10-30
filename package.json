@@ -3,6 +3,7 @@
   "version": "0.15.1",
   "private": true,
   "type": "module",
+  "main": "./plugin/lib/index.js",
   "description": "DSH 插件：把 kiln 的 issue 与动作历史投影成会话内的三页视图（时间线 / issue / 关系图），只读。本文件只是**转发**：包实体在 plugin/，见 README",
   "license": "MIT",
   "repository": {
@@ -20,6 +21,7 @@
     "./icon": "./plugin/icon.svg"
   },
   "files": [
+    "lib",
     "plugin/lib",
     "plugin/cordis.patch.yml",
     "plugin/locale",

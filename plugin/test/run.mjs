@@ -1728,6 +1728,10 @@ await check('根 package.json 只是转发：名字 / 版本 / 补丁 / 客户�
   for (const rel of [root.exports['.'], root.exports['./client'], root.dsh.bundle.patch, root.exports['./icon']]) {
     assert.ok(existsSync(new URL(`../../${rel}`, import.meta.url)), `${rel} 不存在`)
   }
+  // DSH 的宿主入口按 <包>/lib/index.js 解析（不走 exports），仓库根那层转发不能省
+  const shim = readFileSync(new URL('../../lib/index.js', import.meta.url), 'utf8')
+  assert.match(shim, /export \* from '\.\.\/plugin\/lib\/index\.js'/, '根 lib/index.js 必须转发到 plugin 的宿主半')
+  assert.equal(root.main, './plugin/lib/index.js', 'main 与转发入口一致')
 })
 
 // ---------------------------------------------------------------- 汇总

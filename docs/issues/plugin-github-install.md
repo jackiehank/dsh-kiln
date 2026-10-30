@@ -128,3 +128,35 @@ UI 自己会拒绝；我们控制不了 UI，所以至少 README 要写清「点
 **代价**：两份 manifest 要同步——`name` / `version` / `dsh` 任一处漂移都会被那条新用例打回。
 根那份永远 `private`，npm 仍然只发 `plugin/`。
 
+## 落地（apply 第二轮）：宿主入口不走 exports，要一层 lib/index.js
+
+装完之后的真实报错（用户实测）：
+
+```
+dsh: warning: 1 entry did not activate
+dsh-kiln (@jackiehank/dsh-kiln): failed to import: Error: ENOENT: no such file or directory,
+open '…\node_modules\@jackiehank\dsh-kiln\lib\index.js'
+```
+
+**机制**（从 `app.asar` 里读到的）：DSH 要求宿主半在**包内相对路径 `<包>/lib/index.js`**，
+不认 `exports["."]`；客户端半则是按 `exports["./client"]` 解析的（`dsh-client-modules/lib/index.js`
+里就是这个写法）。所以「整仓安装」时客户端能取到 `plugin/lib/client.js`，宿主那一半却去找
+`<包>/lib/index.js` 然后 ENOENT。
+
+**改法**：包根加一层转发文件 `lib/index.js`（一行 `export * from '../plugin/lib/index.js'`），
+并在根 manifest 里补 `main: "./plugin/lib/index.js"`、把 `lib` 加进 `files`。实现仍然只有一份。
+
+**验证**（沙箱 profile `DSH_HOME=.tmp-dsh-home`，`dsh --profile rootfix headless`）：
+
+```
+dsh: warning: 1 entry did not activate
+dsh-kiln (@jackiehank/dsh-kiln): pending (waiting for services: webServer, connection)
+```
+
+`failed to import / ENOENT` 变成了 `pending`——**导入通了**，只是 headless profile 里没有 `webServer`
+与 `connection` 两个服务（插件声明了 `inject = ['webServer', 'connection']`），在 web / 桌面 profile
+里才有。这就是修复的证据。
+
+测试：`plugin/test/run.mjs` 的那一例补了两条断言——根 `lib/index.js` 必须转发到
+`plugin/lib/index.js`、根 `main` 指向同一入口；仍 **87 + 63**。
+
