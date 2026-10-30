@@ -527,8 +527,63 @@ await check('边淡化：线、箭头、标签按同一个 data-id 一起淡，�
   }
 })
 
-await check('图例淡化：未画类别压到 15%（与图上淡化分开调）', async () => {
-  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
+// ---------------------------------------------------------------- 聚焦分桶（issue 页的关系分组）
+
+/** 取一次 __internals：模块是单例，react 替身无状态，每次重建都等价。 */
+const internals = () => {
+  const stub = {
+    createElement: () => null,
+    Fragment: 'fragment',
+    useRef: (value) => ({ current: value }),
+    useState: (value) => [value, () => {}],
+    useEffect: () => {},
+    useMemo: (fn) => fn(),
+  }
+  return (
+    loaded.factory((name) => {
+      if (name === 'react') return stub
+      throw new Error('unexpected require: ' + name)
+    }).__internals ?? {}
+  )
+}
+
+await check('聚焦分桶：part-of 两个方向各一桶，多父不丢', () => {
+  const { relatedOf } = internals()
+  const view = relatedOf('kid', [
+    { a: 'kid', b: 'p1', rel: 'part-of', directed: true },
+    { a: 'kid', b: 'p2', rel: 'part-of', directed: true },
+    { a: 'k2', b: 'kid', rel: 'part-of', directed: true },
+  ])
+  assert.deepEqual(view.groups.get('part-of|out'), ['p1', 'p2'], '焦点是子：所有父都留下')
+  assert.deepEqual(view.groups.get('part-of|in'), ['k2'], '焦点是父：子进另一桶')
+  assert.deepEqual([...view.ids].sort(), ['k2', 'kid', 'p1', 'p2'])
+})
+
+await check('聚焦分桶：part-of 蕴含的 blocks 不重复、无向边单独一桶、词表外的关系丢掉', () => {
+  const { relatedOf } = internals()
+  const view = relatedOf('kid', [
+    { a: 'kid', b: 'p1', rel: 'part-of', directed: true },
+    { a: 'kid', b: 'p1', rel: 'blocks', directed: true },
+    { a: 'kid', b: 'w', rel: 'blocks', directed: true },
+    { a: 'kid', b: 'r', rel: 'relates-to', directed: false },
+    { a: 'x', b: 'y', rel: 'mystery', directed: true },
+  ])
+  assert.deepEqual(view.groups.get('blocks|out'), ['w'], '父子之间那条 blocks 被 part-of 覆盖')
+  assert.deepEqual(view.groups.get('relates-to|none'), ['r'], '无向边不混进 out / in')
+  assert.ok(!view.ids.has('y'), '词表外的关系不参与取景')
+})
+
+await check('关系分桶的文案：每个桶都拿得到一句带 {n} 的话', () => {
+  const { REL_SIDES } = internals()
+  assert.equal(REL_SIDES.length, 9, '五种关系 → 九个方向桶（relates-to 只有无向一个）')
+  for (const side of REL_SIDES) {
+    assert.match(side.key, /^[a-z-]+\|(out|in|none)$/)
+    assert.match(side.text, /\{n\}/, `${side.key} 的句子要带计数位`)
+  }
+  assert.equal(REL_SIDES.filter((side) => side.dir === 'none').length, 1)
+})
+
+await check('图例淡化：未画类别压到 15%（与图上淡化分开调）', async () => {  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
   const mod = loaded.factory((name) => {
     if (name === 'react') return reactStub
     throw new Error('unexpected require: ' + name)
@@ -677,7 +732,7 @@ await check('hover：只有一条"叠一层"的规则，三页的元素都在里
   assert.equal(css.split(layer).length - 1, 1, 'hover 底色只定义一次（变量），各处引用它')
   const at = css.indexOf('background-image:var(--dkf-hover-layer)')
   const selector = css.slice(css.lastIndexOf('}', at) + 1, css.indexOf('{', at))
-  for (const name of ['refresh', 'focuschip', 'tab', 'modebtn', 'row', 'focus', 'crumb', 'subrow', 'arow', 'toggle', 'focusbtn']) {
+  for (const name of ['refresh', 'focuschip', 'tab', 'modebtn', 'row', 'focus', 'subrow', 'arow', 'toggle', 'focusbtn']) {
     assert.ok(selector.includes(`.dkf-${name}:hover`), `.dkf-${name} 必须走同一条 hover 规则`)
   }
   assert.ok(!css.includes('background:var(--dkf-hover)'), '不能再退回"直接换底色"的写法（会盖掉焦点行的底色）')

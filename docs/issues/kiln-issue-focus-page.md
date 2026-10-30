@@ -188,3 +188,10 @@ issue 页始终全量；有焦点时在列表上方插一张“焦点卡片”�
 2. 焦点为空的 issue（没有任何关系，`~/kiln` 有 6 个）现在只剩焦点行 + 它的动作；是否补一句
    “这个 issue 还没有关系”。
 3. 聚焦态下节点标签与边标签（`kiln-graph-label-threshold` deferred 的两项）仍未动。
+
+## 后续修订：行内不再带关系名与箭头
+
+上面「行内仍带 `→ ←` 与关系名」这一句已被
+[`kiln-relation-direction`](kiln-relation-direction.md) 取代：箭头没有主语，`← caused-by` 要读者
+自己判断谁是因谁是果，父还只取 `parent[0]`。现在每个方向是一句以「我」为主语的话
+（「我由 1 个 issue 引发」），行内只剩 issue 本身。分工本身（关系页看图、issue 页读文字）不变。

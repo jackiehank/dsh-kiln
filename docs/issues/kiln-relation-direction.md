@@ -106,11 +106,41 @@ issue 页的聚焦态负责把焦点周围的关系读成文字（`kiln-issue-fo
    `part-of|in`），相邻渲染、样式一致。多父因此天然支持（旧版 `view.parent[0]` 会丢）。
 3. **行内不加「父 / 因」这类短标注**。标题已经说尽；行内再标一次是同一句话重复两遍。
 
-## 落地位置
+## 落地（apply）
 
-- `plugin/lib/client.js`：`GROUPS` → `REL_SIDES`（方向分桶 + 句子模板）；`relatedOf`（`:800`）
-  按桶收邻居，删掉 `parent` / `children` 两个特例出口；`IssueFocusList`（`:1857`）改成一组一个
-  循环，删掉 crumb 分支与 `strongGroups` 过滤；`.dkf-crumb` 的 CSS 一并删除。
-- `plugin/test/render.mjs`：表头文案、`dkf-edge` 不再出现、多父用例、父子两向。
-- `plugin/test/run.mjs`：hover 规则里的 `crumb` 名单去掉。
-- 关系页与图例不动（本仓无箭头可对，列表侧不再产生箭头，原先的"与图例反向"随之消失）。
+代码只在 `plugin/lib/client.js`，三处：
+
+1. `REL_SIDES`（`:230`）取代 `GROUPS`：九个方向桶，每桶一句带 `{n}` 的中文。句子是展示表，
+   方向由数据判（`out` = 焦点是 `a`，`in` = 焦点是 `b`，无向边 `none`）。
+2. `relatedOf`（`:817`）：按桶收邻居，删掉 `parent` / `children` 两个特例出口，改为
+   `{ groups, ids }`；`part-of` 仍覆盖它蕴含的 `blocks`（父子之间不重复列一条「阻塞」）；
+   词表外的关系照样丢弃。
+3. `IssueFocusList`（`:1856`）：一组一个循环，空桶不渲染；表头 `side.text.replace('{n}', n)`，
+   折叠只留给可能很长的子 issue 桶（>4 条）；行内删掉 `dkf-edge`，关系原词退到表头的
+   `data-hint`（悬停可见）。顺带删掉 `IssueRow` 的 `edge` 入参、`.dkf-edge` 与 `.dkf-crumb`
+   两条样式。
+
+**真数据核对**（`kiln graph --json` 的边喂给 `relatedOf`，本仓 29 issue / 46 边）：
+
+```
+== kiln-many-issues
+  2 个子 issue 属于我   -> kiln-input-streams, kiln-list-window
+  我由 1 个 issue 引发  -> kiln-search
+  7 个弱关联（无方向）  -> kiln-cache-budget, …, kiln-v040-adapter
+== kiln-flow-focus-ui
+  我由 1 个 issue 引发  -> kiln-dsh-integration
+  我引发了 1 个 issue   -> kiln-views-shared-focus
+== kiln-list-window
+  我属于 1 个母 issue   -> kiln-many-issues
+```
+
+因果链因此在两端都读得通：在 `kiln-flow-focus-ui` 上是「我由 A 引发 / 我引发了 B」，在
+`kiln-search` 上是「我引发了 kiln-many-issues」——同一对 issue 换个焦点，方向词自动翻面，
+不再出现「同一段文字两种读法」。
+
+测试：`npm test --prefix plugin` → 85（宿主）+ 61（渲染），原为 82 + 58。新增四例：表头一句话
+且行内无 `dkf-edge`、多父全出现、父看子（含 >4 折叠）、因果与阻塞各两向；`run.mjs` 另加三例
+分桶单测（多父、`part-of` 吞 `blocks`、未知关系丢弃、九个桶都带 `{n}`）。
+
+**代价（记下来）**：一个 issue 有九种可能的表头，但只有非空的才渲染（本仓最多三块同现）；
+句子比原来的 `因果 · caused-by 1` 长，侧栏窄到 ~300px 时会占两行——换来的是一眼看懂方向。

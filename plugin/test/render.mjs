@@ -561,22 +561,120 @@ check('issue 页聚焦：只留焦点与相关 issue，且焦点钉在第一条'
 
 // ---------------------------------------------------------------- issue 页（聚焦态）
 
-check('issue 页聚焦：按结构分组，行内带关系名与方向', () => {
+/** 关系形状的专用 fixture：不必挤进上面那份三 issue 的快照里。 */
+const graphOf = (issues, edges) => ({
+  ok: true,
+  repo: '/repo',
+  generatedAt: '2026-10-25T00:00:00+08:00',
+  focus: null,
+  issues,
+  edges,
+  total: issues.length,
+  truncated: false,
+  cache: { action: 'hit' },
+})
+/** 动作流（宿主的 7 槽行）；聚焦态的邻居先经 byId 才成行。 */
+const streamFrom = (issues) => {
+  const rows = issues.flatMap((item) =>
+    item.actions.map((a) => rowOf(item.id, a.action, a.id, a.date, a.title, item.domain, null)),
+  )
+  return { rows, phase: 'done', error: null, ms: 1, count: rows.length }
+}
+/** `path <id>` 会给回来的那份：动作 + 这个 issue 的全部边。 */
+const detailOf = (graph, id) => ({
+  id,
+  phase: 'ready',
+  error: null,
+  issue: {
+    id,
+    done: false,
+    actions: graph.issues.find((item) => item.id === id).actions.map((a) => ({ ...a, refs: [] })),
+    relations: graph.edges
+      .filter((edge) => edge.from === id || edge.to === id)
+      .map((edge) => ({ ...edge, directed: edge.directed !== false })),
+  },
+})
+/** 聚焦一个自造 fixture 里的 issue：列表来自流、边来自 detail。 */
+const renderFocus = (graph, focusId, extra = {}) =>
+  render({
+    tabId: 'issue',
+    focusId,
+    graph,
+    timeline: streamFrom(graph.issues),
+    detail: detailOf(graph, focusId),
+    ...extra,
+  })
+const byId = (tree) => byClass(tree, 'dkf-row').map((row) => textOf(byClass(row, 'dkf-id')[0]))
+const headsOf = (tree) => byClass(tree, 'dkf-group-head').map(textOf)
+
+/** 伞 issue p1 挂 k1…k6；k1 还挂在 p2 上——旧版 `parent[0]` 只会显示 p1 或 p2 一个。 */
+const familyIssues = ['p1', 'p2', 'k1', 'k2', 'k3', 'k4', 'k5', 'k6'].map((id, index) =>
+  issue(id, [action('ask', index + 1, `2026-10-0${(index % 9) + 1}T0${index % 10}:00:00+08:00`)]),
+)
+const familyGraph = graphOf(familyIssues, [
+  ...['k1', 'k2', 'k3', 'k4', 'k5', 'k6'].map((child) => ({ from: child, to: 'p1', name: 'part-of' })),
+  { from: 'k1', to: 'p2', name: 'part-of' },
+])
+
+/** 因果与阻塞的四条边，方向都朝两边各给一条（`caused-by` 的 from 是果、to 是因）。 */
+const flowIssues = ['kid', 'origin', 'effect', 'waiter', 'bout', 'old'].map((id, index) =>
+  issue(id, [action('ask', index + 1, `2026-10-0${index + 1}T0${index}:00:00+08:00`)]),
+)
+const flowGraph = graphOf(flowIssues, [
+  { from: 'kid', to: 'origin', name: 'caused-by' },
+  { from: 'effect', to: 'kid', name: 'caused-by' },
+  { from: 'kid', to: 'waiter', name: 'blocks' },
+  { from: 'bout', to: 'kid', name: 'blocks' },
+  { from: 'kid', to: 'old', name: 'supersedes' },
+])
+
+check('issue 页聚焦：一组一句方向话，行内不再有箭头与关系名', () => {
   const focused = render({ tabId: 'issue', focusId: 'a' })
-  const heads = byClass(focused, 'dkf-group-head').map(textOf)
-  assert.deepEqual(heads, ['因果 · caused-by 1', '弱关联 · relates-to 1'])
-  const edges = byClass(focused, 'dkf-edge').map((node) => textOf(node).trim())
-  assert.deepEqual(edges, ['← caused-by'], 'b 引发了 a，所以从 a 看是 ←')
+  const heads = headsOf(focused)
+  // 边是 b → a 的 caused-by，即「b 由 a 引发」：a 是因，所以从 a 看是「我引发了 b」
+  assert.deepEqual(heads, ['我引发了 1 个 issue', '1 个弱关联（无方向）'])
+  assert.equal(byClass(focused, 'dkf-edge').length, 0, '行内不该再有箭头或关系名')
+  const rows = byClass(focused, 'dkf-row')
+  assert.equal(textOf(byClass(rows[1], 'dkf-id')[0]), 'b', '行内只剩 issue id')
+  const hints = byClass(focused, 'dkf-group-head').map((node) => node.props['data-hint'])
+  assert.deepEqual(hints, ['caused-by', 'relates-to'], '原词退到 hint 里，供跟 kiln 文档对照')
 })
 
-check('issue 页聚焦：弱关联默认展开，没有「+N 弱关联」按钮', () => {
+check('issue 页聚焦：多父全部出现，不再只取第一个', () => {
+  const focused = renderFocus(familyGraph, 'k1')
+  assert.deepEqual(headsOf(focused), ['我属于 2 个母 issue'])
+  assert.deepEqual(byId(focused), ['k1', 'p2', 'p1'], '同桶内按最近在前，两个父都在')
+})
+
+check('issue 页聚焦：父看子是同一套话，超过 4 条才折叠', () => {
+  const focused = renderFocus(familyGraph, 'p1')
+  assert.equal(byClass(focused, 'dkf-group-head')[0].children[0], '6 个子 issue 属于我')
+  assert.equal(byClass(focused, 'dkf-toggle').length, 1)
+  assert.match(textOf(byClass(focused, 'dkf-toggle')[0]), /展开全部 6/)
+  assert.equal(byId(focused).length, 5, '焦点 + 前 4 条')
+  const all = renderFocus(familyGraph, 'p1', { children: true })
+  assert.equal(byId(all).length, 7, '展开后焦点 + 6 条')
+  assert.match(textOf(byClass(all, 'dkf-toggle')[0]), /收起/)
+})
+
+check('issue 页聚焦：因果与阻塞各说两向，谁的因谁的果写在句子里', () => {
+  const focused = renderFocus(flowGraph, 'kid')
+  assert.deepEqual(headsOf(focused), [
+    '我阻塞 1 个 issue',
+    '1 个 issue 阻塞我',
+    '我取代了 1 个 issue',
+    '我由 1 个 issue 引发',
+    '我引发了 1 个 issue',
+  ])
+  assert.deepEqual(byId(focused), ['kid', 'waiter', 'bout', 'old', 'origin', 'effect'])
+})
+
+check('issue 页聚焦：弱关联默认展开，没有「+N 强关系」按钮', () => {
   const focused = render({ tabId: 'issue', focusId: 'a' })
   assert.equal(byClass(focused, 'dkf-toggle').length, 0)
   const ids = byClass(focused, 'dkf-row').map((row) => textOf(byClass(row, 'dkf-id')[0]))
   assert.equal(ids.length, 3, '焦点 + 强关系 + 弱关联各一行')
-  assert.match(ids[0], /^a$/)
-  assert.match(ids[1], /caused-by\s+b$/)
-  assert.match(ids[2], /^c$/)
+  assert.deepEqual(ids, ['a', 'b', 'c'])
 })
 
 check('issue 页聚焦：焦点行默认展开它的动作，点一下收起', () => {

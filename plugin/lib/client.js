@@ -215,14 +215,29 @@ window.__ModuleLoader__.load({
       'superseded-by': 'supersedes',
       causes: 'caused-by',
     }
-    /** 强弱：ordering 槽整体强于 lineage 槽；组内 rank 越大越强。 */
-    const GROUPS = [
-      { rel: 'part-of', slot: 'ordering', rank: 2, label: '母 issue', edge: 'part-of' },
-      { rel: 'blocks', slot: 'ordering', rank: 1, label: '阻塞', edge: 'blocks' },
-      { rel: 'supersedes', slot: 'lineage', rank: 3, label: '取代', edge: 'supersedes' },
-      { rel: 'caused-by', slot: 'lineage', rank: 2, label: '因果', edge: 'caused-by' },
-      { rel: 'relates-to', slot: 'lineage', rank: 1, label: '弱关联', edge: 'relates-to' },
-    ]
+    /**
+     * 关系按**方向**分桶，每桶一句中文。`dir` 说的是焦点站在哪一头：
+     * `out` = 数据里 `a 关系 b` 的 a（焦点是主语），`in` = b（焦点是宾语）。
+     *
+     * 这是**展示表**，不是业务判断：方向由 `a/b` 与焦点的比较得出，文案按 `(rel, dir)` 查表，
+     * 没有按关系名写的 `if`——词表外再多一种关系，缺的是一行文案，不是新分支。
+     * 句子一律以「我」（焦点）为主语，计数 `{n}` 写进句子里，行内于是不需要箭头，也不需要
+     * `part-of` 这类原词（见 docs/issues/kiln-relation-direction.md）。
+     *
+     * 顺序即渲染顺序：沿用旧的强弱次序 part-of → blocks → supersedes → caused-by → relates-to。
+     * `foldable`：这一桶可能很长（伞 issue 的子 issue），超过 4 条先折叠。
+     */
+    const REL_SIDES = [
+      { rel: 'part-of', dir: 'out', text: '我属于 {n} 个母 issue' },
+      { rel: 'part-of', dir: 'in', text: '{n} 个子 issue 属于我', foldable: true },
+      { rel: 'blocks', dir: 'out', text: '我阻塞 {n} 个 issue' },
+      { rel: 'blocks', dir: 'in', text: '{n} 个 issue 阻塞我' },
+      { rel: 'supersedes', dir: 'out', text: '我取代了 {n} 个 issue' },
+      { rel: 'supersedes', dir: 'in', text: '{n} 个 issue 取代了我' },
+      { rel: 'caused-by', dir: 'out', text: '我由 {n} 个 issue 引发' },
+      { rel: 'caused-by', dir: 'in', text: '我引发了 {n} 个 issue' },
+      { rel: 'relates-to', dir: 'none', text: '{n} 个弱关联（无方向）' },
+    ].map((side) => ({ ...side, key: `${side.rel}|${side.dir}` }))
     /** 颜色只由 action 类型决定；三页共用同一张表。词表外的动作给中性色，不猜。 */
     const ACTION_COLOR = {
       ask: '#5b8def',
@@ -417,8 +432,8 @@ window.__ModuleLoader__.load({
  * 可点控件的文字顺带提到 primary；行不需要（标题本来就是 primary）。
  * 不做过渡：这类即时反馈在宿主里也是直接切（图上的 .12s 只给淡化/焦点那种状态变化）。
  */
-.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-row:hover,.dkf-focus:hover,.dkf-crumb:hover,.dkf-subrow:hover,.dkf-arow:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover,.dkf-hit:hover{background-image:var(--dkf-hover-layer)}
-.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-crumb:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover,.dkf-hit:hover{color:var(--dkf-fg)}
+.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-row:hover,.dkf-focus:hover,.dkf-subrow:hover,.dkf-arow:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover,.dkf-hit:hover{background-image:var(--dkf-hover-layer)}
+.dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover,.dkf-hit:hover{color:var(--dkf-fg)}
 /* 页头第一层：三栏网格——左右两栏等宽，搜索框因此是**真居中**（不是"剩下的空白居中"） */
 .dkf-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(96px,min(360px,40%)) minmax(0,1fr);align-items:center;gap:8px;padding:0 12px;min-height:34px;border-bottom:.5px solid var(--dkf-line);flex:none}
 .dkf-repo{font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body);font-weight:600;color:var(--dkf-fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
@@ -482,13 +497,11 @@ window.__ModuleLoader__.load({
 .dkf-focus{background:var(--dkf-bg2);box-shadow:inset 0 0 0 .5px var(--dkf-line)}
 .dkf-clickable{cursor:pointer}
 .dkf-indent{margin-left:18px}
-.dkf-crumb{color:var(--dkf-fg2);cursor:pointer;padding:2px 6px;width:max-content;border-radius:var(--dkf-r);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-strip{display:inline-flex;gap:1px;align-items:center}
 .dkf-block{width:3px;height:11px;border-radius:1px;background:var(--dkf-fg3);opacity:.55}
 .dkf-block-current{height:13px;opacity:1}
 .dkf-caret{color:var(--dkf-fg3);width:10px;text-align:center;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-id{font-family:var(--dkf-mono);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta);font-weight:500;color:var(--dkf-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
-.dkf-edge{font-family:var(--dkf-mono);color:var(--dkf-fg3)}
 .dkf-badges{display:inline-flex;gap:4px;align-items:center;flex:none}
 .dkf-chip{padding:0 4px;border-radius:var(--dkf-r);color:var(--dkf-fg2);white-space:nowrap;box-shadow:inset 0 0 0 .5px var(--dkf-line);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-chip-done{color:var(--dkf-ok);box-shadow:inset 0 0 0 .5px currentColor}
@@ -794,13 +807,15 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 以 focus 为根折成“面包屑 + 分组邻居”，并给出本次取景的 issue 集合。
-     * part-of 蕴含的 blocks 边被 part-of 覆盖，不重复显示。
+     * 以 focus 为根折成「按方向分桶」的邻居，并给出本次取景的 issue 集合。
+     *
+     * 父与子不再是两种特例：它们只是 `part-of` 的两个方向（`out` = 我是子，`in` = 我是父），
+     * 于是多父 / 多子都自然成立。旧版把父收在 `parent[0]` 里，第二个父会被静默丢掉。
+     * 桶里不排序（调用处按“最近在前”排），桶外不出现任何关系名——见 `REL_SIDES`。
+     * `part-of` 蕴含的 `blocks` 边仍被 `part-of` 覆盖，不重复显示。
      */
     function relatedOf(focus, relations) {
-      const parent = []
-      const children = []
-      const groups = new Map(GROUPS.map((group) => [group.rel, []]))
+      const groups = new Map(REL_SIDES.map((side) => [side.key, []]))
       const ids = new Set([focus])
 
       const partOfPairs = new Set()
@@ -811,34 +826,17 @@ window.__ModuleLoader__.load({
       }
 
       for (const relation of relations) {
-        if (relation.rel === 'part-of') {
-          if (relation.a === focus) parent.push(relation.b)
-          else if (relation.b === focus) children.push(relation.a)
-          continue
-        }
-        if (relation.rel === 'blocks') {
-          const other = relation.a === focus ? relation.b : relation.b === focus ? relation.a : null
-          if (other === null) continue
-          if (partOfPairs.has(`${focus}\u0000${other}`)) continue
-          groups.get('blocks').push({ id: other, arrow: relation.a === focus ? '→' : '←' })
-          continue
-        }
-        if (relation.rel === 'relates-to') {
-          if (relation.a !== focus && relation.b !== focus) continue
-          groups.get('relates-to').push({ id: relation.a === focus ? relation.b : relation.a, arrow: '⇄' })
-          continue
-        }
-        if (relation.rel === 'supersedes' || relation.rel === 'caused-by') {
-          const other = relation.a === focus ? relation.b : relation.b === focus ? relation.a : null
-          if (other === null) continue
-          groups.get(relation.rel).push({ id: other, arrow: relation.a === focus ? '→' : '←' })
-        }
+        if (relation.a !== focus && relation.b !== focus) continue
+        const other = relation.a === focus ? relation.b : relation.a
+        if (relation.rel === 'blocks' && partOfPairs.has(`${focus}\u0000${other}`)) continue
+        const dir = relation.directed === false ? 'none' : relation.a === focus ? 'out' : 'in'
+        const bucket = groups.get(`${relation.rel}|${dir}`)
+        if (bucket === undefined) continue
+        bucket.push(other)
       }
 
-      for (const id of parent) ids.add(id)
-      for (const id of children) ids.add(id)
-      for (const list of groups.values()) for (const entry of list) ids.add(entry.id)
-      return { parent, children, groups, ids }
+      for (const list of groups.values()) for (const id of list) ids.add(id)
+      return { groups, ids }
     }
 
     /**
@@ -1514,7 +1512,6 @@ window.__ModuleLoader__.load({
           h(
             'span',
             { className: 'dkf-id', 'data-hint': issue.id },
-            props.edge !== undefined ? h('span', { className: 'dkf-edge' }, ` ${props.edge} `) : null,
             issue.id,
           ),
           h(
@@ -1847,26 +1844,23 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * issue 页的聚焦态：把焦点周围的关系按“结构”分组读出来。
+     * issue 页的聚焦态：把焦点周围的关系按方向读出来（`REL_SIDES` 一人一句）。
      *
      * 这块从关系页的“列表”取景搬来（见 docs/issues/kiln-issue-focus-page.md）：关系页只剩图，
-     * 关系名与方向这些“读得出来”的东西集中在这一页。两处有意和旧版不同：
+     * 关系名与方向这些“读得出来”的东西集中在这一页。三处有意和旧版不同：
      *   · 弱关联默认展开——`~/kiln` 的数据说折叠时 55% 的焦点只剩焦点自己一行；
-     *   · 焦点行默认展开它的动作，让“没有邻居”的焦点也有内容。
+     *   · 焦点行默认展开它的动作，让“没有邻居”的焦点也有内容；
+     *   · 方向写在表头的句子里（「我由 1 个 issue 引发」），行内不画箭头——同一个桶里所有行的
+     *     方向必然相同，逐行标一遍只是重复（见 docs/issues/kiln-relation-direction.md）。
      */
     function IssueFocusList(props) {
       const view = props.view
       const focus = props.focus
-      const children = view.children
-        .map((id) => props.byId.get(id))
-        .filter(Boolean)
-        .sort(byRecency)
-      const visibleChildren = props.expandedChildren || children.length <= 4 ? children : children.slice(0, 4)
-      const weak = (view.groups.get('relates-to') ?? [])
-        .map((entry) => props.byId.get(entry.id))
-        .filter(Boolean)
-        .sort(byRecency)
-      const strongGroups = GROUPS.filter((group) => group.rel !== 'part-of' && group.rel !== 'relates-to')
+      /** 一组一个桶：先按处置顺序遍历 `REL_SIDES`，空桶不渲染。行内按“最近在前”排。 */
+      const buckets = REL_SIDES.map((side) => ({
+        side,
+        rows: (view.groups.get(side.key) ?? []).map((id) => props.byId.get(id)).filter(Boolean).sort(byRecency),
+      })).filter((bucket) => bucket.rows.length > 0)
 
       const rowProps = (issue, extra) => ({
         issue,
@@ -1891,58 +1885,27 @@ window.__ModuleLoader__.load({
             }),
           },
         ),
-        view.parent.length > 0
-          ? h(
-              'div',
-              { className: 'dkf-crumb', onClick: () => props.onFocus(view.parent[0]), 'data-hint': '切到母 issue' },
-              `↑ part-of: ${view.parent[0]}`,
-            )
-          : null,
-        children.length > 0
-          ? h(
-              'div',
-              { className: 'dkf-group' },
-              h(
-                'div',
-                { className: 'dkf-group-head' },
-                `子 issue · part-of ${children.length}`,
-                children.length > 4
-                  ? h(
-                      'button',
-                      { type: 'button', className: 'dkf-toggle', onClick: props.onToggleChildren },
-                      props.expandedChildren ? '收起' : `展开全部 ${children.length}`,
-                    )
-                  : null,
-              ),
-              visibleChildren.map((child) => h(IssueRow, { key: child.id, ...rowProps(child, { indent: true }) })),
-            )
-          : null,
-        strongGroups.map((group) => {
-          const rows = (view.groups.get(group.rel) ?? [])
-            .map((entry) => ({ entry, issue: props.byId.get(entry.id) }))
-            .filter((row) => row.issue !== undefined)
-            .sort((left, right) => byRecency(left.issue, right.issue))
-          if (rows.length === 0) return null
+        buckets.map(({ side, rows }) => {
+          const foldable = side.foldable === true && rows.length > 4
+          const visible = foldable && !props.expandedChildren ? rows.slice(0, 4) : rows
           return h(
             'div',
-            { className: 'dkf-group', key: group.rel },
-            h('div', { className: 'dkf-group-head' }, `${group.label} · ${group.edge} ${rows.length}`),
-            rows.map(({ entry, issue }) =>
-              h(IssueRow, {
-                key: `${group.rel}-${issue.id}`,
-                ...rowProps(issue, { edge: `${entry.arrow} ${group.edge}` }),
-              }),
+            { className: 'dkf-group', key: side.key },
+            h(
+              'div',
+              { className: 'dkf-group-head', 'data-hint': side.rel },
+              side.text.replace('{n}', String(rows.length)),
+              foldable
+                ? h(
+                    'button',
+                    { type: 'button', className: 'dkf-toggle', onClick: props.onToggleChildren },
+                    props.expandedChildren ? '收起' : `展开全部 ${rows.length}`,
+                  )
+                : null,
             ),
+            visible.map((issue) => h(IssueRow, { key: `${side.key}-${issue.id}`, ...rowProps(issue, { indent: true }) })),
           )
         }),
-        weak.length > 0
-          ? h(
-              'div',
-              { className: 'dkf-group' },
-              h('div', { className: 'dkf-group-head' }, `弱关联 · relates-to ${weak.length}`),
-              weak.map((issue) => h(IssueRow, { key: `weak-${issue.id}`, ...rowProps(issue, { indent: true }) })),
-            )
-          : null,
       )
     }
 
@@ -3559,6 +3522,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@jackiehank/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, actionsCache, timelineCache, rememberTimeline, mergeTimelineRows, nextSearchIndex, jumpPlan, rowKeyOf, buildOffsets, virtualWindow, ROW, rowIssue, rowAction, rowCommit, rowDate, rowTitle, rowDomain, rowShort, rowTags, createRowInterner, css: CSS } } : {}) }
+    return { name: '@jackiehank/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, relatedOf, REL_SIDES, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, actionsCache, timelineCache, rememberTimeline, mergeTimelineRows, nextSearchIndex, jumpPlan, rowKeyOf, buildOffsets, virtualWindow, ROW, rowIssue, rowAction, rowCommit, rowDate, rowTitle, rowDomain, rowShort, rowTags, createRowInterner, css: CSS } } : {}) }
   },
 })
