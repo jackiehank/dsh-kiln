@@ -1082,24 +1082,44 @@ await check('词表缓存键：仓库 / 配置 / 二进制任一变化都换键'
   assert.notEqual(a, c)
 })
 
-await check('搜索结果键盘：到末尾且还有结果时指向“追加后第一项”，否则回绕', () => {
+await check('搜索结果键盘：在结果里上下移动，到两端回绕', () => {
   const { nextSearchIndex } = clientInternals()
-  assert.equal(nextSearchIndex(-1, 100, 1, true), 0)
-  assert.equal(nextSearchIndex(3, 100, 1, true), 4)
-  assert.equal(nextSearchIndex(99, 100, 1, true), 100, '末尾且还有：指向追加后的第一项')
-  assert.equal(nextSearchIndex(99, 100, 1, false), 0, '没有更多就回绕')
-  assert.equal(nextSearchIndex(0, 100, -1, true), 99)
-  assert.equal(nextSearchIndex(0, 100, -1, false), 99)
-  assert.equal(nextSearchIndex(-1, 0, 1, false), -1, '没有结果')
+  assert.equal(nextSearchIndex(-1, 100, 1), 0)
+  assert.equal(nextSearchIndex(3, 100, 1), 4)
+  assert.equal(nextSearchIndex(99, 100, 1), 0, '末尾向下回绕到第一条')
+  assert.equal(nextSearchIndex(0, 100, -1), 99, '第一条向上回绕到最后一条')
+  assert.equal(nextSearchIndex(-1, 0, 1), -1, '没有结果')
 })
 
-await check('搜索跳转：流没读完先等、窗口外一次扩到位、已挂就滚、结束仍没有才放弃', () => {
+await check('搜索跳转：流没读完先等，流结束仍没有才放弃，否则按索引滚', () => {
   const { jumpPlan } = clientInternals()
-  assert.equal(jumpPlan(-1, 100, true), 'wait', '目标还没进数据：等流')
-  assert.equal(jumpPlan(-1, 100, false), 'give-up', '流读完仍没有：放弃')
-  assert.equal(jumpPlan(150, 100, false), 'extend', '在窗口外：扩窗')
-  assert.equal(jumpPlan(99, 100, true), 'scroll', '已挂出来：滚')
-  assert.equal(jumpPlan(0, 100, false), 'scroll')
+  assert.equal(jumpPlan(-1, true), 'wait', '目标还没进数据：等流')
+  assert.equal(jumpPlan(-1, false), 'give-up', '流读完仍没有：放弃')
+  assert.equal(jumpPlan(0, false), 'scroll')
+  assert.equal(jumpPlan(150, true), 'scroll', '索引已定：直接按高度表滚过去')
+})
+
+await check('虚拟化：前缀高度表用真实高度、缺的用估算', () => {
+  const { buildOffsets, rowKeyOf } = clientInternals()
+  const rows = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+  const heights = new Map([['issue\u0000b', 50]])
+  const offsets = buildOffsets(rows, 'issue', heights, 30)
+  assert.deepEqual(Array.from(offsets), [0, 30, 80, 110])
+  assert.equal(rowKeyOf('timeline', { id: 'sha', issueId: 'x' }), 'sha')
+  assert.equal(rowKeyOf('issue', { id: 'x' }), 'x')
+})
+
+await check('虚拟化：可视区取 scrollTop ± overscan，小列表整份渲染', () => {
+  const { buildOffsets, virtualWindow } = clientInternals()
+  const rows = Array.from({ length: 100 }, (_value, index) => ({ id: `r${index}` }))
+  const offsets = buildOffsets(rows, 'issue', new Map(), 30)
+  const window = virtualWindow(offsets, 100, 3000, 480, 600)
+  assert.equal(window.start, 80, '3000 - 600 = 2400 → 第 80 行')
+  assert.equal(window.end, 100, '底部超过总高，截到 100')
+  assert.equal(window.top, 2400)
+  assert.equal(window.bottom, 0)
+  const small = virtualWindow(buildOffsets(rows.slice(0, 4), 'issue', new Map(), 30), 4, 0, 480, 600)
+  assert.deepEqual(small, { start: 0, end: 4, top: 0, bottom: 0 })
 })
 
 // ---------------------------------------------------------------- 汇总

@@ -30,7 +30,7 @@ function expand(node) {
   if (node === null || node === undefined) return node
   if (Array.isArray(node)) return node.map(expand)
   if (typeof node !== 'object') return node
-  if (typeof node.type === 'function') return expand(node.type(node.props))
+  if (typeof node.type === 'function') return expand(node.type({ ...node.props, children: node.children }))
   return { ...node, children: (node.children ?? []).map(expand) }
 }
 
@@ -222,7 +222,9 @@ function render({
   timeline = timelineFixture,
   vocab = vocabFixture,
   graph = payload,
-  windowLimit = 100,
+  scrollTop = 0,
+  viewportH = 480,
+  heightsVersion = 0,
   detail = undefined,
 }) {
   // 详情：默认按焦点从固定数据里派生，等价于宿主 `path <id>` 会返回的那份
@@ -269,7 +271,9 @@ function render({
     vocab === null ? null : { ...vocab, terminal: new Set(vocab.terminal) }, // vocab（start / terminal）
     detailState, //                detail（聚焦 issue 的动作与边；已有则直接 ready）
     null, //                       unavailable（仓库级不可用）
-    windowLimit, //                listLimit（渲染窗口：首屏 100 行）
+    scrollTop, //                  虚拟列表：滚动位置
+    viewportH, //                  虚拟列表：视口高度
+    heightsVersion, //             虚拟列表：测量版本
   ])
   const requireOf = (name) => {
     if (name === 'react') return React
@@ -902,9 +906,9 @@ check('timeline：流没读完时，动作筛选同样不给假空态', () => {
   assert.match(textOf(byClass(view, 'dkf-empty')[0]), /筛选中，继续加载/)
 })
 
-// ---------------------------------------------------------------- 渲染窗口（100 行一屏）
+// ---------------------------------------------------------------- 虚拟列表（可视区 ± overscan）
 
-/** n 条动作、一条一个 issue（按时间倒序），给窗口用例用。 */
+/** n 条动作、一条一个 issue（按时间倒序），给虚拟化用例用。 */
 function bulkTimeline(n) {
   const rows = []
   for (let index = 0; index < n; index += 1) {
@@ -922,31 +926,39 @@ function bulkTimeline(n) {
   return { rows, phase: 'done', error: null, ms: 1, count: n }
 }
 
-check('窗口：时间线 250 行只挂 100 行，底部给计数与自动加载提示', () => {
+// 视口 480 + 上下 overscan 600，估算行高 30 → 一次挂 36 行（1080 / 30）
+const VIRTUAL_ROWS = 36
+
+check('虚拟化：250 行只挂可视区 ± overscan（36 行），上下用 spacer 撑高度', () => {
   const view = render({ timeline: bulkTimeline(250) })
-  assert.equal(byClass(view, 'dkf-arow').length, 100, '首屏只渲染 100 行')
-  assert.equal(textOf(byClass(view, 'dkf-count')[0]), '250 个动作', '页头计数仍是总数')
-  assert.equal(textOf(byClass(view, 'dkf-more-count')[0]), '已显示 100 / 250')
-  assert.equal(textOf(byClass(view, 'dkf-more-hint')[0]), '继续滚动自动加载…')
-  assert.equal(byClass(view, 'dkf-more-btn').length, 0, '自动加载，不渲染手动按钮')
+  assert.equal(byClass(view, 'dkf-arow').length, VIRTUAL_ROWS)
+  assert.equal(byClass(view, 'dkf-vitem').length, VIRTUAL_ROWS, '每行一个测量外壳')
+  assert.equal(textOf(byClass(view, 'dkf-count')[0]), '250 个动作', '页头计数仍是全量')
+  assert.equal(byClass(view, 'dkf-vspacer').length, 1, '首屏只有底部 spacer')
 })
 
-check('窗口：窗口已覆盖全部时没有 footer（不足 100 行的仓行为不变）', () => {
-  const full = render({ timeline: bulkTimeline(250), windowLimit: 250 })
-  assert.equal(byClass(full, 'dkf-arow').length, 250)
-  assert.equal(byClass(full, 'dkf-more').length, 0)
-  const small = render({ timeline: bulkTimeline(4) })
-  assert.equal(byClass(small, 'dkf-arow').length, 4)
-  assert.equal(byClass(small, 'dkf-more').length, 0, '小仓不出现加载更多')
+check('虚拟化：滚到中间时上下都有 spacer，只挂那一段', () => {
+  const view = render({ timeline: bulkTimeline(250), scrollTop: 3000 })
+  const rows = byClass(view, 'dkf-arow')
+  assert.equal(rows.length, 56, '2400–4080px 覆盖 80..136 行')
+  assert.equal(byClass(view, 'dkf-vspacer').length, 2)
+  assert.equal(textOf(byClass(rows[0], 'dkf-aissue')[0]), 'bulk-080', '第一行从可视区上方的 overscan 开始')
 })
 
-check('窗口：issue 列表同样先挂 100 行', () => {
+check('虚拟化：小列表整份渲染，不出现 spacer（真仓行为不变）', () => {
+  const view = render({ timeline: bulkTimeline(4) })
+  assert.equal(byClass(view, 'dkf-arow').length, 4)
+  assert.equal(byClass(view, 'dkf-vspacer').length, 0)
+})
+
+check('虚拟化：issue 列表同样只挂可视区，页头计数是全量', () => {
   const view = render({ tabId: 'issue', timeline: bulkTimeline(120) })
-  assert.equal(byClass(view, 'dkf-row').length, 100)
-  assert.equal(textOf(byClass(view, 'dkf-more-count')[0]), '已显示 100 / 120')
+  assert.equal(byClass(view, 'dkf-row').length, VIRTUAL_ROWS)
+  assert.equal(byClass(view, 'dkf-vspacer').length, 1)
+  assert.equal(textOf(byClass(view, 'dkf-count')[0]), '120 个 issue')
 })
 
-check('窗口：搜索结果也按 100 行截断，页头计数用总数', () => {
+check('虚拟化：搜索结果也按可视区渲染，页头计数用总数', () => {
   const rows = []
   for (let index = 0; index < 150; index += 1) {
     rows.push(
@@ -957,8 +969,7 @@ check('窗口：搜索结果也按 100 行截断，页头计数用总数', () =>
     )
   }
   const view = render({ tabId: 'issue', query: '命中', search: searchFixture('命中', rows) })
-  assert.equal(byClass(view, 'dkf-hit').length, 100)
-  assert.equal(textOf(byClass(view, 'dkf-more-count')[0]), '已显示 100 / 150')
+  assert.equal(byClass(view, 'dkf-hit').length, VIRTUAL_ROWS)
   assert.match(textOf(byClass(view, 'dkf-count')[0]), /150 条命中/)
 })
 

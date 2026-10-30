@@ -33,11 +33,14 @@ window.__ModuleLoader__.load({
     const SEARCH_DEBOUNCE_MS = 120
     /** 时间线边收边渲染：最多 20fps，350 行动作不会把 React 刷 350 次。 */
     const TIMELINE_FLUSH_MS = 50
-    /** 列表窗口：首屏只挂 W 行，滚到底再追加一批（虚拟化留给真正的大仓）。 */
-    const LIST_WINDOW = 100
-    const LIST_WINDOW_STEP = 100
-    /** 距底部多少像素算“该要下一批”。 */
-    const SCROLL_NEAR_BOTTOM = 320
+    /**
+     * 虚拟列表：只挂“可视区 ± overscan”的行，其余用上下 spacer 撑高度。
+     * 未测量的行按 ROW_ESTIMATE 估；挂出来之后按真实高度修正（见 measureRows）。
+     * overscan 取 600px（约 20 行），快速滚动时不会立刻看到空白。
+     */
+    const ROW_ESTIMATE = 30
+    const VIRTUAL_OVERSCAN = 600
+    const VIRTUAL_MIN_VIEWPORT = 480
     const EMPTY_SEARCH = { query: '', rows: [], pending: false, ms: 0, count: 0, error: null }
     const EMPTY_TIMELINE = { rows: [], phase: 'idle', error: null, ms: 0, count: 0 }
     const EMPTY_GRAPH = { phase: 'idle', payload: null, error: null }
@@ -370,10 +373,9 @@ window.__ModuleLoader__.load({
 .dkf-empty{color:var(--dkf-fg3);margin:8px 4px;font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body)}
 .dkf-empty p{margin:0 0 4px}
 .dkf-empty p:last-child{margin:0}
-/* 窗口底部：还有没挂出来的行时给计数与「加载更多」 */
-.dkf-more{display:flex;align-items:center;justify-content:center;gap:8px;padding:8px 4px;color:var(--dkf-fg3);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
-.dkf-more-count{font-family:var(--dkf-mono)}
-.dkf-more-hint{color:var(--dkf-fg3);opacity:.8}
+/* 虚拟列表：行外壳（测量高度用）与上下占位 */
+.dkf-vitem{display:block;min-width:0}
+.dkf-vspacer{flex:none;width:100%}
 /* 列表：三页共用同一套列宽，同名列落在同一 x */
 .dkf-list{display:flex;flex-direction:column;outline:none;position:relative}
 /* 竖脊：时间线的“有序”由这一条线承担，色点压在线上 */
@@ -584,45 +586,87 @@ window.__ModuleLoader__.load({
       event.preventDefault()
       const current = rows.indexOf(document.activeElement)
       const delta = event.key === 'ArrowDown' ? 1 : -1
-      // 最后一行再按 ↓：先扩窗，再把焦点交给新出现的第一行（键盘也能触发 lazyload）
-      if (delta === 1 && current === rows.length - 1 && typeof options.onMore === 'function') {
-        const before = rows.length
-        options.onMore()
+      const next =
+        current < 0 ? (delta === 1 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, current + delta))
+      // 已经在最后一行：让滚动容器再走一段，虚拟列表会挂出下一批；下一帧把焦点交给新的末行
+      if (next === current && delta === 1 && typeof options.onEdge === 'function') {
+        options.onEdge()
         if (typeof requestAnimationFrame === 'function') {
           requestAnimationFrame(() => {
             const added = Array.from(container.querySelectorAll('[data-row]'))
-            const target = added[before] ?? added[added.length - 1]
+            const target = added[added.length - 1]
             if (target !== undefined && typeof target.focus === 'function') target.focus()
           })
         }
         return
       }
-      const next =
-        current < 0 ? (delta === 1 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, current + delta))
       const target = rows[next]
       if (target !== undefined && typeof target.focus === 'function') target.focus()
     }
 
     /**
-     * 搜索结果的下一项。到末尾且还有没加载的结果时返回 `length`
-     * （= 追加后出现的第一项）；否则回绕。`-1` 表示没有结果。
+     * 搜索结果的下一项；到两端回绕。`-1` 表示没有结果。
+     * 结果全量在内存里，虚拟化只影响挂载，不影响可选中项。
      */
-    function nextSearchIndex(current, length, delta, hasMore) {
+    function nextSearchIndex(current, length, delta) {
       if (!(length > 0)) return -1
       const base = Number.isFinite(current) && current >= 0 ? current : delta === 1 ? -1 : 0
-      const next = base + delta
-      if (delta === 1 && next >= length && hasMore) return length
-      return (next + length) % length
+      return (((base + delta) % length) + length) % length
+    }
+
+    /** 跳转计划：目标还没进数据就等流，流结束仍没有才放弃，否则按索引滚动。 */
+    function jumpPlan(index, streaming) {
+      if (index < 0) return streaming ? 'wait' : 'give-up'
+      return 'scroll'
+    }
+
+    /** 行的稳定键：时间线用提交 sha，issue/搜索用 issue id（流在前面插行也不会串高度）。 */
+    function rowKeyOf(kind, row) {
+      if (kind === 'timeline') return actionKey(row)
+      return String(row?.issue?.id ?? row?.id ?? '')
     }
 
     /**
-     * “跳到某条动作”的下一步：数据里还没有就等流（streaming），有了但没挂出来就扩窗，
-     * 已挂出来就滚；流结束仍找不到才放弃。
+     * 前缀高度表：offsets[i] 是第 i 行顶部的位置。
+     * 已测量的行用真实高度，没测过的按 estimate；只在数据或测量版本变化时重算。
      */
-    function jumpPlan(index, limit, streaming) {
-      if (index < 0) return streaming ? 'wait' : 'give-up'
-      if (index >= limit) return 'extend'
-      return 'scroll'
+    function buildOffsets(rows, kind, heights, estimate = ROW_ESTIMATE) {
+      const list = Array.isArray(rows) ? rows : []
+      const offsets = new Float64Array(list.length + 1)
+      for (let index = 0; index < list.length; index += 1) {
+        const key = `${kind}\u0000${rowKeyOf(kind, list[index])}`
+        const height = heights?.get?.(key)
+        offsets[index + 1] = offsets[index] + (Number.isFinite(height) && height > 0 ? height : estimate)
+      }
+      return offsets
+    }
+
+    /**
+     * 可视窗口：`scrollTop ± overscan` 覆盖的行区间 + 上下 spacer 高度。
+     * 内容总高不超过“视口 + 2×overscan”时整份渲染（小仓与没有虚拟化时一致）。
+     */
+    function virtualWindow(offsets, total, scrollTop, viewport, overscan = VIRTUAL_OVERSCAN) {
+      if (!(total > 0) || offsets.length <= total) return { start: 0, end: 0, top: 0, bottom: 0 }
+      if (offsets[total] <= viewport + overscan * 2) return { start: 0, end: total, top: 0, bottom: 0 }
+      const top = Math.max(0, scrollTop - overscan)
+      const bottom = scrollTop + Math.max(viewport, 1) + overscan
+      let lo = 0
+      let hi = total
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1
+        if (offsets[mid + 1] <= top) lo = mid + 1
+        else hi = mid
+      }
+      const start = lo
+      lo = start
+      hi = total
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1
+        if (offsets[mid] < bottom) lo = mid + 1
+        else hi = mid
+      }
+      const end = Math.min(total, Math.max(start + 1, lo))
+      return { start, end, top: offsets[start], bottom: offsets[total] - offsets[end] }
     }
 
     /** 把一条 graph 边归一成 (a 关系 b)；反向名翻转端点，词表外的名字丢弃。 */
@@ -1566,15 +1610,19 @@ window.__ModuleLoader__.load({
           : [head, `命中：${row.action} · 第 ${row.ordinal ?? '?'}/${row.total ?? '?'} 条${when}`, String(row.title ?? '')]
       return lines.join('\n')
     }
-    /** 列表底部：还有没挂出来的行时给计数；进入“接近视口”范围会自动追加，不用点。 */
-    function MoreRows(props) {
-      if (!(props.total > props.shown)) return null
-      return h(
-        'div',
-        { className: 'dkf-more' },
-        h('span', { className: 'dkf-more-count' }, `已显示 ${props.shown} / ${props.total}`),
-        h('span', { className: 'dkf-more-hint' }, '继续滚动自动加载…'),
-      )
+    /** 虚拟列表的上下占位：用高度撑住“没挂出来的行”，滚动条长度才正确。 */
+    function VirtualSpacer(props) {
+      if (!(props.height > 0)) return null
+      return h('div', {
+        className: 'dkf-vspacer',
+        style: { height: `${Math.round(props.height)}px` },
+        'aria-hidden': 'true',
+      })
+    }
+
+    /** 一行 item 的外壳：`data-vkey` 给测量用，真实高度按行键存（流在顶部插行也不会串）。 */
+    function VirtualItem(props) {
+      return h('div', { className: 'dkf-vitem', 'data-vkey': props.vkey }, props.children)
     }
 
     /**
@@ -1593,48 +1641,49 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         { className: 'dkf-list', role: 'listbox', 'aria-label': '搜索结果' },
-        props.rows.map((row, index) =>
-          h(
-            'div',
-            {
-              key: row.issue.id,
-              className: cls('dkf-hit', index === props.selected && 'dkf-hit-on'),
-              role: 'option',
-              'aria-selected': index === props.selected,
-              onClick: () => props.onPick(row),
-              style: row.action === null ? undefined : { '--dkf-row-color': colorOf(row.action) },
-              // hover 预览：把行里被省略号吃掉的东西补全（完整标题 + 命中动作的日期与位置）
-              'data-hint': hitHint(row),
-            },
+        h(VirtualSpacer, { height: props.vtop }),
+        props.rows.map((row, offset) => {
+          const index = (props.start ?? 0) + offset
+          return h(
+            VirtualItem,
+            { key: row.issue.id, vkey: row.issue.id },
             h(
               'div',
-              { className: 'dkf-hit-head' },
-              strip(row.issue.actions, row.actionId),
-              h('span', { className: 'dkf-id' }, highlightParts(String(row.issue.id), row.idRanges)),
-              row.issue.domain ? h('span', { className: 'dkf-chip' }, row.issue.domain) : null,
-              h('span', { className: 'dkf-chip' }, row.issue.done === true ? '已完成' : '进行中'),
-              h('span', { className: 'dkf-hit-go', 'aria-hidden': 'true' }, '⏎'),
-            ),
-            h(
-              'div',
-              { className: 'dkf-hit-body' },
-              row.action === null ? null : h('span', { className: 'dkf-chip dkf-chip-action' }, row.action),
+              {
+                className: cls('dkf-hit', index === props.selected && 'dkf-hit-on'),
+                role: 'option',
+                'aria-selected': index === props.selected,
+                onClick: () => props.onPick(row),
+                style: row.action === null ? undefined : { '--dkf-row-color': colorOf(row.action) },
+                // hover 预览：把行里被省略号吃掉的东西补全（完整标题 + 命中动作的日期与位置）
+                'data-hint': hitHint(row),
+              },
               h(
-                'span',
-                { className: cls('dkf-hit-title', row.action === null && 'dkf-hit-title-quiet') },
-                highlightParts(String(row.title ?? ''), row.titleRanges),
+                'div',
+                { className: 'dkf-hit-head' },
+                strip(row.issue.actions, row.actionId),
+                h('span', { className: 'dkf-id' }, highlightParts(String(row.issue.id), row.idRanges)),
+                row.issue.domain ? h('span', { className: 'dkf-chip' }, row.issue.domain) : null,
+                h('span', { className: 'dkf-chip' }, row.issue.done === true ? '已完成' : '进行中'),
+                h('span', { className: 'dkf-hit-go', 'aria-hidden': 'true' }, '⏎'),
               ),
-              row.action === null
-                ? null
-                : h('span', { className: 'dkf-hit-meta' }, `历史动作 ${row.ordinal ?? '?'}/${row.total ?? '?'}`),
+              h(
+                'div',
+                { className: 'dkf-hit-body' },
+                row.action === null ? null : h('span', { className: 'dkf-chip dkf-chip-action' }, row.action),
+                h(
+                  'span',
+                  { className: cls('dkf-hit-title', row.action === null && 'dkf-hit-title-quiet') },
+                  highlightParts(String(row.title ?? ''), row.titleRanges),
+                ),
+                row.action === null
+                  ? null
+                  : h('span', { className: 'dkf-hit-meta' }, `历史动作 ${row.ordinal ?? '?'}/${row.total ?? '?'}`),
+              ),
             ),
-          ),
-        ),
-        h(MoreRows, {
-          key: 'more',
-          shown: props.rows.length,
-          total: props.total ?? props.rows.length,
+          )
         }),
+        h(VirtualSpacer, { height: props.vbottom }),
       )
     }
 
@@ -1642,22 +1691,28 @@ window.__ModuleLoader__.load({
       if (props.rows.length === 0) return h('p', { className: 'dkf-empty' }, props.emptyText)
       return h(
         'div',
-        { className: 'dkf-list dkf-rail', tabIndex: 0, onKeyDown: (event) => listKeyDown(event, { onMore: props.onMore }) },
-        props.rows.map((row, index) =>
-          h(ActionRow, {
-            key: `${row.issueId}-${row.ordinal ?? row.id ?? index}-${index}`,
-            row,
-            onPrefetch: props.onPrefetch,
-            expanded: props.expanded !== null && props.expanded.kind === 'action' && props.expanded.id === actionKey(row),
-            onToggle: () => props.onToggle({ kind: 'action', id: actionKey(row) }),
-            onFocus: () => props.onFocus(row.issueId),
-          }),
-        ),
-        h(MoreRows, {
-          key: 'more',
-          shown: props.rows.length,
-          total: props.total ?? props.rows.length,
+        {
+          className: 'dkf-list dkf-rail',
+          tabIndex: 0,
+          onKeyDown: (event) => listKeyDown(event, { onEdge: props.onEdge }),
+        },
+        h(VirtualSpacer, { height: props.vtop }),
+        props.rows.map((row) => {
+          const key = actionKey(row)
+          return h(
+            VirtualItem,
+            { key, vkey: key },
+            h(ActionRow, {
+              row,
+              onPrefetch: props.onPrefetch,
+              expanded:
+                props.expanded !== null && props.expanded.kind === 'action' && props.expanded.id === key,
+              onToggle: () => props.onToggle({ kind: 'action', id: key }),
+              onFocus: () => props.onFocus(row.issueId),
+            }),
+          )
         }),
+        h(VirtualSpacer, { height: props.vbottom }),
       )
     }
 
@@ -1665,23 +1720,28 @@ window.__ModuleLoader__.load({
       if (props.issues.length === 0) return h('p', { className: 'dkf-empty' }, props.emptyText)
       return h(
         'div',
-        { className: 'dkf-list', tabIndex: 0, onKeyDown: (event) => listKeyDown(event, { onMore: props.onMore }) },
+        {
+          className: 'dkf-list',
+          tabIndex: 0,
+          onKeyDown: (event) => listKeyDown(event, { onEdge: props.onEdge }),
+        },
+        h(VirtualSpacer, { height: props.vtop }),
         props.issues.map((issue) =>
-          h(IssueRow, {
-            key: issue.id,
-            issue,
-            focus: issue.id === props.focusId,
-            onPrefetch: props.onPrefetch,
-            expanded: props.expanded !== null && props.expanded.kind === 'issue' && props.expanded.id === issue.id,
-            onToggle: () => props.onToggle({ kind: 'issue', id: issue.id }),
-            onFocus: () => props.onFocus(issue.id),
-          }),
+          h(
+            VirtualItem,
+            { key: issue.id, vkey: issue.id },
+            h(IssueRow, {
+              issue,
+              focus: issue.id === props.focusId,
+              onPrefetch: props.onPrefetch,
+              expanded:
+                props.expanded !== null && props.expanded.kind === 'issue' && props.expanded.id === issue.id,
+              onToggle: () => props.onToggle({ kind: 'issue', id: issue.id }),
+              onFocus: () => props.onFocus(issue.id),
+            }),
+          ),
         ),
-        h(MoreRows, {
-          key: 'more',
-          shown: props.issues.length,
-          total: props.total ?? props.issues.length,
-        }),
+        h(VirtualSpacer, { height: props.vbottom }),
       )
     }
 
@@ -1718,7 +1778,7 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { className: 'dkf-list', tabIndex: 0, onKeyDown: (event) => listKeyDown(event, { onMore: props.onMore }) },
+        { className: 'dkf-list', tabIndex: 0, onKeyDown: (event) => listKeyDown(event, { onEdge: props.onEdge }) },
         h(
           IssueRow,
           {
@@ -2160,8 +2220,12 @@ window.__ModuleLoader__.load({
       const [detail, setDetail] = React.useState(EMPTY_DETAIL)
       /** 仓库级不可用（不是 kiln 仓库 / 找不到 kiln / 路径无效）：词表路由最先能判定。 */
       const [unavailable, setUnavailable] = React.useState(null)
-      /** 当前列表的渲染窗口：首屏 100 行，滚到底或点按钮追加 100。 */
-      const [listLimit, setListLimit] = React.useState(LIST_WINDOW)
+      /** 虚拟列表：滚动位置、视口高度、测量版本（任一变化都重算行高表与可视区间）。 */
+      const [scrollTop, setScrollTop] = React.useState(0)
+      const [viewportH, setViewportH] = React.useState(VIRTUAL_MIN_VIEWPORT)
+      const [heightsVersion, setHeightsVersion] = React.useState(0)
+      /** 已测量的行高：`kind\u0000<行键>` → px；流在顶部插行也不会串。 */
+      const heightsRef = React.useRef(new Map())
       const rootRef = React.useRef(null)
       const scrollRef = React.useRef(null)
       const searchRef = React.useRef(null)
@@ -2171,6 +2235,9 @@ window.__ModuleLoader__.load({
       const byIdRef = React.useRef(new Map())
       /** hover 预取的延迟句柄：扫过列表时只取最后停下的那一行。 */
       const prefetchTimer = React.useRef(null)
+      /** 布局后测量用；测试替身没有 useLayoutEffect 时退回 useEffect（测试不执行 effect）。 */
+      const useIsoLayoutEffect =
+        typeof React.useLayoutEffect === 'function' ? React.useLayoutEffect : React.useEffect
 
       /**
        * 提示框：元素上只写 `data-hint`，机制收在这里（根节点监听 pointerover 做委托）。
@@ -2219,9 +2286,9 @@ window.__ModuleLoader__.load({
         [],
       )
 
-      /** 窗口回到第一屏、滚动回顶：切页 / 换焦点 / 改筛选 / 刷新都走这里。 */
+      /** 回到第一屏、滚动回顶：切页 / 换焦点 / 改筛选 / 刷新都走这里。 */
       const resetViewport = () => {
-        setListLimit(LIST_WINDOW)
+        setScrollTop(0)
         const node = scrollRef.current
         if (node !== null && node !== undefined) node.scrollTop = 0
       }
@@ -2636,9 +2703,7 @@ window.__ModuleLoader__.load({
         (searchState.pending === true || searchState.query !== query)
       const searchResults = searchPending ? [] : Array.isArray(searchState.rows) ? searchState.rows : []
       const searchMs = searchState.ms ?? 0
-      /** 搜索结果同样按窗口渲染：一屏显示不下的命中不该一次全挂上 DOM。 */
       const searchTotal = searchResults.length
-      const searchRows = searchResults.slice(0, listLimit)
       const searchError =
         searchFixture === null || searchFixture === undefined ? (searchState.error ?? null) : null
 
@@ -2676,19 +2741,16 @@ window.__ModuleLoader__.load({
           else if (searchRef.current !== null && typeof searchRef.current.blur === 'function') searchRef.current.blur()
           return
         }
-        if (searchRows.length === 0) return
+        if (searchResults.length === 0) return
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
           event.preventDefault()
           const delta = event.key === 'ArrowDown' ? 1 : -1
-          const next = nextSearchIndex(searchIndex, searchRows.length, delta, windowMore > 0)
-          // 走到已加载结果的末尾：追加一批，选中落到新出现的第一项（滚动 effect 再把它带进视口）
-          if (next >= searchRows.length) extendList()
-          setSearchIndex(next)
+          setSearchIndex(nextSearchIndex(searchIndex, searchResults.length, delta))
           return
         }
         if (event.key === 'Enter') {
           const index = Number.isFinite(searchIndex) && searchIndex >= 0 ? searchIndex : 0
-          const row = searchRows[index]
+          const row = searchResults[index]
           if (row !== undefined) {
             event.preventDefault()
             pickSearch(row)
@@ -2700,20 +2762,7 @@ window.__ModuleLoader__.load({
         setSearchIndex(-1)
       }, [query])
 
-      // ↑/↓ 选中后把它带进视口：结果超过一屏时，键盘也能一路走到窗口外
-      React.useEffect(() => {
-        if (searchIndex < 0) return
-        const root = rootRef.current
-        const node =
-          root === null || root === undefined || typeof root.querySelector !== 'function'
-            ? null
-            : root.querySelector('.dkf-hit-on')
-        if (node !== null && node !== undefined && typeof node.scrollIntoView === 'function') {
-          node.scrollIntoView({ block: 'nearest' })
-        }
-      }, [searchIndex, searchRows.length])
-
-      // 从搜索结果跳到某条动作的滚动放到窗口逻辑之后（目标行可能还没挂出来）
+      // 从搜索结果跳到某条动作、以及 ↑/↓ 把选中带进视口的滚动，都放在虚拟列表计算之后
 
       /**
        * 刷新 = 丢掉本仓库的会话缓存（图 / 详情 / 搜索）再重读动作流。
@@ -2872,8 +2921,6 @@ window.__ModuleLoader__.load({
       const facets = React.useMemo(() => issueFacets(issueList), [issueList])
       const activeFilters = readFilters(filters)
       const filteredIssues = React.useMemo(() => filterIssues(issueList, activeFilters), [issueList, activeFilters])
-      const issueTotal = filteredIssues.length
-      const shownIssues = React.useMemo(() => filteredIssues.slice(0, listLimit), [filteredIssues, listLimit])
       const filterOn = filtersActive(activeFilters)
       const filterCount = activeFilters.domains.length + activeFilters.states.length
       const filterGroups = facets.domains.length + facets.states.length
@@ -2903,95 +2950,118 @@ window.__ModuleLoader__.load({
         () => filterRows(rows, activeRowFilters, byId),
         [rows, activeRowFilters, byId],
       )
-      const rowTotal = filteredRows.length
-      const shownRows = React.useMemo(() => filteredRows.slice(0, listLimit), [filteredRows, listLimit])
       const rowFilterOn = filtersActive(activeRowFilters)
       const rowFilterCount = activeRowFilters.actions.length + activeRowFilters.domains.length
       const canFilterRows = tabId === 'timeline' && rowFacetData.actions.length + rowFacetData.domains.length > 0
 
       /**
-       * 渲染窗口：只决定“这一页现在挂多少行”，不改变数据（动作流仍全量读）。
-       * 剩余量按当前视图取，滚到底或点「加载更多」时追加一批。
+       * 虚拟列表：只挂“可视区 ± overscan”的行；数据仍是全量（动作流/搜索结果都在内存）。
+       * 高度没测过的行按 ROW_ESTIMATE 估，挂出来之后按真实高度修正；流在顶部插行也不会串。
        */
-      const windowMore = searching
-        ? searchTotal - searchRows.length
+      const virtualKind = searching
+        ? 'search'
         : tabId === 'timeline'
-          ? rowTotal - shownRows.length
+          ? 'timeline'
           : tabId === 'issue' && focus === null
-            ? issueTotal - shownIssues.length
-            : 0
-
-      const extendList = () => {
-        if (windowMore <= 0) return
-        setListLimit((value) => value + LIST_WINDOW_STEP)
-      }
+            ? 'issue'
+            : null
+      const virtualRows =
+        virtualKind === 'search'
+          ? searchResults
+          : virtualKind === 'timeline'
+            ? filteredRows
+            : virtualKind === 'issue'
+              ? filteredIssues
+              : []
+      const activeOffsets = React.useMemo(
+        () => buildOffsets(virtualRows, virtualKind ?? '', heightsRef.current),
+        [virtualRows, virtualKind, heightsVersion],
+      )
+      const activeWindow = React.useMemo(
+        () => virtualWindow(activeOffsets, virtualRows.length, scrollTop, viewportH),
+        [activeOffsets, virtualRows.length, scrollTop, viewportH],
+      )
+      const activeSlice = React.useMemo(
+        () => virtualRows.slice(activeWindow.start, activeWindow.end),
+        [virtualRows, activeWindow],
+      )
 
       const onScroll = (event) => {
         clearHint()
-        // 有 IntersectionObserver 时由底部的 sentinel 负责自动加载；这里只做无 IO 环境的兜底
-        if (typeof IntersectionObserver === 'function') return
-        if (windowMore <= 0) return
         const node = event.currentTarget
-        if (node === null || node === undefined) return
-        if (node.scrollTop + node.clientHeight >= node.scrollHeight - SCROLL_NEAR_BOTTOM) extendList()
+        if (node !== null && node !== undefined) setScrollTop(node.scrollTop)
       }
 
-      /**
-       * 自动加载（lazyload）：列表底部的 `.dkf-more` 进入“距视口 320px”范围就追加一批。
-       * 不渲染按钮、也不需要用户点；浏览器没有 IntersectionObserver 时退回 onScroll 判断。
-       */
-      React.useEffect(() => {
-        if (windowMore <= 0) return undefined
-        const root = scrollRef.current
-        if (root === null || root === undefined || typeof root.querySelector !== 'function') return undefined
-        if (typeof IntersectionObserver !== 'function') return undefined
-        const target = root.querySelector('.dkf-more')
-        if (target === null || target === undefined) return undefined
-        const observer = new IntersectionObserver(
-          (entries) => {
-            if (entries.some((entry) => entry.isIntersecting)) extendList()
-          },
-          { root, rootMargin: `${SCROLL_NEAR_BOTTOM}px 0px` },
-        )
-        observer.observe(target)
-        return () => observer.disconnect()
-      }, [windowMore, listLimit, tabId, focusId, query, searching, nonce])
+      /** 键盘走到最后一行时，让滚动容器再走一小段，虚拟列表会挂出下一批。 */
+      const scrollMore = () => {
+        const node = scrollRef.current
+        if (node !== null && node !== undefined) node.scrollTop += ROW_ESTIMATE * 4
+      }
 
-      // 换焦点 / 改筛选 / 改查询 / 换仓库 / 刷新：窗口回到第一屏，滚动回顶。
-      // 切页由 selectTab 自己重置——否则「搜索跳转到时间线某一行」的窗口会被这条 effect 抢回去。
+      // 渲染后按真实高度修正估算；只在高度变化时 bump 版本，避免自激循环
+      useIsoLayoutEffect(() => {
+        const root = scrollRef.current
+        if (root === null || root === undefined) return
+        const viewport = typeof root.clientHeight === 'number' ? root.clientHeight : 0
+        if (viewport > 0 && Math.abs(viewport - viewportH) > 1) setViewportH(viewport)
+        const nodes =
+          typeof root.querySelectorAll === 'function' ? Array.from(root.querySelectorAll('[data-vkey]')) : []
+        let changed = false
+        for (const node of nodes) {
+          const key = `${virtualKind ?? ''}\u0000${node.getAttribute('data-vkey') ?? ''}`
+          const rect = typeof node.getBoundingClientRect === 'function' ? node.getBoundingClientRect() : null
+          const height = rect === null ? 0 : rect.height
+          if (height > 0 && heightsRef.current.get(key) !== height) {
+            heightsRef.current.set(key, height)
+            changed = true
+          }
+        }
+        if (changed) setHeightsVersion((value) => value + 1)
+      })
+
+      // 视口尺寸变化（拖窗口、切布局）要重新算区间
+      React.useEffect(() => {
+        const root = scrollRef.current
+        if (root === null || root === undefined || typeof ResizeObserver !== 'function') return undefined
+        const observer = new ResizeObserver(() => setViewportH(root.clientHeight))
+        observer.observe(root)
+        return () => observer.disconnect()
+      }, [cwd])
+
+      // 换焦点 / 改筛选 / 改查询 / 换仓库 / 刷新：回到第一屏
       React.useEffect(() => {
         resetViewport()
       }, [cwd, focusId, query, filters, rowFilters, nonce])
 
       /**
-       * 从搜索结果跳到某条动作：滚到那一行（展开已经由 pickSearch 设好）。
-       *
-       * 目标可能 ① 还没进数据（流还没读到）② 在窗口外 ③ 已挂出来。① 等流继续送，
-       * ② 直接把窗口扩到能包含它（一次算准，不一批批试），③ 滚过去；流结束仍找不到才放弃。
+       * 从搜索结果跳到某条动作：按高度表直接滚到目标索引（虚拟列表里目标行可能还没挂）。
+       * 目标还没进数据就等流继续送，流结束仍没有才放弃。
        */
       React.useEffect(() => {
         if (scrollTo === null) return
         const index = filteredRows.findIndex((row) => actionKey(row) === scrollTo)
-        const plan = jumpPlan(index, listLimit, timelineStreaming)
+        const plan = jumpPlan(index, timelineStreaming)
         if (plan === 'wait') return
         if (plan === 'give-up') {
           setScrollTo(null)
           return
         }
-        if (plan === 'extend') {
-          setListLimit(Math.ceil((index + 1) / LIST_WINDOW_STEP) * LIST_WINDOW_STEP)
-          return
-        }
-        const root = rootRef.current
-        const node =
-          root === null || root === undefined || typeof root.querySelector !== 'function'
-            ? null
-            : root.querySelector(`[data-key="${scrollTo}"]`)
-        if (node !== null && node !== undefined && typeof node.scrollIntoView === 'function') {
-          node.scrollIntoView({ block: 'center' })
+        const node = scrollRef.current
+        if (node !== null && node !== undefined) {
+          const offset = activeOffsets[index]
+          node.scrollTop = Math.max(0, (Number.isFinite(offset) ? offset : 0) - viewportH / 2)
         }
         setScrollTo(null)
-      }, [scrollTo, filteredRows, listLimit, timelineStreaming])
+      }, [scrollTo, filteredRows, activeOffsets, viewportH, timelineStreaming])
+
+      // ↑/↓ 选中后把它带进视口：按搜索结果的行高表滚到居中位置
+      React.useEffect(() => {
+        if (searchIndex < 0 || virtualKind !== 'search') return
+        const node = scrollRef.current
+        if (node === null || node === undefined) return
+        const offset = activeOffsets[searchIndex]
+        node.scrollTop = Math.max(0, (Number.isFinite(offset) ? offset : 0) - viewportH / 2)
+      }, [searchIndex, activeOffsets, virtualKind, viewportH])
 
       const toggleRowFilter = (groupId, id) => {
         setRowFilters((previous) => {
@@ -3029,7 +3099,7 @@ window.__ModuleLoader__.load({
           'span',
           { key: 'count', className: 'dkf-count' },
           rowFilterOn && canFilterRows
-            ? `${shownRows.length} / ${rows.length} 个动作${timelineStreaming ? ' · 读取中…' : ''}`
+            ? `${filteredRows.length} / ${rows.length} 个动作${timelineStreaming ? ' · 读取中…' : ''}`
             : `${rows.length} 个动作${timelineStreaming ? ' · 读取中…' : ''}`,
         ),
       ]
@@ -3053,7 +3123,7 @@ window.__ModuleLoader__.load({
           'span',
           { key: 'count', className: 'dkf-count' },
           filterOn && canFilter
-            ? `${shownIssues.length} / ${issueList.length} issue${issueStreaming ? ' · 读取中…' : ''}`
+            ? `${filteredIssues.length} / ${issueList.length} issue${issueStreaming ? ' · 读取中…' : ''}`
             : `${issueList.length} 个 issue${issueStreaming ? ' · 读取中…' : ''}`,
         ),
       ]
@@ -3128,17 +3198,20 @@ window.__ModuleLoader__.load({
                   h('p', { className: 'dkf-error-detail' }, searchError),
                 )
               : h(SearchResults, {
-                  rows: searchRows,
-                  total: searchTotal,
+                  rows: activeSlice,
+                  start: activeWindow.start,
+                  vtop: activeWindow.top,
+                  vbottom: activeWindow.bottom,
                   query,
                   selected: searchIndex,
                   onPick: pickSearch,
                 })
         } else if (tabId === 'timeline') {
           content = h(TimelinePanel, {
-            rows: shownRows,
-            total: rowTotal,
-            onMore: windowMore > 0 ? extendList : undefined,
+            rows: activeSlice,
+            vtop: activeWindow.top,
+            vbottom: activeWindow.bottom,
+            onEdge: scrollMore,
             expanded,
             onToggle: toggleExpand,
             onFocus: focusIssue,
@@ -3167,9 +3240,10 @@ window.__ModuleLoader__.load({
             )
           } else if (focus === null) {
             content = h(IssuePanel, {
-              issues: shownIssues,
-              total: issueTotal,
-              onMore: windowMore > 0 ? extendList : undefined,
+              issues: activeSlice,
+              vtop: activeWindow.top,
+              vbottom: activeWindow.bottom,
+              onEdge: scrollMore,
               focusId: null,
               expanded,
               onToggle: toggleExpand,
@@ -3316,6 +3390,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, nextSearchIndex, jumpPlan, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, nextSearchIndex, jumpPlan, rowKeyOf, buildOffsets, virtualWindow, css: CSS } } : {}) }
   },
 })
