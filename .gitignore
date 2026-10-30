@@ -9,6 +9,11 @@ Thumbs.db
 *.exe
 dist/
 
+# 发布验证用的临时 profile（DSH_HOME 指到这里）与打包产物
+.tmp-dsh-home/
+plugin/.npm-tmp/
+plugin/*.tgz
+
 # 本地安装备份（profile manifest 快照）
 .profile-backup-package.json
 .dsh-backup/

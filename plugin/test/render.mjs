@@ -203,7 +203,7 @@ globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.
 globalThis.__DSH_KILN_TEST__ = true
 
 await import('../lib/client.js?render=1')
-assert.equal(loaded?.id, '@local/dsh-kiln')
+assert.equal(loaded?.id, '@jackiehank/dsh-kiln')
 
 /** 渲染一次：presets 依次喂给 KilnView 的 useState。 */
 function render({

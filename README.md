@@ -6,6 +6,8 @@ DSH（DeepSeek Harness）与 [kiln](https://github.com/jackiehank/kiln) 的接�
 投影成会话内的三页视图——时间线、issue、关系（全局 / 聚焦），三页共享一个焦点 issue。
 不写 trailer、不造提交、不装 git 钩子。
 代码在 `plugin/`，形态结论见[第一份 issue 文档](docs/issues/kiln-dsh-integration.md)。
+插件包名 `@jackiehank/dsh-kiln`，安装（npm / GitHub Release 的 tgz / 源码 / 本地目录）见
+[`plugin/README.md`](plugin/README.md#安装)。
 
 ## 这个仓库怎么管 issue
 

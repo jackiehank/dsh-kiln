@@ -1,7 +1,7 @@
-# @local/dsh-kiln
+# @jackiehank/dsh-kiln
 
 DSH × kiln 的插件：在会话顶部标签排（对话 / 轨迹 / 上下文）**之后**加一个 `kiln` 标签，
-只读展示 kiln 仓库的三页视图（时间线 / issue / 关系）。**插件版本 0.13.0**：按视图取数——
+只读展示 kiln 仓库的三页视图（时间线 / issue / 关系）。**插件版本 0.14.0**：按视图取数——
 首屏只读一条动作流，关系图与详情点开才取，图 / 详情 / 搜索按会话缓存；动作流双端按 HEAD 缓存
 （HEAD 未变时切回标签 **0 子进程、0 字节**），HEAD 前进时只读**安全可证的前缀**，
 列表按可视区虚拟渲染、滚到底再追加。动作行是 **7 槽数组**（宿主缓存、线上、客户端缓存同形），
@@ -136,13 +136,37 @@ node --input-type=module -e "
 node plugin/test/probe-perf.mjs . C:\Users\jacki\kiln
 ```
 
-## 安装（桌面端 profile）
+## 安装
 
-插件目前只是本地目录，不发布。安装需要写 `~/.dsh/profiles/desktop`：
+要求 DSH **0.2.x**（包内 `engines.dsh: >=0.2.0 <0.3.0`）与 kiln v0.3.0+（见开头）。装进哪个
+profile，就把下面的 `web` 换成它（桌面端通常是 `desktop`）。
 
-1. 把本目录装进 profile：`dsh plugin --profile desktop add <本目录绝对路径>`；
-2. 在 profile 的 `package.json` 里把包名加入顶层 `dsh.profile.bundles`（安装命令不会替你加）；
-3. 刷新 GUI（或重启 DSH）；标签出现后，在 kiln 仓库里打开会话即可看到视图。
+**npm（推荐）**
+
+```powershell
+dsh plugin --profile web add @jackiehank/dsh-kiln
+```
+
+**GitHub Release 里的 tgz**（机器上没有 npm 账号也能装）
+
+```powershell
+dsh plugin --profile web add ./jackiehank-dsh-kiln-0.14.0.tgz
+```
+
+**GitHub 源码**（pnpm 9+ 的 `#path:` 语法；仓库带完整 issue 历史，装一次要 clone 整仓）
+
+```powershell
+dsh plugin --profile web add github:jackiehank/dsh-kiln#path:/plugin
+```
+
+**本地 checkout**（开发这个插件时用）
+
+```powershell
+dsh plugin --profile web add <本仓库>/plugin
+```
+
+装完刷新 GUI（或重启 DSH）；标签出现后，在 kiln 仓库里打开会话即可看到视图。若 profile 的
+`package.json` 里没有出现 `@jackiehank/dsh-kiln`，手动把它加进 `dsh.profile.bundles` 再重启。
 
 ## 已知边界
 

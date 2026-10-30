@@ -160,7 +160,7 @@ but found: '${en(Ye)}'`);(ir[nt[Ye]]&vp)!==0;)Ye++;return _n.slice(fn[e],Rn[Ye-1
  */
 if (typeof window !== "undefined" && window.__ModuleLoader__ !== undefined) {
   window.__ModuleLoader__.load({
-    id: "@local/dsh-kiln/client.pele.js",
+    id: "@jackiehank/dsh-kiln/client.pele.js",
     factory: () => pele,
   })
 }

@@ -18,7 +18,7 @@
  * 详情 `/kiln/issue`、搜索 `/kiln/search`、词表 `/kiln/actions`。
  */
 window.__ModuleLoader__.load({
-  id: '@local/dsh-kiln',
+  id: '@jackiehank/dsh-kiln',
   factory(require) {
     const React = require('react')
     const h = React.createElement
@@ -3559,6 +3559,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, actionsCache, timelineCache, rememberTimeline, mergeTimelineRows, nextSearchIndex, jumpPlan, rowKeyOf, buildOffsets, virtualWindow, ROW, rowIssue, rowAction, rowCommit, rowDate, rowTitle, rowDomain, rowShort, rowTags, createRowInterner, css: CSS } } : {}) }
+    return { name: '@jackiehank/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, actionsCache, timelineCache, rememberTimeline, mergeTimelineRows, nextSearchIndex, jumpPlan, rowKeyOf, buildOffsets, virtualWindow, ROW, rowIssue, rowAction, rowCommit, rowDate, rowTitle, rowDomain, rowShort, rowTags, createRowInterner, css: CSS } } : {}) }
   },
 })

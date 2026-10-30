@@ -187,3 +187,65 @@ Get-ChildItem "$env:DSH_PROFILE_DIR\node_modules\@local" | Format-List Name, Lin
 - **把 `plugin/` 挪到仓库根**：只省掉 git 安装的 `#path:`，却让仓库根变成 npm 包（`files` 要排除 docs/AGENTS），且与本仓"issue 历史 + 文档"的重心冲突；
 - **发布到社区目录/市场**：官方没有注册中心，社区目录是第三方维护的，可以以后顺手做，不进入本次验收。
 
+### 定稿（用户 2026-10-30 决定）
+
+上面按"身份已在仓库 URL 里"推荐了无 scope 的 `dsh-kiln`，实际采纳另一条：
+
+- 包名 **`@jackiehank/dsh-kiln`**——与本机已发布的 `@jackiehank/sol-dsh` 同一身份，scope 天然防撞；
+- 版本 **`0.14.0`**——延续内部迭代号，首个公开版本仍是 0.x。
+
+后果不变：包名就是浏览器半的 loader id，这次定下之后不再改；安装命令比无 scope 长 15 个字符。
+
+## 落地（2026-10-30）
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `plugin/package.json` | `name` 改 `@jackiehank/dsh-kiln`、去 `private`、`version: 0.14.0`；加 `engines.dsh: >=0.2.0 <0.3.0`、`repository`（带 `directory: "plugin"`）/`homepage`/`bugs`/`keywords`、`publishConfig.access: public`；`exports`/`files` 加 `locale/*.json` 与 `icon.svg` |
+| `plugin/cordis.patch.yml` | 行的 `name` 改新包名 |
+| `plugin/lib/client.js` | `__ModuleLoader__.load` 的 `id` 与工厂返回的 `name` 改新包名 |
+| `plugin/lib/client.pele.js` | 自注册 id 改 `@jackiehank/dsh-kiln/client.pele.js` |
+| `plugin/test/{run,render}.mjs` | id 断言同步 |
+| `plugin/LICENSE` | 新增 MIT |
+| `plugin/locale/{en,zh}.json` | 新增 `meta.title` / `meta.description` |
+| `plugin/icon.svg` | 新增原创图标（窑拱 + 三层动作线，1.1 KB，远低于 256 KiB 上限） |
+| `plugin/README.md` | 标题与版本号；安装段改成 npm / tgz / git / 本地四条，并纠正"安装命令不会写 bundles"的旧说法 |
+| `.gitignore` | 忽略 `.tmp-dsh-home/`、`plugin/.npm-tmp/`、`plugin/*.tgz` |
+
+### 怎么验证的
+
+打包 → 装进一个**真的独立 profile**（不是 junction）→ 看宿主编排与浏览器半：
+
+```powershell
+# 1) 打包（16 个文件，压缩 345 KB / 解包 957 KB）
+cd plugin; npm pack --cache .npm-tmp
+
+# 2) 用仓库内的 DSH_HOME，别碰用户 desktop profile
+$env:DSH_HOME = "<repo>/.tmp-dsh-home"
+dsh plugin --profile pkgcheck add <repo>/plugin/jackiehank-dsh-kiln-0.14.0.tgz
+dsh --profile pkgcheck --dump-config          # 出现 "# == @jackiehank/dsh-kiln" 层与 id: dsh-kiln 行
+```
+
+结果：
+
+1. `dsh plugin add` 真的会把包名**写进** `dsh.profile.bundles`（与官方文档一致，纠正了 README 旧说法）；
+2. 装出来的 `node_modules/@jackiehank/dsh-kiln` 含 `lib/ locale/ icon.svg LICENSE cordis.patch.yml`；
+3. 在 profile 里补上 `@deepseek-ai/dsh-web-app` 启动 web（`--no-open --port 55991`）后：
+   - 引导清单里出现 `{"id":"@jackiehank/dsh-kiln","url":"plugins/??@jackiehank/dsh-kiln/client.js&rev=627002a4a34e",...}`；
+   - 合并包 `plugins/??…dsh-kiln/client.js…` 200，内容含 `dkf-`（我们的样式前缀）；
+   - **pele 分块按 loader 的解析规则取到**：`/plugins/@jackiehank/dsh-kiln/client.pele.js?rev=627002a4a34e` → 200、710 KB、含自注册 id。collect 里"非 junction 安装能否加载 client"的疑问到此关闭；
+   - 宿主路由已注册：`/kiln/actions` 先回 `{"ok":false,"reason":"missing-cwd"}`，带 `cwd` 后进到真正执行（本 shell 沙箱下 `spawn EPERM`，是环境限制，desktop 里正常）。
+
+### 还没做的（需要账号，留给用户）
+
+- `npm publish`：本机 `npm whoami` → `ENEEDAUTH`；scoped 包要公开，`publishConfig.access: public` 已备好；
+- 建 GitHub 仓库、push、打 tag `v0.14.0`、Release 附 `pnpm pack` 的 tgz：本机没有 `gh`。
+
+### 安装后要重装
+
+桌面上原来那套是 `@local/dsh-kiln` 的 junction。包名换了，等于换了一个插件：要把旧链接从
+profile 里移除（`dsh plugin --profile desktop remove @local/dsh-kiln`，或手动删 junction 与
+`dsh.profile.bundles` 里的旧项），再按新包名安装。
+
+

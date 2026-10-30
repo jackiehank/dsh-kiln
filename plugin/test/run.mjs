@@ -366,7 +366,7 @@ await check('client：能加载、导出形态正确、注册 id=kiln 的 conver
   // 打开测试缝，后面要直接调用 paintFocus（只在测试里开）
   globalThis.__DSH_KILN_TEST__ = true
   await import('../lib/client.js?wiring=1')
-  assert.equal(loaded?.id, '@local/dsh-kiln')
+  assert.equal(loaded?.id, '@jackiehank/dsh-kiln')
 
   const reactStub = {
     createElement: () => null,
@@ -380,7 +380,7 @@ await check('client：能加载、导出形态正确、注册 id=kiln 的 conver
     if (name === 'react') return reactStub
     throw new Error(`意外的 require: ${name}`)
   })
-  assert.equal(mod.name, '@local/dsh-kiln')
+  assert.equal(mod.name, '@jackiehank/dsh-kiln')
   assert.deepEqual(mod.inject, ['slots', 'sessions'])
 
   let registered = null
@@ -422,7 +422,7 @@ await check('Pele chunk：名字合法、自注册、导出 mount', async () => 
   } finally {
     globalThis.window = previous
   }
-  assert.equal(registered?.id, '@local/dsh-kiln/client.pele.js')
+  assert.equal(registered?.id, '@jackiehank/dsh-kiln/client.pele.js')
   const exported = registered.factory()
   assert.equal(typeof exported?.mount, 'function')
   assert.equal(typeof exported?.render, 'function')
