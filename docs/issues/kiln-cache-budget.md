@@ -69,3 +69,80 @@
 - 单仓超过总预算：该仓单独降级为每次流式，**另一个仓的缓存不受影响**。
 - `run.mjs` / `render.mjs` 覆盖：预算淘汰、单仓超限降级、两仓并存、100k fixture 的往返正确。
 - 文档写明默认预算值与理由（数字来自探针，不是拍的）。
+
+## collect（2026-10-30）：现在缓存里到底存的是什么形状
+
+复现：`node --expose-gc plugin/test/probe-format.mjs`（把真实行克隆到 10 万行，逐变体 gc 后取堆增量）。
+
+### 1. 两端各存一份
+
+- **宿主**（`rowsCache.js:73`）：`repo → { head, configToken, binToken, rows, bytes }`；
+  `rows` 是 `mapActionRecord()`（`timeline.js:46`）产出的 **8 键对象**数组：
+  `issueId / action / id（40 位）/ short（7 位）/ date（25 字符）/ title / domain / tags[]`。
+  命中时逐行 `JSON.stringify({ kind: 'action', ...row })` 重发（`timelineHandler.js:218`），
+  `bytes` 记的是**线上字节**，不是堆占用。
+- **客户端**（`client.js:80`）：`timelineCache` 再存同一批行对象；另外 `foldIssues` 为每个动作
+  **另建一个对象**塞进 `issue.actions`（`client.js:1054`）。所以浏览器里是 rows + fold 两半。
+
+### 2. 100k 行实测矩阵
+
+数据分布：171 条真行 → 28 issue / 6 个动作 / 2 个 domain / 14% 行带 tags；平均 title 51.6 字（中文）、
+id 40、date 25、issueId 18.6。克隆后每行 id/title/date 唯一，其余文本重复（与真仓同形）。
+
+| 变体 | 常驻堆 | B/行 | build | serve（每次重发） | 线上字节 |
+| --- | --- | --- | --- | --- | --- |
+| A 现状：8 键对象 | 47.6MB | 499 | 50ms | 74ms | 31.9MB |
+| B 去 `short`、空 `tags`→null | 41.9MB | 439 | 54ms | 76ms | 32.0MB |
+| B2 B + 驻留 issueId/action/domain（tags 存串） | 31.6MB | 331 | 66ms | 67ms | 32.1MB |
+| B3 B + `date` 存 epoch 毫秒 | 37.6MB | 395 | 68ms | 129ms | 32.0MB |
+| C B2 + B3 | 28.5MB | 299 | 77ms | 126ms | 32.0MB |
+| D 数组行（7 槽） | 30.8MB | 323 | 85ms | 125ms | 32.0MB |
+| F 列式（7 条平行数组） | 24.7MB | 259 | 83ms | 126ms | 32.0MB |
+| G 数组行 + **数组线上格式** | 30.8MB | 323 | 82ms | **58ms** | **22.2MB** |
+| E 原始 NDJSON 行（JS 字符串） | 51.6MB | 541 | 27ms | 16ms | 28.8MB |
+| H 原始字节（Buffer/行） | external 29.6MB + heap 10.8MB | 302 | 53ms | ≈0 | 22.9MB |
+| H2 原始字节（一整块 Buffer） | external 28.8MB | 302 | 41ms | ≈0 | 22.9MB |
+
+### 3. 归因（哪一刀最值）
+
+- **驻留重复串**是最大的一刀：B→B2 **−108B/行**（28 个 issueId、6 个 action、2 个 domain 的重复文本
+  在 10 万行里各占一份独立字符串对象），且 serve 不变（67ms 比 B 还略低）。
+- 去 `short`（可由 `id` 推出）+ 空 `tags` 数组换 `null`：B−A **−60B/行**；86% 的行 tags 为空。
+- `date` 换数字：**−44B/行**，但 serve **+55ms**——每次重发都要 `new Date(ms).toISOString()`。
+- 数组行/列式再省 30–70B/行，但访问方式从字段名变成下标。
+- **原始 NDJSON 当 JS 字符串存是最差选项**（541B/行）：含中文的行在 V8 里按两字节/字符存，
+  240B 的字节行变成 ~480B 的字符串 + 头。这也印证了 `rowsCache.js:10` 的注释（不存原文）。
+- 但**存字节**（Buffer）只要 22.9–29MB、serve≈0；代价是宿主不再持有可读行——增量判定要用的
+  `boundary.id` / `boundary.date`、行数、HEAD 得另存，delta 也要按字节拼。
+
+### 4. 客户端是双份：rows + fold
+
+`foldIssues` 为每个动作建对象并复制字段（`client.js:1054-1063`），100k 行约 **14MB / 147B 行**（34ms）。
+所以浏览器总占用 ≈ rows + fold：
+
+- 现状：499 + 147 ≈ **646B/行 ≈ 63MB**（100k）；
+- 只做 rows 紧凑（C）：299 + 147 ≈ 446B/行 ≈ 44MB；
+- 若 rows 与线上都换数组（G）：同样 44MB，但线上 22.2MB（−31%）、重发 58ms（−16ms）。
+
+### 5. 迁移面（形状一变全要跟）
+
+- 客户端 3500 行里：`.id` 76 处、`.action` 26、`.title` 16、`.date` 15、`.domain` 12、
+  `.issueId` 11、`.tags` 6；`mergeTimelineRows` 按 `row.id` 去重（`client.js:94`）；
+- 增量判定读 `boundary.id` / `boundary.date`（`rowsCache.js:157-184`）；
+- `foldIssues`、筛选、搜索跳转、渲染都按字段名取；
+- 宿主 `timelineHandler` 的逐行 stringify；`run.mjs` 的 fixture payloads、`render.mjs` 的行对象。
+
+### 6. 候选方向（留给 hypothesize 选）
+
+1. **只紧凑行内**（驻留 + 去 short + tags 串 + date 数字）：499→299B/行（−40%），协议不动；
+   serve 每次多 50ms，但只在 HEAD 变化时付。
+2. **协议一起换数组**：G，323B/行、线上 −31%、serve 58ms；接口面与测试改动最大。
+3. **宿主只存字节**：H，宿主内存 −40%~−50%、serve≈0；客户端仍解析成紧凑行；
+   宿主不再有“行”，增量/delta 要重新设计边界。
+4. **不做行紧凑，改 fold 增量**：省的是 CPU（每批 O(n)），不减常驻。
+
+### 7. 与本文目标的关系
+
+紧凑化要回答的是：**默认值能不能覆盖 100k**。以现状算，两端合计约 130MB/仓（63 宿主 + 63 浏览器）；
+只做方向 1 降到约 90MB/仓；方向 3 能把宿主那半压到 30MB 左右，浏览器那半仍取决于 rows 形状。
+
