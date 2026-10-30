@@ -436,15 +436,15 @@ window.__ModuleLoader__.load({
 .dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-row:hover,.dkf-focus:hover,.dkf-subrow:hover,.dkf-arow:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover,.dkf-hit:hover{background-image:var(--dkf-hover-layer)}
 .dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover,.dkf-hit:hover{color:var(--dkf-fg)}
 /* 页头第一层：三栏网格——左右两栏等宽，搜索框因此是**真居中**（不是"剩下的空白居中"）。
-   窄宽下的收缩是对称的：两侧等量变窄，搜索框有 96px 地板；两条 @container 再各砍一刀。
-   container-type:inline-size 让分档跟着**头部自己的宽度**走（拖侧栏也生效，媒体查询不行）。 */
-.dkf-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(96px,min(360px,40%)) minmax(0,1fr);align-items:center;gap:8px;padding:0 12px;min-height:34px;border-bottom:.5px solid var(--dkf-line);flex:none;container-type:inline-size;overflow:hidden}
+   窄宽下两侧等比变窄；搜索框的**偏好宽度只有 30%**（上限 360、地板 72），它先让位，
+   把空间留给右侧的焦点 chip。container-type:inline-size 让分档跟着**头部自己的宽度**走
+   （拖侧栏也生效，媒体查询不行）。 */
+.dkf-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(72px,min(360px,30%)) minmax(0,1fr);align-items:center;gap:8px;padding:0 12px;min-height:34px;border-bottom:.5px solid var(--dkf-line);flex:none;container-type:inline-size;overflow:hidden}
 .dkf-repo{font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body);font-weight:600;color:var(--dkf-fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-/* 右侧动作区：两列网格。[1fr] 给 chip（可被压），[auto] 专给刷新——
-   刷新被**明确摆在第二列**，所以它的右边缘永远是页头右边界；有焦点 / 没焦点都落同一格，
-   不会因为多了一个 chip 而挪位（早先两者挤在一条 flex 行里，负空间时刷新被压窄，
-   里面的 flex:none 文字就向右溢出去）。 */
-.dkf-head-actions{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;min-width:0;overflow:hidden}
+/* 右侧动作区：一条 flex 行，**只有 chip 允许收缩**（flex:0 1 auto），刷新固定不缩（flex:0 0 auto）——
+   刷新的右边缘因此永远是页头右边界，有没有 chip 都落同一处。
+   溢出的兜底是 overflow:hidden：chip 一旦订到自己的最小宽度就裁边，绝不外溢到搜索框上。 */
+.dkf-head-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0;overflow:hidden}
 /* 搜索框：占满中间那栏。box-sizing:border-box 不能省——输入框是 content-box，
    少了它 width:100% + 左右各 8px 内边距就会比轨道宽 16px，那 16px 正好画在第三列上（压叠的根因）。 */
 .dkf-search{width:100%;min-width:0;box-sizing:border-box;height:22px;padding:0 8px;border:0;border-radius:var(--dkf-r);background:var(--dkf-bg2);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line);font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
@@ -465,18 +465,20 @@ window.__ModuleLoader__.load({
 .dkf-hl{color:var(--dkf-fg);border-radius:var(--dkf-r);background:color-mix(in srgb,var(--dkf-accent) 18%,transparent)}
 .dkf-refresh,.dkf-focuschip{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:var(--dkf-r);color:var(--dkf-fg2);white-space:nowrap;font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 /* chip 拆三段：只有 label（issue id）参与省略，× 是独立元素、永远完整——它是关闭的唯一标识。
-   chip 固定在第一列、靠右贴住刷新，是这一排里**唯一允许被压**的东西。 */
-.dkf-focuschip{grid-column:1;justify-self:end;font-family:var(--dkf-mono);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line-2);max-width:min(320px,100%);min-width:0}
+   chip 是这条行里**唯一允许被压**的东西：它先收缩、再让 label 省略，盒子永远不出自己的格子，
+   所以左边不会被谁裁掉。 */
+.dkf-focuschip{font-family:var(--dkf-mono);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line-2);max-width:320px;min-width:0;flex:0 1 auto;overflow:hidden}
 .dkf-focuschip-prefix{flex:none}
 .dkf-focuschip-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dkf-focuschip-x{flex:none;margin-left:4px;color:var(--dkf-fg3)}
-/* 刷新固定在第二列，不参与任何伸缩：它的右边缘就是整条页头的右边界 */
-.dkf-refresh{grid-column:2;justify-self:end}
+/* 刷新不参与伸缩：宽度只由内容决定，位置由右边界决定 */
+.dkf-refresh{flex:0 0 auto}
 .dkf-refresh-label{flex:none}
 .dkf-refresh-icon{display:none;flex:none;font-family:var(--dkf-mono)}
-/* 两档收缩：先砍长期不变的信息（仓库名、chip 前缀），再砍低频动作的文字（刷新） */
+/* 两档收缩：先砍长期不变的信息（仓库名、chip 前缀），再砍低频动作的文字（刷新）。
+   700 这一档是按 dsh-desktop 的最窄宽度定的（窗口 652 → 头部内容宽 628），窄到这里就只留字形。 */
 @container (max-width:520px){.dkf-repo{max-width:72px}.dkf-focuschip-prefix{display:none}}
-@container (max-width:360px){.dkf-refresh-label{display:none}.dkf-refresh-icon{display:inline}}
+@container (max-width:700px){.dkf-refresh-label{display:none}.dkf-refresh-icon{display:inline}}
 /* 页头第二层：左页切换、右当前页计数或工具，三页同高同排 */
 .dkf-bar{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;padding:4px 12px;min-height:36px;border-bottom:.5px solid var(--dkf-line);flex:none}
 .dkf-tabs{display:inline-flex;align-items:center;gap:2px;padding:2px 0;flex:none}

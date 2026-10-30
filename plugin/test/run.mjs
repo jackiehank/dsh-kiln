@@ -583,20 +583,20 @@ await check('关系分桶的文案：每个桶都拿得到一句带 {n} 的话',
   assert.equal(REL_SIDES.filter((side) => side.dir === 'none').length, 1)
 })
 
-await check('页头窄宽：border-box 与两档容器查询都在（防回退）', () => {
+await check('页头窄宽：border-box、收缩权与两档容器查询都在（防回退）', () => {
   const css = internals().css
   assert.match(css, /\.dkf-search\{[^}]*box-sizing:border-box/, 'width:100% + 左右内边距必须落回轨道里')
   assert.match(css, /\.dkf-head\{[^}]*container-type:inline-size/, '分档要跟头部自己的宽度（拖侧栏也生效）')
   assert.match(css, /\.dkf-head\{[^}]*overflow:hidden/, '宁可裁边，也不许盖到邻居身上')
+  assert.match(css, /minmax\(72px,min\(360px,30%\)\)/, '搜索框只占 30%：窄宽时先让位给焦点 chip')
   assert.match(css, /@container \(max-width:520px\)/, '第一档：仓库名收窄 + 去掉「焦点：」前缀')
-  assert.match(css, /@container \(max-width:360px\)/, '第二档：刷新降成字形')
+  assert.match(css, /@container \(max-width:700px\)/, '第二档：刷新降成字形（dsh-desktop 最窄 652 时就要生效）')
   assert.match(css, /\.dkf-focuschip-x\{[^}]*flex:none/, '× 不参与收缩')
   assert.ok(!/\.dkf-focuschip\{[^}]*text-overflow/.test(css), 'chip 自己不再截断，交给 label 段')
-  assert.match(css, /\.dkf-refresh\{[^}]*grid-column:2/, '刷新独占第二列：位置与有没有焦点无关')
-  assert.ok(!/\.dkf-refresh\{[^}]*min-width:0/.test(css), '刷新不许被压窄——压窄后文字会向右溢出')
-  assert.match(css, /\.dkf-focuschip\{[^}]*grid-column:1/, 'chip 在第一列，靠右贴着刷新')
-  assert.match(css, /\.dkf-focuschip\{[^}]*max-width:min\(320px,100%\)/, 'chip 宽度不能超过自己的格子（否则会向左溢出被裁）')
-  assert.match(css, /\.dkf-head-actions\{[^}]*grid-template-columns:minmax\(0,1fr\) auto/, '一列给 chip、一列给刷新')
+  assert.match(css, /\.dkf-focuschip\{[^}]*flex:0 1 auto/, 'chip 是这一行里唯一允许被压的东西')
+  assert.match(css, /\.dkf-focuschip\{[^}]*min-width:0/, 'chip 允许缩到内容以下（否则会把左边缘顶出去被裁）')
+  assert.match(css, /\.dkf-refresh\{flex:0 0 auto\}/, '刷新不参与伸缩：位置只由右边界决定')
+  assert.match(css, /\.dkf-head-actions\{[^}]*justify-content:flex-end/, '动作区靠右')
   assert.match(css, /\.dkf-head-actions\{[^}]*overflow:hidden/, '要溢出的只能是 chip，而且只许被裁')
 })
 
@@ -937,8 +937,8 @@ await check('搜索框真居中：页头是左右等宽的三栏网格，输入�
   }).__internals.css
   assert.match(
     css,
-    /\.dkf-head\{display:grid;grid-template-columns:minmax\(0,1fr\) minmax\(96px,min\(360px,40%\)\) minmax\(0,1fr\)/,
-    '左右两栏必须等宽，否则"剩下的空白居中"不是真居中',
+    /\.dkf-head\{display:grid;grid-template-columns:minmax\(0,1fr\) minmax\(72px,min\(360px,30%\)\) minmax\(0,1fr\)/,
+    '左右两栏必须等宽，否则"剩下的空白居中"不是真居中；中间那栏的偏好宽度是 30%',
   )
   assert.ok(css.includes('.dkf-head-actions{'), '右侧动作要单独成一栏（否则栏宽由内容决定，居中会偏）')
 })
