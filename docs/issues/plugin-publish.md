@@ -248,4 +248,47 @@ dsh --profile pkgcheck --dump-config          # 出现 "# == @jackiehank/dsh-kil
 profile 里移除（`dsh plugin --profile desktop remove @local/dsh-kiln`，或手动删 junction 与
 `dsh.profile.bundles` 里的旧项），再按新包名安装。
 
+## 追加：暂时没有 npm 账号，改走 GitHub（2026-10-30）
+
+上一步把 npm 当主渠道，值的前提是"能注册/登录 npm"。现在这个前提不成立，分发要改成**只用 GitHub**。
+
+### 受影响的判断
+
+| 原计划 | 现在 |
+| --- | --- |
+| npm 主渠道，`dsh plugin add @jackiehank/dsh-kiln` | **降级为"以后有账号再说"**；主渠道换成 Release 里的 tgz |
+| Release tgz 当兜底 | **升为主渠道**，并且已端到端验证过 |
+| git 源码当备用 | 仍备用；语法可用但本机无法验证（见下） |
+
+包名、版本号、client id 全都不用动——`@jackiehank/dsh-kiln` 这个名字在 git 安装下同样成立，
+scope 不依赖 registry。
+
+### 两条 GitHub 安装路径的证据
+
+1. **tgz → profile：已验证**。`npm pack` 出的 16 个文件装进独立 profile 后，`--dump-config`
+   出现整层，浏览器半的 `client.js` 与 `client.pele.js` 都按 rev 取到（上一步的记录）。
+2. **`github:owner/repo#path:/plugin`：本机验不了，但不是语法问题**。
+
+```powershell
+dsh plugin --profile gh add "git+file:///C:/…/dsh-kiln#path:/plugin"
+# [ERR_PNPM_GIT_RESOLVE_FAILED] git ls-remote … spawn EPERM
+```
+
+pnpm 是 Node 程序，spawn git 时用**命名管道**收输出；DSH 的沙箱不允许打开命名管道，所以
+`git ls-remote` 直接 EPERM。同一台机器上 `kiln`（Go，匿名管道）调 git 完全正常——**是沙箱限制，
+不是 pnpm 或语法的问题**。验证只能等仓库公开后在普通终端里做第一条真实安装。
+
+### 顺带确认的两件事
+
+- 仓库不大：`git count-objects -vH` → 1.03 MiB 松散 + 1.81 MiB 打包，git 安装的 clone 成本可接受；
+- `npm publish --dry-run` 能过（16 文件 / 345 KB / public），只是本机 `npm whoami` → `ENEEDAUTH`；
+  另外 `~/.npmrc` 指向 `registry.npmmirror.com`（只读镜像），将来发布必须显式 `--registry
+  https://registry.npmjs.org`。
+
+### 结论
+
+主渠道 = **GitHub Release 附 tgz**；备用 = **git 源码**（`#path:/plugin`）与本地 checkout；npm
+等有账号再补，不改包名、不改版本。
+
+
 
