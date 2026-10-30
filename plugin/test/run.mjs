@@ -1082,6 +1082,26 @@ await check('词表缓存键：仓库 / 配置 / 二进制任一变化都换键'
   assert.notEqual(a, c)
 })
 
+await check('搜索结果键盘：到末尾且还有结果时指向“追加后第一项”，否则回绕', () => {
+  const { nextSearchIndex } = clientInternals()
+  assert.equal(nextSearchIndex(-1, 100, 1, true), 0)
+  assert.equal(nextSearchIndex(3, 100, 1, true), 4)
+  assert.equal(nextSearchIndex(99, 100, 1, true), 100, '末尾且还有：指向追加后的第一项')
+  assert.equal(nextSearchIndex(99, 100, 1, false), 0, '没有更多就回绕')
+  assert.equal(nextSearchIndex(0, 100, -1, true), 99)
+  assert.equal(nextSearchIndex(0, 100, -1, false), 99)
+  assert.equal(nextSearchIndex(-1, 0, 1, false), -1, '没有结果')
+})
+
+await check('搜索跳转：流没读完先等、窗口外一次扩到位、已挂就滚、结束仍没有才放弃', () => {
+  const { jumpPlan } = clientInternals()
+  assert.equal(jumpPlan(-1, 100, true), 'wait', '目标还没进数据：等流')
+  assert.equal(jumpPlan(-1, 100, false), 'give-up', '流读完仍没有：放弃')
+  assert.equal(jumpPlan(150, 100, false), 'extend', '在窗口外：扩窗')
+  assert.equal(jumpPlan(99, 100, true), 'scroll', '已挂出来：滚')
+  assert.equal(jumpPlan(0, 100, false), 'scroll')
+})
+
 // ---------------------------------------------------------------- 汇总
 console.log('')
 if (failures.length === 0) {

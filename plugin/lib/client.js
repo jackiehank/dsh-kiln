@@ -575,7 +575,7 @@ window.__ModuleLoader__.load({
     }
 
     /** 列表容器：↑/↓ 在行之间移动焦点（行本身 tabIndex=-1，避免几十个 tab 停靠点）。 */
-    function listKeyDown(event) {
+    function listKeyDown(event, options = {}) {
       if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
       const container = event.currentTarget
       if (container === null || container === undefined || typeof container.querySelectorAll !== 'function') return
@@ -584,10 +584,45 @@ window.__ModuleLoader__.load({
       event.preventDefault()
       const current = rows.indexOf(document.activeElement)
       const delta = event.key === 'ArrowDown' ? 1 : -1
+      // 最后一行再按 ↓：先扩窗，再把焦点交给新出现的第一行（键盘也能触发 lazyload）
+      if (delta === 1 && current === rows.length - 1 && typeof options.onMore === 'function') {
+        const before = rows.length
+        options.onMore()
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => {
+            const added = Array.from(container.querySelectorAll('[data-row]'))
+            const target = added[before] ?? added[added.length - 1]
+            if (target !== undefined && typeof target.focus === 'function') target.focus()
+          })
+        }
+        return
+      }
       const next =
         current < 0 ? (delta === 1 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, current + delta))
       const target = rows[next]
       if (target !== undefined && typeof target.focus === 'function') target.focus()
+    }
+
+    /**
+     * 搜索结果的下一项。到末尾且还有没加载的结果时返回 `length`
+     * （= 追加后出现的第一项）；否则回绕。`-1` 表示没有结果。
+     */
+    function nextSearchIndex(current, length, delta, hasMore) {
+      if (!(length > 0)) return -1
+      const base = Number.isFinite(current) && current >= 0 ? current : delta === 1 ? -1 : 0
+      const next = base + delta
+      if (delta === 1 && next >= length && hasMore) return length
+      return (next + length) % length
+    }
+
+    /**
+     * “跳到某条动作”的下一步：数据里还没有就等流（streaming），有了但没挂出来就扩窗，
+     * 已挂出来就滚；流结束仍找不到才放弃。
+     */
+    function jumpPlan(index, limit, streaming) {
+      if (index < 0) return streaming ? 'wait' : 'give-up'
+      if (index >= limit) return 'extend'
+      return 'scroll'
     }
 
     /** 把一条 graph 边归一成 (a 关系 b)；反向名翻转端点，词表外的名字丢弃。 */
@@ -1607,7 +1642,7 @@ window.__ModuleLoader__.load({
       if (props.rows.length === 0) return h('p', { className: 'dkf-empty' }, props.emptyText)
       return h(
         'div',
-        { className: 'dkf-list dkf-rail', tabIndex: 0, onKeyDown: listKeyDown },
+        { className: 'dkf-list dkf-rail', tabIndex: 0, onKeyDown: (event) => listKeyDown(event, { onMore: props.onMore }) },
         props.rows.map((row, index) =>
           h(ActionRow, {
             key: `${row.issueId}-${row.ordinal ?? row.id ?? index}-${index}`,
@@ -1630,7 +1665,7 @@ window.__ModuleLoader__.load({
       if (props.issues.length === 0) return h('p', { className: 'dkf-empty' }, props.emptyText)
       return h(
         'div',
-        { className: 'dkf-list', tabIndex: 0, onKeyDown: listKeyDown },
+        { className: 'dkf-list', tabIndex: 0, onKeyDown: (event) => listKeyDown(event, { onMore: props.onMore }) },
         props.issues.map((issue) =>
           h(IssueRow, {
             key: issue.id,
@@ -1683,7 +1718,7 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { className: 'dkf-list', tabIndex: 0, onKeyDown: listKeyDown },
+        { className: 'dkf-list', tabIndex: 0, onKeyDown: (event) => listKeyDown(event, { onMore: props.onMore }) },
         h(
           IssueRow,
           {
@@ -2645,10 +2680,10 @@ window.__ModuleLoader__.load({
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
           event.preventDefault()
           const delta = event.key === 'ArrowDown' ? 1 : -1
-          setSearchIndex((previous) => {
-            const base = Number.isFinite(previous) && previous >= 0 ? previous : delta === 1 ? -1 : 0
-            return (base + delta + searchRows.length) % searchRows.length
-          })
+          const next = nextSearchIndex(searchIndex, searchRows.length, delta, windowMore > 0)
+          // 走到已加载结果的末尾：追加一批，选中落到新出现的第一项（滚动 effect 再把它带进视口）
+          if (next >= searchRows.length) extendList()
+          setSearchIndex(next)
           return
         }
         if (event.key === 'Enter') {
@@ -2664,6 +2699,19 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         setSearchIndex(-1)
       }, [query])
+
+      // ↑/↓ 选中后把它带进视口：结果超过一屏时，键盘也能一路走到窗口外
+      React.useEffect(() => {
+        if (searchIndex < 0) return
+        const root = rootRef.current
+        const node =
+          root === null || root === undefined || typeof root.querySelector !== 'function'
+            ? null
+            : root.querySelector('.dkf-hit-on')
+        if (node !== null && node !== undefined && typeof node.scrollIntoView === 'function') {
+          node.scrollIntoView({ block: 'nearest' })
+        }
+      }, [searchIndex, searchRows.length])
 
       // 从搜索结果跳到某条动作的滚动放到窗口逻辑之后（目标行可能还没挂出来）
 
@@ -2917,26 +2965,33 @@ window.__ModuleLoader__.load({
 
       /**
        * 从搜索结果跳到某条动作：滚到那一行（展开已经由 pickSearch 设好）。
-       * 目标行可能在窗口之外——先追加一批，下一轮渲染后再找；到不了就放弃，不无限追加。
+       *
+       * 目标可能 ① 还没进数据（流还没读到）② 在窗口外 ③ 已挂出来。① 等流继续送，
+       * ② 直接把窗口扩到能包含它（一次算准，不一批批试），③ 滚过去；流结束仍找不到才放弃。
        */
       React.useEffect(() => {
         if (scrollTo === null) return
+        const index = filteredRows.findIndex((row) => actionKey(row) === scrollTo)
+        const plan = jumpPlan(index, listLimit, timelineStreaming)
+        if (plan === 'wait') return
+        if (plan === 'give-up') {
+          setScrollTo(null)
+          return
+        }
+        if (plan === 'extend') {
+          setListLimit(Math.ceil((index + 1) / LIST_WINDOW_STEP) * LIST_WINDOW_STEP)
+          return
+        }
         const root = rootRef.current
         const node =
           root === null || root === undefined || typeof root.querySelector !== 'function'
             ? null
             : root.querySelector(`[data-key="${scrollTo}"]`)
-        if (node !== null && node !== undefined) {
-          if (typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'center' })
-          setScrollTo(null)
-          return
-        }
-        if (shownRows.length < rowTotal) {
-          setListLimit((value) => value + LIST_WINDOW_STEP)
-          return
+        if (node !== null && node !== undefined && typeof node.scrollIntoView === 'function') {
+          node.scrollIntoView({ block: 'center' })
         }
         setScrollTo(null)
-      }, [scrollTo, shownRows.length, rowTotal])
+      }, [scrollTo, filteredRows, listLimit, timelineStreaming])
 
       const toggleRowFilter = (groupId, id) => {
         setRowFilters((previous) => {
@@ -3083,6 +3138,7 @@ window.__ModuleLoader__.load({
           content = h(TimelinePanel, {
             rows: shownRows,
             total: rowTotal,
+            onMore: windowMore > 0 ? extendList : undefined,
             expanded,
             onToggle: toggleExpand,
             onFocus: focusIssue,
@@ -3113,6 +3169,7 @@ window.__ModuleLoader__.load({
             content = h(IssuePanel, {
               issues: shownIssues,
               total: issueTotal,
+              onMore: windowMore > 0 ? extendList : undefined,
               focusId: null,
               expanded,
               onToggle: toggleExpand,
@@ -3259,6 +3316,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, nextSearchIndex, jumpPlan, css: CSS } } : {}) }
   },
 })
