@@ -32,6 +32,94 @@
 结论先行：**20MB 的传输/解析不大，常驻 JS 堆是中等偏大**；关键是不留多份（原始 rows + 折叠 actions + tags 数组）。
 这决定缓存不能“无脑全存”，要有条数/字节上限与降级路径。
 
+## 外部调研：同类系统怎么做（collect）
+
+调研范围限定为“客户端拿到一份只增不减的事件流 / 时间线，要在内存里缓存并增量更新”这一类问题。
+挑六个能对照的实现，逐个记：它解决什么、机制是什么、**能借什么 / 不能借什么**。
+
+### 1. TanStack Query：键控缓存 + 失活回收 + 结构共享
+
+- 缓存以 `queryKey` 为唯一身份，**key 必须包含所有输入**；失活条目由 `gcTime` 回收（v5 默认 5 分钟 = `300 000` ms）。
+- **结构共享**（`structuralSharing`，内部 `replaceEqualDeep`）：重新取数后，未变化的子树保持**原引用**，
+  只有变化的部分换新对象——“省内存”和“省重渲染”是同一件事。
+- 无限列表：一个 cache entry **同时只允许一个 in-flight**，否则会互相覆盖；
+  `maxPages` 超限时丢弃最老一页；重新取数时**从第一页顺序取**，因为拿旧 cursor 直接续可能重复或漏条。
+  （[Infinite Queries](https://tanstack.com/query/v5/docs/framework/react/guides/infinite-queries)、
+  [Render Optimizations](https://tanstack.com/query/v5/docs/framework/react/guides/render-optimizations)）
+
+**借**：键要含 `HEAD` / config / 二进制；同一 key 只允许一次 in-flight（我们已有）；追加新行时**保留旧行对象引用**，
+不要重建整个数组。**不借**：TTL 与失活回收——我们的数据源可以精确校验（HEAD），按 key 失比比按时间失效准。
+
+### 2. lru-cache：容量必须显式有界
+
+- 原文：“At least one of `max`, `ttl`, or `maxSize` is required, **to prevent unsafe unbounded storage**.”
+- `maxSize` + `sizeCalculation`：**每条必须自报 size（正整数）**，总量超限按 LRU 淘汰；`dispose` 用于释放条目附带的资源。
+- TTL 默认**不主动清理**（不设 `ttlAutopurge` 就只在读取时判过期）；作者明确写：size 跟踪、TTL、观测“都不是免费的”。
+  （[node-lru-cache](https://github.com/isaacs/node-lru-cache)）
+
+**借**：上限要是两个正交维度（**条数 + 字节**），且字节按“每条自报”累计，而不是用平均值猜总量；
+淘汰要能真正松开引用（折叠索引、去重 map 都得跟着放）。**不借**：跨仓 LRU 意义有限——会话里通常只有 1–3 个仓，
+真正的上界是**单仓全史**，LRU 只该决定“留几个仓”。
+
+### 3. Git pack 协商：have / want，只发增量
+
+- 客户端先报自己已经有的提交（`have`），服务端据此**只打包缺失的对象**；没有 ack 的简化版就是“发到对方喊停”。
+  （[gitprotocol-pack](https://git-scm.com/docs/gitprotocol-pack)）
+
+**借**：增量判据是**“我持有的最新边界”**，不需要源端理解我们的缓存结构；具体到我们，就是
+“流里读到缓存里最老一条的 sha 就停，并 kill 子进程”。**差异**：git 是双向协商，我们只有单向下行，
+所以“没撞到已知 sha 就读到 EOF”必须等价于**全量替换**，这是唯一的兜底。
+
+### 4. Filebeat registry：offset 只有配上“文件身份”才有效
+
+- 续读靠 `offset`，但**先比身份**：`file_identity` 用 inode+设备号（`native`）或首 N 字节指纹（`fingerprint`）；
+  身份变了就当作新文件，**从 0 重读**。指纹默认只取前 1024 字节。
+  （[filestream input](https://www.elastic.co/guide/en/beats/filebeat/current/filebeat-input-filestream.html)）
+
+**借**：checkpoint 必须和 identity 绑定，身份不匹配一律重来——这正是“历史被改写就全量”的现成表述。
+**差异**：日志文件是尾部追加，我们是**倒序流**：新数据出现在头部（行号更小），checkpoint 是
+“最老一条的 sha”而不是字节 offset，因此**不能只读尾部字节**，只能从头读到已知边界。
+
+### 5. kiln 自己的提交缓存：快照 + 记录层 + 合并（最贴近的同款）
+
+本机 `~/kiln/README.md` §缓存（v0.4.0，默认开启）：
+
+- 枚举快照按 HEAD 存（`.git/kiln/enums/`，约 **20 B/提交**）+ 解析后字段的记录层（`.git/kiln/records/`，约 **130 B/提交**），
+  **热读不启动 git**，输出逐字节不变；
+- 写时保留最近 **4 份**快照，层数到 **64 自动合并**；`kiln cache clear` 一键回退；
+- 只读仓写失败**静默降级**；遇到 `refs/replace` / `info/grafts` / `shallow` / reftable / `GIT_DIR` **直接不缓存**；
+- 实测（455 提交）：`action log --jsonl` 112 → 27 ms；100k 提交 `graph --json` 1,022 → 144 ms。
+
+**借**：形态（**一次全量快照 + 追加层 + 定期合并**）与**保守回退**（看不懂的仓库就不缓存，而不是猜）。
+**差异**：它是磁盘、按 HEAD 逐份快照；我们只有内存、且进程内会经历多次 HEAD 前进——
+用“一层 + 回退”就够，不需要 64 层合并。
+
+### 6. 内存怎么量：`measureUserAgentSpecificMemory` 基本用不上
+
+- 该 API 要求 **secure context + cross-origin isolated**（COOP/COEP），且返回值**跨浏览器/跨版本不可比**，
+  文档明确要求“不要对 breakdown 硬编码假设”，只适合周期采样看趋势。
+  （[MDN](https://developer.mozilla.org/en-US/docs/Web/API/Performance/measureUserAgentSpecificMemory)）
+
+**结论**：插件跑在 DSH Web GUI 里，拿不到跨域隔离的概率很高；**观测只能靠自报字节**（行长度 + 每行估算），
+界面上必须标“估算”而不是“实测”。`performance.memory` 只在 Chromium 有、粒度粗，最多当旁证。
+
+### 落到本仓库：六个问题各自的现成答案
+
+| 本 issue 的问题 | 成熟做法 | 建议采纳 |
+| --- | --- | --- |
+| 缓存什么 | 原始层 + 派生层，派生可重算 | 存**解析后 rows**（parse+map 100k 仅 29ms，省它不值）；fold 索引**惰性 memo**、不独立存 |
+| 放哪 | 源可精确校验时，缓存靠近消费方 | **宿主内存**存 rows（F5 后不重付），客户端只留选中/滚动等 UI 状态 |
+| 增量 | have/want + 身份校验 | 倒序读到**已知最老 sha 即停**；EOF 未命中 → 全量替换 |
+| 上限 | 显式双维上限 + 可释放淘汰 | **5 万条 / 20MB** 先到先算；超限降级为“首屏 N 条 + 新前缀”，其余退回流式 |
+| 失效 | key 含全部输入 | `(repo, HEAD, configToken, binaryToken)`；HEAD 前进是**一次增量**，不是清空 |
+| 观测 | 自报字节，别指望 heap API | 页头 hit / rows / bytes / ms，标注“估算” |
+
+### 本次没有验证、留给 hypothesize/test 的
+
+- 倒序流“读到头就停”在 **merge / 同秒（date 相同的多条）/ rebase / amend** 下的实际行为，需要在假仓里造样本确认；
+- 宿主缓存 rows 后，客户端重连（F5）走的是“宿主命中”还是“重新流式”，取决于 DSH 宿主生命周期，需要实测；
+- 20MB 在宿主进程（Node）里的常驻成本与客户端不同，Node 堆上限更宽但共享给所有插件，需要给出公平预算。 
+
 ## 要回答的问题
 
 1. **缓存什么**
