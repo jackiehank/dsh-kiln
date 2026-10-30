@@ -534,6 +534,22 @@ check('聚焦 b：出现可点击的焦点 chip', () => {
   assert.match(textOf(chips[0]), /焦点：b/)
 })
 
+check('焦点 chip：× 是独立元素，只有 id 会被省略', () => {
+  const tree = render({ focusId: 'b' })
+  const chip = byClass(tree, 'dkf-focuschip')[0]
+  assert.equal(textOf(byClass(chip, 'dkf-focuschip-prefix')[0]), '焦点：')
+  assert.equal(textOf(byClass(chip, 'dkf-focuschip-label')[0]), 'b')
+  assert.equal(textOf(byClass(chip, 'dkf-focuschip-x')[0]), '×', '× 不参与文本截断')
+  assert.equal(chip.props['aria-label'], '退出聚焦 b', 'label 被省略后仍留着完整语义')
+})
+
+check('刷新按钮：字形与文字分开，窄档只换显示', () => {
+  const tree = render({ focusId: null })
+  const button = byClass(tree, 'dkf-refresh')[0]
+  assert.equal(textOf(byClass(button, 'dkf-refresh-label')[0]), '刷新')
+  assert.equal(textOf(byClass(button, 'dkf-refresh-icon')[0]), '↻')
+})
+
 check('焦点不在动作流里：给出提示，不假装有内容', () => {
   const focused = render({ tabId: 'issue', focusId: 'zzz' })
   const empty = byClass(focused, 'dkf-empty')[0]

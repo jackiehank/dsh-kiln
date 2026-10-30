@@ -435,12 +435,15 @@ window.__ModuleLoader__.load({
  */
 .dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-row:hover,.dkf-focus:hover,.dkf-subrow:hover,.dkf-arow:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover,.dkf-hit:hover{background-image:var(--dkf-hover-layer)}
 .dkf-refresh:hover,.dkf-focuschip:hover,.dkf-tab:hover,.dkf-modebtn:hover,.dkf-toggle:hover,.dkf-focusbtn:hover,.dkf-filterbtn:hover,.dkf-filter-clear:hover,.dkf-hit:hover{color:var(--dkf-fg)}
-/* 页头第一层：三栏网格——左右两栏等宽，搜索框因此是**真居中**（不是"剩下的空白居中"） */
-.dkf-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(96px,min(360px,40%)) minmax(0,1fr);align-items:center;gap:8px;padding:0 12px;min-height:34px;border-bottom:.5px solid var(--dkf-line);flex:none}
+/* 页头第一层：三栏网格——左右两栏等宽，搜索框因此是**真居中**（不是"剩下的空白居中"）。
+   窄宽下的收缩是对称的：两侧等量变窄，搜索框有 96px 地板；两条 @container 再各砍一刀。
+   container-type:inline-size 让分档跟着**头部自己的宽度**走（拖侧栏也生效，媒体查询不行）。 */
+.dkf-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(96px,min(360px,40%)) minmax(0,1fr);align-items:center;gap:8px;padding:0 12px;min-height:34px;border-bottom:.5px solid var(--dkf-line);flex:none;container-type:inline-size;overflow:hidden}
 .dkf-repo{font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body);font-weight:600;color:var(--dkf-fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .dkf-head-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
-/* 搜索框：占满中间那栏；左右两栏等宽，所以它在页头里居中 */
-.dkf-search{width:100%;min-width:0;height:22px;padding:0 8px;border:0;border-radius:var(--dkf-r);background:var(--dkf-bg2);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line);font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+/* 搜索框：占满中间那栏。box-sizing:border-box 不能省——输入框是 content-box，
+   少了它 width:100% + 左右各 8px 内边距就会比轨道宽 16px，那 16px 正好画在第三列上（压叠的根因）。 */
+.dkf-search{width:100%;min-width:0;box-sizing:border-box;height:22px;padding:0 8px;border:0;border-radius:var(--dkf-r);background:var(--dkf-bg2);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line);font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-search::placeholder{color:var(--dkf-fg3)}
 .dkf-search:focus{outline:none;box-shadow:inset 0 0 0 2px var(--dkf-accent)}
 /* 搜索结果：两行——第一行是"哪个 issue"，第二行是"为什么命中"（issue 名 or 某条动作的标题） */
@@ -456,8 +459,18 @@ window.__ModuleLoader__.load({
 .dkf-hit-on{background-image:var(--dkf-hover-layer)}
 .dkf-hit-go{color:var(--dkf-fg3);flex:none;font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-hl{color:var(--dkf-fg);border-radius:var(--dkf-r);background:color-mix(in srgb,var(--dkf-accent) 18%,transparent)}
-.dkf-refresh,.dkf-focuschip{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:var(--dkf-r);color:var(--dkf-fg2);white-space:nowrap;font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
-.dkf-focuschip{font-family:var(--dkf-mono);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line-2);max-width:320px;overflow:hidden;text-overflow:ellipsis}
+.dkf-refresh,.dkf-focuschip{all:unset;cursor:pointer;display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:var(--dkf-r);color:var(--dkf-fg2);white-space:nowrap;font-family:var(--dkf-sans);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta);min-width:0;flex:0 1 auto}
+/* chip 拆三段：只有 label（issue id）参与省略，× 是独立元素、永远完整——它是关闭的唯一标识 */
+.dkf-focuschip{font-family:var(--dkf-mono);color:var(--dkf-fg);box-shadow:inset 0 0 0 .5px var(--dkf-line-2);max-width:320px}
+.dkf-focuschip-prefix{flex:none}
+.dkf-focuschip-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dkf-focuschip-x{flex:none;margin-left:4px;color:var(--dkf-fg3)}
+/* 刷新同理：窄到一定程度只剩字形，语义留给 data-hint */
+.dkf-refresh-label{flex:none}
+.dkf-refresh-icon{display:none;flex:none;font-family:var(--dkf-mono)}
+/* 两档收缩：先砍长期不变的信息（仓库名、chip 前缀），再砍低频动作的文字（刷新） */
+@container (max-width:520px){.dkf-repo{max-width:72px}.dkf-focuschip-prefix{display:none}}
+@container (max-width:360px){.dkf-refresh-label{display:none}.dkf-refresh-icon{display:inline}}
 /* 页头第二层：左页切换、右当前页计数或工具，三页同高同排 */
 .dkf-bar{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;padding:4px 12px;min-height:36px;border-bottom:.5px solid var(--dkf-line);flex:none}
 .dkf-tabs{display:inline-flex;align-items:center;gap:2px;padding:2px 0;flex:none}
@@ -3006,11 +3019,19 @@ window.__ModuleLoader__.load({
                   className: 'dkf-focuschip',
                   onClick: clearFocus,
                   'data-hint': '退出聚焦，回到全局（Esc）',
+                  'aria-label': `退出聚焦 ${focus.id}`,
                 },
-                `焦点：${focus.id} ×`,
+                h('span', { className: 'dkf-focuschip-prefix' }, '焦点：'),
+                h('span', { className: 'dkf-focuschip-label' }, focus.id),
+                h('span', { className: 'dkf-focuschip-x', 'aria-hidden': 'true' }, '×'),
               )
             : null,
-          h('button', { type: 'button', className: 'dkf-refresh', onClick: refresh, 'data-hint': '重新读取动作流、关系图与详情' }, '刷新'),
+          h(
+            'button',
+            { type: 'button', className: 'dkf-refresh', onClick: refresh, 'data-hint': '重新读取动作流、关系图与详情' },
+            h('span', { className: 'dkf-refresh-label' }, '刷新'),
+            h('span', { className: 'dkf-refresh-icon', 'aria-hidden': 'true' }, '↻'),
+          ),
         ),
       )
 

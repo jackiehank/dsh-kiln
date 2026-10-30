@@ -583,6 +583,17 @@ await check('关系分桶的文案：每个桶都拿得到一句带 {n} 的话',
   assert.equal(REL_SIDES.filter((side) => side.dir === 'none').length, 1)
 })
 
+await check('页头窄宽：border-box 与两档容器查询都在（防回退）', () => {
+  const css = internals().css
+  assert.match(css, /\.dkf-search\{[^}]*box-sizing:border-box/, 'width:100% + 左右内边距必须落回轨道里')
+  assert.match(css, /\.dkf-head\{[^}]*container-type:inline-size/, '分档要跟头部自己的宽度（拖侧栏也生效）')
+  assert.match(css, /\.dkf-head\{[^}]*overflow:hidden/, '宁可裁边，也不许盖到邻居身上')
+  assert.match(css, /@container \(max-width:520px\)/, '第一档：仓库名收窄 + 去掉「焦点：」前缀')
+  assert.match(css, /@container \(max-width:360px\)/, '第二档：刷新降成字形')
+  assert.match(css, /\.dkf-focuschip-x\{[^}]*flex:none/, '× 不参与收缩')
+  assert.ok(!/\.dkf-focuschip\{[^}]*text-overflow/.test(css), 'chip 自己不再截断，交给 label 段')
+})
+
 await check('图例淡化：未画类别压到 15%（与图上淡化分开调）', async () => {  const reactStub = { createElement: () => null, Fragment: 'fragment', useRef: (v) => ({ current: v }), useState: (v) => [v, () => {}], useEffect: () => {}, useMemo: (f) => f() }
   const mod = loaded.factory((name) => {
     if (name === 'react') return reactStub

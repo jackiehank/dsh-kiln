@@ -176,3 +176,42 @@ Fluent / Fiori / HIG 的标准做法，但我们的动作只有 2 个（刷新�
   `container-type:inline-size` 与两条 `@container`，且 `.dkf-head` 不再用那套三列
   `grid-template-columns`（防止悄悄回退）。
 - 验证：结构测试 + 用户在 GUI 里拖窄侧栏看三档。
+
+## 落地（apply）：B′——保留居中网格，真实根因是 `box-sizing`
+
+**机制更正**：动手前又读了一遍 CSS，压叠的直接原因不是 `justify-content:flex-end` 向左溢出，而是
+`.dkf-search` 的 `width:100%` 加 `padding:0 8px` **没有配 `box-sizing:border-box`**：输入框是
+content-box，实际比所在的网格轨道宽 16px，那 16px 就画在第三列上，看起来像「搜索框和焦点框重叠」。
+第三列其实已经缩到位了（chip 左边缘贴着输入框的右边）。
+
+所以方案 B 的第 2 条（**头部换 flex**）不再必要：网格本来就允许两侧等量收缩，**「真居中」这个
+既有性质不用丢**。实际按 B′ 落地，只留 B 的第 1、3 条，并把根因修掉：
+
+| 改动 | 位置 | 作用 |
+| --- | --- | --- |
+| `.dkf-search` 补 `box-sizing:border-box` | `client.js:446` | 根因：输入框不再越出轨道 |
+| `.dkf-head` 加 `container-type:inline-size` + `overflow:hidden` | `:441` | 分档跟头部自身宽度；宁可裁边也不盖邻居 |
+| chip 拆 `prefix / label / x` 三段 | `:3019`，CSS `:464` | 只有 id 参与省略，`×` 永远完整；补 `aria-label` |
+| 刷新拆 `label / icon` 两段 | `:3031`，CSS `:469` | 窄档只换显示，不丢语义（hint 还在） |
+| `@container (max-width:520px)` | `:472` | 仓库名收到 72px；去掉「焦点：」前缀 |
+| `@container (max-width:360px)` | `:473` | 刷新降成 `↻` |
+
+**收缩顺序（写死，可预测）**：两侧等量变窄（仓库名与 chip 的 id 同时省略）→ 522px 以下砍仓库名
+与「焦点：」前缀 → 360px 以下刷新只剩字形 → 搜索框的 96px 地板始终不动。任何宽度下 `×` 都完整。
+
+真实宽度换算（内容宽 = 头部宽 − 24）：内容 240px 时，两侧各约 64px，chip 显示成
+`kiln-mem… ×`，仍不重叠、不裁掉关闭符。
+
+测试：`npm test --prefix plugin` → **86 + 63**（原 85 + 61）。新增：chip 三段与 `aria-label`、
+刷新两段、CSS 侧断言 `box-sizing` / `container-type` / 两条 `@container` / `.dkf-focuschip-x{flex:none}`
+且 chip 自身不再带 `text-overflow`（防止悄悄回退到「省略号吃 ×」）。
+
+**代价与边界**：
+
+- 侧栏窄到 ~210px 以下会裁边（`overflow:hidden` 的兜底）；这是宿主能给的最小宽度，不额外处理。
+- 容器查询不可用时退化成「不折叠」，但因为 `border-box` 已修，**不会再压叠**，只是更早开始省略。
+- 没做 C（换行）：`overflow:hidden` 已经是「绝不压叠」的硬保证，换行只在 ~210px 以下才有意义。
+- 没做 D（overflow 菜单）：动作只有 2 个，菜单比动作本身还占地方。
+
+**顺带修掉的坑**：CSS 里写注释时别用反引号——这整段 CSS 是模板字符串，反引号会提前结束它
+（本轮踩了两次，`node --check` 报 `Unexpected identifier 'container'` 才反应过来）。
