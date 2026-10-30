@@ -160,3 +160,34 @@ dsh-kiln (@jackiehank/dsh-kiln): pending (waiting for services: webServer, conne
 测试：`plugin/test/run.mjs` 的那一例补了两条断言——根 `lib/index.js` 必须转发到
 `plugin/lib/index.js`、根 `main` 指向同一入口；仍 **87 + 63**。
 
+## 结论
+
+**跑通了。** 用户在 dsh-desktop 的「安装插件」里粘 `https://github.com/jackiehank/dsh-kiln`，
+装完重启，`kiln` 标签还在、三页可用。安装结果逐项核对过：
+
+| 项 | 结果 |
+| --- | --- |
+| 依赖名与源 | `"@jackiehank/dsh-kiln": "github:jackiehank/dsh-kiln"`（不再是 `dsh-kiln@0.0.0`） |
+| `dsh.profile.bundles` | 含 `@jackiehank/dsh-kiln` |
+| 宿主入口 | `<包>/lib/index.js` 在，且 `export *` 指向 `plugin/lib/index.js`（10892 B，`inject` 正确） |
+| 客户端入口 | `plugin/lib/client.js` 在，144507 B，与仓库当前文件逐字节同长（含方向分桶与页头容器查询） |
+| 版本 | 0.15.1 |
+
+**这条链路真正的知识**（下次做插件可以直接用）：
+
+1. 宿主半按**包内固定路径** `<包>/lib/index.js` 解析，**不看 `exports["."]`**；客户端半反过来，
+   按 `exports["./client"]` 解析。想同时支持「整仓安装」和「子目录包」，就得在包根留一层
+   `lib/index.js` 转发。
+2. DSH 点选安装 = `pnpm add github:owner/repo`，装的是**整仓 tarball**；仓库根没有 `package.json`
+   时 pnpm 会写 `_pnpmPlaceholder`，于是「安装成功」但装出的是 `0.0.0` 空包——**静默失败**，
+   比报错更难发现。
+3. 装失败会被插件管理器回滚（依赖从 manifest 里消失），所以「重启后依赖还在」本身就是一次
+   激活成功的旁证。
+
+**代价（用户已接受）**：整仓安装会把 `docs/`、截图一起拉下来（约 2MB），只想要插件本体仍推荐
+Release 的 tgz（347KB）。`#path:/plugin` 规格在本沙箱测不了（`git ls-remote` 被 EPERM 拦），
+留给能跑 git 的机器。
+
+**顺带**：根 manifest 与 `plugin/package.json` 现在有两处要同步（`name` / `version` / `dsh`），
+由 `plugin/test/run.mjs` 的一例守住；版本漂移会直接打回。
+
