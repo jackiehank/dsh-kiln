@@ -117,3 +117,73 @@ git remote -v                                  # 空：还没有远端
 cd plugin; npm pack --dry-run --json --cache .npm-tmp
 Get-ChildItem "$env:DSH_PROFILE_DIR\node_modules\@local" | Format-List Name, LinkType, Target
 ```
+
+## 假设与选型（2026-10-30）
+
+### 要定的三件事
+
+1. **主渠道**：npm、GitHub Release、git 源码、本地克隆，选哪条主推；
+2. **公开身份**：包名、版本号、`engines.dsh`、展示元数据、LICENSE；
+3. **仓库形态**：包留在 `plugin/`，还是为 git 安装把它挪到仓库根。
+
+### 补充证据（本轮实测）
+
+- 本机 dsh CLI 可用：`...\resources\runtime\cli\bin\dsh.cmd` → **0.2.1-rc.5**，可以起临时 profile 做安装验证；
+- DSH 自带 pnpm **11.28.5**（`resources\runtime\primary-runtime\dependencies\pnpm`）——`github:owner/repo#path:/subdir` 语法从 pnpm 9 起支持，可用；
+- 本机**没有 `gh`**，`npm whoami` → `ENEEDAUTH`：建仓库与 npm 发布都需要用户账号，apply 只能做到"打包 + 本地安装验证"。
+
+### 五条路线
+
+| 路线 | 用户命令 | 我们付出 | 更新 | 官方口径 | 风险 |
+| --- | --- | --- | --- | --- | --- |
+| **A** npm 无 scope `dsh-kiln` | `dsh plugin --profile web add dsh-kiln` | npm 账号 + `publish` | `add dsh-kiln@latest` | 官方首推：装的是预构建代码 | 名字被抢（现在 registry 404 = 未占用）；publish 24h 后不可撤回 |
+| **B** npm scope `@jackiehank/dsh-kiln` | `... add @jackiehank/dsh-kiln` | 同上 | 同上 | 同上 | 命令更长；scope 天然防撞 |
+| **C** GitHub Release tgz | `... add ./dsh-kiln-1.0.0.tgz` | tag + Release 附件 | 手动下载 | 官方列出的 tarball 路线，无需构建授权 | 用户得先拿到文件 |
+| **D** git 源码 | `... add github:jackiehank/dsh-kiln#path:/plugin` | 仓库公开 | 重跑 `add` 换 ref/版本 | 拉源码不跑 build；我们无 `prepare`，不触发 `allowBuilds` | 依赖 pnpm ≥9 的 `path:` 语法；每次都 clone 整个含历史的仓库 |
+| **E** 本地克隆 | `... add ./dsh-kiln/plugin` | 无 | `git pull` | 官方"本地 checkout"路线 | 要本机 Node/pnpm，普通用户门槛最高 |
+
+### 选型
+
+- **主渠道 A**：无 scope 的 `dsh-kiln`。一条命令、可被检索、天然带版本；registry 404 说明名字空着。
+  - 不用 B 的理由：包名同时是 loader 的 id，越长越容易抄错；身份信息已经在仓库 URL 和 README 里。B 保留为"名字被抢/被拒"的退路。
+- **同时做 C**：GitHub 打 tag `v1.0.0` + Release 附 `pnpm pack` 的 tgz。它不依赖 npm 账号，是离线备份，也是 README 里给"不想走 npm"的人的路。
+- **D 只写进 README 的备用一节**，不主推：语法要 pnpm ≥9，且仓库带完整 issue 历史，clone 比装包重。
+- **否决 E 作主渠道**：要本机 Node/pnpm 环境，普通用户门槛最高；开发者本来就会 clone。
+
+### 公开身份
+
+- 包名 **`dsh-kiln`**，版本 **1.0.0**：第一次公开把版本号归整，`0.13.0` 属于内部迭代号；client id 与包名绑定，这次改完就固定。
+- `engines.dsh`: **`>=0.2.0 <0.3.0`**（本机 0.2.1-rc.5 在范围内；与官方示例同款范围）。
+- `repository`（带 `directory: "plugin"`）/ `homepage` / `bugs` / `keywords`（`dsh`、`dsh-plugin`、`kiln`、`git`）。
+- **LICENSE**（MIT，放 `plugin/`；npm 自动收录，`files` 不用列）。
+- 展示元数据：`locale/en.json`、`locale/zh.json`（`meta.title` / `meta.description`）、`icon.svg`（≤256 KiB），一并进 `exports` 与 `files`。
+- `dsh.client` 保持现状；**不需要 `external`**——客户端只 `require('react')`，属于基线。
+
+### 落地清单（留给 apply）
+
+1. `plugin/package.json`：`name`、去掉 `private`、`version: 1.0.0`、`engines.dsh`、`repository`/`homepage`/`bugs`/`keywords`、`exports`/`files` 加 locale 与 icon；
+2. `plugin/cordis.patch.yml`：行的 `name` 改成 `dsh-kiln`；
+3. `plugin/lib/client.js`：`id: 'dsh-kiln'`；`plugin/lib/client.pele.js`：自注册 id 改 `dsh-kiln/client.pele.js`；
+4. `plugin/test/*.mjs`：改对 id / patch 名的断言（`run.mjs` 里 Pele chunk 那条）；
+5. 新增 `plugin/LICENSE`、`plugin/locale/en.json`、`plugin/locale/zh.json`、`plugin/icon.svg`；
+6. `plugin/README.md`：安装段（npm 主、tgz 与 git 各一行）、兼容版本表；
+7. 包名出现在注释里的地方一起改（`client.js` 头部与 `client.pele.js` 自注册注释）。
+
+### 风险与验证顺序
+
+1. **先本地验**：`npm pack` 出 tgz → `dsh plugin --profile kiln-check add ./dsh-kiln-1.0.0.tgz` → `dsh --profile kiln-check --dump-config` 确认层与行 → （可选）用临时 profile 起一个 web 看标签是否出现。这一步顺带回答 collect 里的"非 junction 安装能否加载 client 与 pele 分块"。
+2. **公开前扫历史**：`git log -p` 里有没有本机绝对路径、令牌；`plugin/` 里有没有调试残留。
+3. **外部动作**（要账号）：`npm login` + `npm publish`；建 GitHub 仓库、push、tag、Release。本机两者都没就绪，属于用户操作。
+
+### 已知代价
+
+- 包名只能改这一次：id 与包名绑定，以后再改会让用户的已有配置失配；
+- npm publish 24h 后不可撤回（能 deprecate 不能删）；
+- 仓库公开 = 全部 kiln 历史与 `docs/` 公开——这是本仓的设计（"为什么这么做"就该在历史里），不是副作用；
+- git 安装路径要写 `#path:/plugin`，比 npm 长；若是为它把包挪到根，会打乱文档布局，收益不值。
+
+### 被否决
+
+- **把 `plugin/` 挪到仓库根**：只省掉 git 安装的 `#path:`，却让仓库根变成 npm 包（`files` 要排除 docs/AGENTS），且与本仓"issue 历史 + 文档"的重心冲突；
+- **发布到社区目录/市场**：官方没有注册中心，社区目录是第三方维护的，可以以后顺手做，不进入本次验收。
+
