@@ -18,3 +18,5 @@ plugin/*.tgz
 .profile-backup-package.json
 .dsh-backup/
 
+# 本地 pnpm store（沙箱 profile 安装时落在仓内）
+.pnpm-store/
