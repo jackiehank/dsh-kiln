@@ -373,7 +373,7 @@ window.__ModuleLoader__.load({
 /* 窗口底部：还有没挂出来的行时给计数与「加载更多」 */
 .dkf-more{display:flex;align-items:center;justify-content:center;gap:8px;padding:8px 4px;color:var(--dkf-fg3);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
 .dkf-more-count{font-family:var(--dkf-mono)}
-.dkf-more-btn{cursor:pointer}
+.dkf-more-hint{color:var(--dkf-fg3);opacity:.8}
 /* 列表：三页共用同一套列宽，同名列落在同一 x */
 .dkf-list{display:flex;flex-direction:column;outline:none;position:relative}
 /* 竖脊：时间线的“有序”由这一条线承担，色点压在线上 */
@@ -1531,23 +1531,14 @@ window.__ModuleLoader__.load({
           : [head, `命中：${row.action} · 第 ${row.ordinal ?? '?'}/${row.total ?? '?'} 条${when}`, String(row.title ?? '')]
       return lines.join('\n')
     }
-    /** 列表底部：还有没挂出来的行时给计数与「加载更多」（键盘可 Tab 到按钮）。 */
+    /** 列表底部：还有没挂出来的行时给计数；进入“接近视口”范围会自动追加，不用点。 */
     function MoreRows(props) {
       if (!(props.total > props.shown)) return null
       return h(
         'div',
         { className: 'dkf-more' },
         h('span', { className: 'dkf-more-count' }, `已显示 ${props.shown} / ${props.total}`),
-        h(
-          'button',
-          {
-            type: 'button',
-            className: 'dkf-toggle dkf-more-btn',
-            onClick: props.onLoadMore,
-            'data-hint': '再渲染下一批（也可以滚到底）',
-          },
-          '加载更多',
-        ),
+        h('span', { className: 'dkf-more-hint' }, '继续滚动自动加载…'),
       )
     }
 
@@ -1608,7 +1599,6 @@ window.__ModuleLoader__.load({
           key: 'more',
           shown: props.rows.length,
           total: props.total ?? props.rows.length,
-          onLoadMore: props.onLoadMore,
         }),
       )
     }
@@ -1632,7 +1622,6 @@ window.__ModuleLoader__.load({
           key: 'more',
           shown: props.rows.length,
           total: props.total ?? props.rows.length,
-          onLoadMore: props.onLoadMore,
         }),
       )
     }
@@ -1657,7 +1646,6 @@ window.__ModuleLoader__.load({
           key: 'more',
           shown: props.issues.length,
           total: props.total ?? props.issues.length,
-          onLoadMore: props.onLoadMore,
         }),
       )
     }
@@ -2892,11 +2880,34 @@ window.__ModuleLoader__.load({
 
       const onScroll = (event) => {
         clearHint()
+        // 有 IntersectionObserver 时由底部的 sentinel 负责自动加载；这里只做无 IO 环境的兜底
+        if (typeof IntersectionObserver === 'function') return
         if (windowMore <= 0) return
         const node = event.currentTarget
         if (node === null || node === undefined) return
         if (node.scrollTop + node.clientHeight >= node.scrollHeight - SCROLL_NEAR_BOTTOM) extendList()
       }
+
+      /**
+       * 自动加载（lazyload）：列表底部的 `.dkf-more` 进入“距视口 320px”范围就追加一批。
+       * 不渲染按钮、也不需要用户点；浏览器没有 IntersectionObserver 时退回 onScroll 判断。
+       */
+      React.useEffect(() => {
+        if (windowMore <= 0) return undefined
+        const root = scrollRef.current
+        if (root === null || root === undefined || typeof root.querySelector !== 'function') return undefined
+        if (typeof IntersectionObserver !== 'function') return undefined
+        const target = root.querySelector('.dkf-more')
+        if (target === null || target === undefined) return undefined
+        const observer = new IntersectionObserver(
+          (entries) => {
+            if (entries.some((entry) => entry.isIntersecting)) extendList()
+          },
+          { root, rootMargin: `${SCROLL_NEAR_BOTTOM}px 0px` },
+        )
+        observer.observe(target)
+        return () => observer.disconnect()
+      }, [windowMore, listLimit, tabId, focusId, query, searching, nonce])
 
       // 换焦点 / 改筛选 / 改查询 / 换仓库 / 刷新：窗口回到第一屏，滚动回顶。
       // 切页由 selectTab 自己重置——否则「搜索跳转到时间线某一行」的窗口会被这条 effect 抢回去。
@@ -3064,7 +3075,6 @@ window.__ModuleLoader__.load({
               : h(SearchResults, {
                   rows: searchRows,
                   total: searchTotal,
-                  onLoadMore: extendList,
                   query,
                   selected: searchIndex,
                   onPick: pickSearch,
@@ -3073,7 +3083,6 @@ window.__ModuleLoader__.load({
           content = h(TimelinePanel, {
             rows: shownRows,
             total: rowTotal,
-            onLoadMore: extendList,
             expanded,
             onToggle: toggleExpand,
             onFocus: focusIssue,
@@ -3104,7 +3113,6 @@ window.__ModuleLoader__.load({
             content = h(IssuePanel, {
               issues: shownIssues,
               total: issueTotal,
-              onLoadMore: extendList,
               focusId: null,
               expanded,
               onToggle: toggleExpand,

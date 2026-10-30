@@ -922,12 +922,13 @@ function bulkTimeline(n) {
   return { rows, phase: 'done', error: null, ms: 1, count: n }
 }
 
-check('窗口：时间线 250 行只挂 100 行，底部给计数与「加载更多」', () => {
+check('窗口：时间线 250 行只挂 100 行，底部给计数与自动加载提示', () => {
   const view = render({ timeline: bulkTimeline(250) })
   assert.equal(byClass(view, 'dkf-arow').length, 100, '首屏只渲染 100 行')
   assert.equal(textOf(byClass(view, 'dkf-count')[0]), '250 个动作', '页头计数仍是总数')
   assert.equal(textOf(byClass(view, 'dkf-more-count')[0]), '已显示 100 / 250')
-  assert.equal(textOf(byClass(view, 'dkf-more-btn')[0]), '加载更多')
+  assert.equal(textOf(byClass(view, 'dkf-more-hint')[0]), '继续滚动自动加载…')
+  assert.equal(byClass(view, 'dkf-more-btn').length, 0, '自动加载，不渲染手动按钮')
 })
 
 check('窗口：窗口已覆盖全部时没有 footer（不足 100 行的仓行为不变）', () => {
