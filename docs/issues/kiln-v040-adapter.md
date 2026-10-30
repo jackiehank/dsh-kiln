@@ -235,3 +235,110 @@ relations, unrelate` 依次插在 `domain` 之后），所以同一份历史每�
 
 结论：这一版对插件是**文档级适配**（数字分冷/热、补缓存边界），代码保持不动；新字段留给
 「按需详情」那条 issue 作为可选素材。
+
+## hypothesize（2026-10-30）：把「一次预取全仓」换成「按视图取数」
+
+### 出发点
+
+v0.4.0 让单条 kiln 命令落到进程地板（热读 42ms/条，其中约 15ms 是缓存工作），于是**总成本由
+「命令条数 × 传输量」决定，而不是单条命令快慢**。插件还是 v0.2.0 的形态：mount 就把
+`graph` + 全量 `path` 拉下来，再另起一条 `action log` 流；为「一次取全」付的代价是
+**80 条上限、快照/流双源合并、「快照外」死链、按 issue 增量重取 ~200 行缓存逻辑**。
+这些复杂度今天都不再必要——详情单取只要 42ms。
+
+### 实测（Node spawn，与宿主同形态；本仓 25 issue / 153 动作）
+
+| 调用 | 热 42ms 档 | 冷（clear 后） | 输出 |
+| --- | --- | --- | --- |
+| 单条 `graph --json` | 42 ms | 120 ms | 11,443 B |
+| 单条 `path <id> --json` | 42 ms | 120 ms | 3,497 B |
+| `graph --issue --depth 1` | 42 ms | — | 925 B |
+| 单条 `action log --jsonl` | 42 ms | 120 ms | 60,280 B |
+| 单条 `list --json` / `--search` | 41 / 42 ms | — | 27 KB 级 |
+| `graph` + 批量 `path`（串行） | **85 ms** | — | 88 KB |
+| `graph` + 批量 `path`（并行） | 59 ms | — | 88 KB |
+| `path --all`（= 批量全 id，逐字节相同） | 42 ms | 121 ms | 77,442 B |
+
+（collect 里的 30ms 是 PowerShell 直调；宿主从 Node spawn 起子进程每条多约 12ms，以本表为准。
+HEAD 探测走 `readHeadFast` 读文件约 2ms，只有 packed-refs 等形状才回退 `git rev-parse`（46ms）。）
+
+三条由此得出的事实：
+
+1. **批量 path 是唯一随 issue 数线性膨胀的预取**：约 3.1 KB/issue（1000 个 issue ≈ 3 MB），
+   80 条上限就是为它设的；`graph` 只有约 0.45 KB/issue；
+2. **单个 issue 的详情只要一次 42ms / 3.5 KB**，比「预取 80 个再挑一个」便宜两个数量级；
+3. **mount 的关键路径现在是 85ms**（graph+path 串行），而流（42ms）本来就在并行跑——把 path
+   从 mount 拿掉，关键路径立刻减半。
+
+### 候选
+
+| 方案 | mount spawn | mount 传输 | 80 上限 | 聚焦第 81 个 | 代价 / 风险 |
+| --- | --- | --- | --- | --- | --- |
+| **A 现状 + 两路并行** | 2（并行） | 88 KB | 保留 | 仍不可用 | 59ms → 只省 26ms；双源合并与上限都留着 |
+| **B 单条 `path --all` 快照** | 1 | 77 KB | 仍需（payload 涨） | 仍不可用 | path 没有 `domain`/`tags`，还得靠流补；77 KB 换 11 KB 不划算 |
+| **C 按视图取数（推荐）** | 1（流；graph/详情按需） | 60 KB | **删除** | 42ms 可用 | 首次点开详情/关系页各 +42ms；首屏依赖流收口 |
+
+### 目标形态：一个视图一条命令
+
+| 视图 | 命令 | 何时取 | 传输 | 宿主缓存 |
+| --- | --- | --- | --- | --- |
+| 时间线 | `action log --jsonl` | mount（唯一必取） | 60 KB | 无（流式） |
+| issue 列表 | 同一条流（客户端 `foldIssues`） | 随流 | 0 | 无 |
+| 详情 / 聚焦 | `path <id> --json` | 点开时 | 3.5 KB | 可选 LRU（按 HEAD+id） |
+| 关系图 | `graph --json` | 打开关系页时（可 hover 预取） | 11 KB | HEAD 键控 |
+| 搜索 | `list --search=<q> --json` | 输入时 | 10–20 KB | 无 |
+| 词表 | `action list --json` | 首次（客户端缓存） | 0.4 KB | 按仓库 |
+
+路由随之收敛为 `/kiln/timeline`、`/kiln/issue?id=`、`/kiln/graph`、`/kiln/actions`、`/kiln/search`，
+**删除 `/kiln/flow`**（连同 `buildFlow` 的历史拼装、`DEFAULT_MAX_ISSUES`、截断提示、
+`knownOf`/「快照外」、`missingFocus`、快照/流合并）。
+
+### 关键决定
+
+1. **issue 列表只吃流**。折叠规则已经用真仓对齐过 `kiln list --json`（23/23、70/70），
+   `domain`/`tags`/`done`/`title` 不缺；`ordinal` 在「看到该 issue 的起点」或流收口时回填。
+   快照唯一独有的是 `refs`（界面不渲染，且 v0.4.0 的流里也有），不再需要双源。
+2. **详情 = `path <id>` 单条**。它自带 `ordinal`、`actions`、`done` 和该 issue 的**全部边**
+   （进+出，`relations` 是折叠后的 `graphEdge`），足够画聚焦页的母/子/强/弱分组；
+   邻居的标题与领域来自流折叠出的 issue 索引（`byId` 改由 `streamIssues` 提供），不额外取数。
+3. **关系图懒加载**。`graph --json` 只为关系页存在；首次进入 42ms，之后 HEAD 命中约 2ms。
+   聚焦半径 1 的局部图用 `graph --issue --depth 1`（925 B/42ms），半径 2 用 `--depth 2`
+   （或整图，视规模）。
+4. **宿主缓存只剩一份**：graph（键 = HEAD + 配置令牌 + 二进制令牌）。详情可用同一个 HEAD 令牌
+   做 `(head,id)` 的 LRU（16 条），HEAD 一动自然失效；不为详情再起 `git rev-parse`。
+5. **词表保持独立一次**（28ms），客户端按仓库缓存；不塞进 graph，免得配置改动词表要重取图。
+
+### 分期落地
+
+- **S1 详情先行**：加 `GET /kiln/issue`（`path <id>`），聚焦页改吃它；其余不动。验证 42ms、
+  错误路径（不存在的 id）、以及聚焦页的展开/邻居渲染。
+- **S2 拆掉预取**：删除批量 path 与 80 上限；issue 列表改单一流源；`/kiln/flow` 换成
+  `/kiln/graph` 并改为关系页按需加载；删除 `knownOf`/截断/合并逻辑与对应测试。
+- **S3 可选提速**：行 hover 120ms 后预取详情（复用 hint 的延迟习惯）；关系页页签 hover 预取
+  `graph`；详情 LRU 把「反复点同一条」降到 0 spawn。
+
+### 代价与边界
+
+- **首屏不再是完整快照**：流收口前，序号/动作数标「读取中」，与今天时间线的规则一致；
+  热读 42ms 基本一帧完成，冷读 120ms 是可见的等待。
+- **点开详情多一跳**：42ms（冷 120ms）需要 loading 态；今天的「瞬间」是预取换来的。
+- **规模上界没变**：整条流仍是 O(动作数)；100k 动作（约 29 MB）必须等上游分页/索引
+  （`kiln-many-issues` 仍开着），本设计只是让 1k 以内更简单、更快。
+- **测试面不小**：删掉快照合并/截断/「快照外」约 15 条用例，新增详情与 graph 路由、
+  懒加载、聚焦边三组；渲染用例的 props 也要跟着改。
+- **没有新版本要求**：`path` 单条自 0.2.0、`action log` 自 0.3.0，v0.4.0 只是让它们变快。
+
+### 验收
+
+- mount 只起 1 个 kiln 子进程（+ 首次词表），本仓传输 ≈60 KB；HEAD 命中时 ≤5ms、无子进程；
+- 第 81 个及以后 issue 能聚焦：`path` 42ms、动作带序号、边齐全；
+- 关系页首次 42ms、二次 ≤5ms；聚焦半径 1 用 `graph --issue`（≤1 KB）；
+- 删除 `DEFAULT_MAX_ISSUES`、截断提示、「快照外」、快照/流合并后，宿主与渲染用例全绿；
+- 旧行为回归：时间线/搜索/筛选/焦点收窄不变，kiln <0.4.0 照常。
+
+### 不做什么
+
+- 不折叠流里的 `relations`（词表/逆名/同秒规则不复刻，边继续来自 `graph`/`path`）；
+- 不换 `path --all` 当快照（缺 domain/tags，且 77 KB 换 11 KB 不值）；
+- 不引入 daemon、常驻进程、WebSocket 或磁盘缓存；
+- 不改 UI 信息架构与三页分工，只换取数方式。
