@@ -47,3 +47,54 @@
 
 **已修**：删掉占位包，用 `plugin/jackiehank-dsh-kiln-0.15.0.tgz` 重装，`dependencies` 与 `bundles`
 都回到 `@jackiehank/dsh-kiln 0.15.0`。（本节只解决眼前，不解决「UI 安装」这条路。）
+
+## 方案（hypothesize）
+
+### A. 仓库根放一个转发 manifest（推荐）
+
+根 `package.json`：同名同版本、`private: true`（防误发 npm）、`exports` 与 `dsh` 全部指向 `plugin/`：
+
+```json
+{
+  "name": "@jackiehank/dsh-kiln",
+  "version": "0.15.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./plugin/lib/index.js", "./client": "./plugin/lib/client.js" },
+  "dsh": { "bundle": { "patch": "./plugin/cordis.patch.yml" }, "client": { … } },
+  "files": ["plugin/lib", "plugin/locale", "plugin/icon.svg", "plugin/cordis.patch.yml"]
+}
+```
+
+- 好：`github:owner/repo` 能装出真包；不动 `plugin/` 的目录结构；不发 npm。
+- 代价：**两份 manifest 要同步**（名字 / 版本 / `dsh` 字段），必须加测试；
+  `private: true` 让根永远不能被 npm publish（正确，发的是 `plugin/` 那份）。
+
+### B. 把 `plugin/` 提到仓库根
+
+结构最干净，但 workflow 的 `working-directory: plugin`、几十份文档路径、测试相对路径全要改，
+且本仓的 `docs/`、`AGENTS.md` 会混进包目录。否决（这一轮）。
+
+### C. 只支持 tgz，把 UI 那条路写死
+
+零改动，但用户第一次接触就是「装了个 0.0.0」——这是**静默失败**，最差的体验。可以接受的前提是
+UI 自己会拒绝；我们控制不了 UI，所以至少 README 要写清「点选安装不支持，用 tgz」。
+
+### D. 发 npm
+
+`dsh plugin add @jackiehank/dsh-kiln` 最短，但没账号，且不影响 A / C。
+
+### 决定
+
+**A + C 文案**：先让 `github:owner/repo` 装得出真包（A），README 里同时把「点选安装 / tgz / `#path:`」
+三条路的实际能力写清楚（C 那半只做文案）。
+
+## 落地清单（apply 时）
+
+- 新增根 `package.json`（`private: true`，`exports` / `dsh` / `files` 转发到 `plugin/`）。
+- `plugin/test/run.mjs` 加一例：根 manifest 与 `plugin/package.json` 的 `name` / `version` / `dsh.bundle.patch`
+  一致；根 `private` 为真。
+- 根 README 的安装段：把「点选安装」写成**当前不支持**（会装成 `dsh-kiln@0.0.0`），tgz 仍是主渠道；
+  `#path:` 规格保留为「命令行可用」。
+- `plugin/README.md` 同步一句。
+
