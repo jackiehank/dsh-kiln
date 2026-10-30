@@ -1,11 +1,16 @@
 # @jackiehank/dsh-kiln
 
 DSH × kiln 的插件：在会话顶部标签排（对话 / 轨迹 / 上下文）**之后**加一个 `kiln` 标签，
-只读展示 kiln 仓库的三页视图（时间线 / issue / 关系）。**插件版本 0.14.0**：按视图取数——
+只读展示 kiln 仓库的三页视图（时间线 / issue / 关系）。**插件版本 0.15.0**：按视图取数——
 首屏只读一条动作流，关系图与详情点开才取，图 / 详情 / 搜索按会话缓存；动作流双端按 HEAD 缓存
 （HEAD 未变时切回标签 **0 子进程、0 字节**），HEAD 前进时只读**安全可证的前缀**，
 列表按可视区虚拟渲染、滚到底再追加。动作行是 **7 槽数组**（宿主缓存、线上、客户端缓存同形），
 10 万行线上约 24MB。
+
+**0.15.0 新增**：聚焦态按方向分桶，每组一句短语（`N 个父 issue` / `N 个子 issue` / `阻塞了 N 个
+issue` / `被 N 个 issue 阻塞` / `由 N 个 issue 引发` / `引发了 N 个 issue` / …），行内不再有箭头与
+关系名，多父不再丢（`kiln-relation-direction`）；页头随侧栏宽度分档收缩，窄宽下不压叠、焦点
+chip 的 `×` 始终完整、刷新位置不随焦点移动（`kiln-head-width`）。
 
 - 版本要求：**取数需 kiln v0.2.0+**（`graph --json`、单条 `path --json`、`commit` 键），
   **搜索需 v0.2.1+**（`rank` / `hit.total` / `hit.date`），**动作流与词表需 v0.3.0+**
@@ -150,7 +155,7 @@ profile，就把下面的 `web` 换成它（桌面端通常是 `desktop`）。
 2. 装进 profile：
 
 ```powershell
-dsh plugin --profile web add ./jackiehank-dsh-kiln-0.14.0.tgz
+dsh plugin --profile web add ./jackiehank-dsh-kiln-0.15.0.tgz
 ```
 
 **直接从仓库装**（pnpm 9+ 的 `#path:` 语法，每次安装会 clone 整仓；适合跟最新提交）

@@ -32,3 +32,25 @@ Release 对齐。
 
 - 不动依赖与 `engines.dsh`；不改 `v0.14.0` 已发布的 Release 内容；
 - 不发布 npm（仍无账号）；tag 由本地打、推送后由 Actions 建 Release。
+
+## 落地（apply）：版本号与 tag
+
+| 位置 | 改动 |
+| --- | --- |
+| `plugin/package.json` | `version` 0.14.0 → **0.15.0** |
+| 根 `README.md:41` | 安装段的 tgz 文件名 → `0.15.0` |
+| `plugin/README.md` 版本行 | `插件版本 0.15.0`，并补两句 0.15.0 的新能力（方向分桶 / 页头分档收缩） |
+| `plugin/README.md` 安装段 | 同一条 tgz 文件名 → `0.15.0` |
+| git | 打 `v0.15.0`（轻量 tag，与 `v0.14.0` 一致的做法） |
+
+核对：
+
+- `npm test --prefix plugin` → **86 + 63** 全过；
+- `npm pack` → `jackiehank-dsh-kiln-0.15.0.tgz`，**347,411 B**，**16 个文件**（与 0.14.0 的 345,542 B
+  只差这次的关系文案与页头改动）；
+- tag 去掉 `v` 与 `package.json` 的 version 一致（workflow 第 31 步会校验，不一致直接失败）。
+
+推送后 Actions 会按 `v*` 触发 `release.yml`，产出
+<https://github.com/jackiehank/dsh-kiln/releases/tag/v0.15.0> 与同名资产。
+
+**仍未做**：npm 发布（等账号）；`dshmarket` 之类分发渠道没接。

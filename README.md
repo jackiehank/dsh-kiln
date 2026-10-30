@@ -38,7 +38,7 @@ kiln 用 git commit 的 trailer（`issue:` + `action:`）记录「问题 → 动
 2. 装进 profile：
 
 ```powershell
-dsh plugin --profile web add ./jackiehank-dsh-kiln-0.14.0.tgz
+dsh plugin --profile web add ./jackiehank-dsh-kiln-0.15.0.tgz
 ```
 
 **直接从仓库装**（pnpm 9+ 的 `#path:` 语法，每次安装会 clone 整仓）
