@@ -631,8 +631,8 @@ const flowGraph = graphOf(flowIssues, [
 check('issue 页聚焦：一组一句方向话，行内不再有箭头与关系名', () => {
   const focused = render({ tabId: 'issue', focusId: 'a' })
   const heads = headsOf(focused)
-  // 边是 b → a 的 caused-by，即「b 由 a 引发」：a 是因，所以从 a 看是「我引发了 b」
-  assert.deepEqual(heads, ['我引发了 1 个 issue', '1 个弱关联（无方向）'])
+  // 边是 b → a 的 caused-by，即「b 由 a 引发」：a 是因，所以从 a 看是「引发了 b」
+  assert.deepEqual(heads, ['引发了 1 个 issue', '1 个弱关联（无方向）'])
   assert.equal(byClass(focused, 'dkf-edge').length, 0, '行内不该再有箭头或关系名')
   const rows = byClass(focused, 'dkf-row')
   assert.equal(textOf(byClass(rows[1], 'dkf-id')[0]), 'b', '行内只剩 issue id')
@@ -642,13 +642,13 @@ check('issue 页聚焦：一组一句方向话，行内不再有箭头与关系�
 
 check('issue 页聚焦：多父全部出现，不再只取第一个', () => {
   const focused = renderFocus(familyGraph, 'k1')
-  assert.deepEqual(headsOf(focused), ['我属于 2 个母 issue'])
+  assert.deepEqual(headsOf(focused), ['2 个父 issue'])
   assert.deepEqual(byId(focused), ['k1', 'p2', 'p1'], '同桶内按最近在前，两个父都在')
 })
 
 check('issue 页聚焦：父看子是同一套话，超过 4 条才折叠', () => {
   const focused = renderFocus(familyGraph, 'p1')
-  assert.equal(byClass(focused, 'dkf-group-head')[0].children[0], '6 个子 issue 属于我')
+  assert.equal(byClass(focused, 'dkf-group-head')[0].children[0], '6 个子 issue')
   assert.equal(byClass(focused, 'dkf-toggle').length, 1)
   assert.match(textOf(byClass(focused, 'dkf-toggle')[0]), /展开全部 6/)
   assert.equal(byId(focused).length, 5, '焦点 + 前 4 条')
@@ -660,11 +660,11 @@ check('issue 页聚焦：父看子是同一套话，超过 4 条才折叠', () =
 check('issue 页聚焦：因果与阻塞各说两向，谁的因谁的果写在句子里', () => {
   const focused = renderFocus(flowGraph, 'kid')
   assert.deepEqual(headsOf(focused), [
-    '我阻塞 1 个 issue',
-    '1 个 issue 阻塞我',
-    '我取代了 1 个 issue',
-    '我由 1 个 issue 引发',
-    '我引发了 1 个 issue',
+    '阻塞了 1 个 issue',
+    '被 1 个 issue 阻塞',
+    '取代了 1 个 issue',
+    '由 1 个 issue 引发',
+    '引发了 1 个 issue',
   ])
   assert.deepEqual(byId(focused), ['kid', 'waiter', 'bout', 'old', 'origin', 'effect'])
 })

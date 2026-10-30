@@ -42,7 +42,7 @@ issue 页的聚焦态负责把焦点周围的关系读成文字（`kiln-issue-fo
 
 - 每条关系的方向用一句完整中文说清，**不需要读者解读箭头**；行内不再出现 `→` / `←`。
 - 每个分组标题能独立读懂：谁是焦点、谁是对方、关系朝哪边。至少要覆盖
-  父 / 子 / 我由谁引发 / 我引发了谁 / 我阻塞谁 / 谁阻塞我 / 我取代谁 / 谁取代我。
+  父 / 子 / 由谁引发 / 引发了谁 / 阻塞谁 / 被谁阻塞 / 取代谁 / 被谁取代。
 - 多父、多因、多果全部显示，不静默丢弃。
 - issue 页与关系页图例用**同一句话**表述同一事实，可互相追溯。
 - 词表之外的关系名仍然不硬编码：方向与分组继续从 `INVERSE` / `GROUPS` 推导，不按关系名写 `if`。
@@ -100,8 +100,9 @@ issue 页的聚焦态负责把焦点周围的关系读成文字（`kiln-issue-fo
 
 ## 决定（回答「待定」）
 
-1. **第一人称**。方向由句子本身承担，读者不用记住「这一组是父还是子」；代价是每组标题都重复
-   「我」，可接受——标题本来就要重复关系名。
+1. **方向靠语态，不靠箭头**。第一轮写成第一人称（「我属于 1 个母 issue」），保住了「同一个句子
+   主语永远是焦点」，但每组标题都重复一次「我」，侧栏窄时会换行；按反馈改成不带主语的短标签
+   （见文末「修订」），方向改由语态承担（`父 / 子`、`由…引发 / 引发了…`）。
 2. **父子不合成一棵树，但去掉 crumb**。父、子变成同一套机制下的两个桶（`part-of|out` 与
    `part-of|in`），相邻渲染、样式一致。多父因此天然支持（旧版 `view.parent[0]` 会丢）。
 3. **行内不加「父 / 因」这类短标注**。标题已经说尽；行内再标一次是同一句话重复两遍。
@@ -120,27 +121,51 @@ issue 页的聚焦态负责把焦点周围的关系读成文字（`kiln-issue-fo
    `data-hint`（悬停可见）。顺带删掉 `IssueRow` 的 `edge` 入参、`.dkf-edge` 与 `.dkf-crumb`
    两条样式。
 
-**真数据核对**（`kiln graph --json` 的边喂给 `relatedOf`，本仓 29 issue / 46 边）：
+**真数据核对**（`kiln graph --json` 的边喂给 `relatedOf`，本仓 29 issue / 46 边；下面是第二轮
+改简后的文案）：
 
 ```
 == kiln-many-issues
-  2 个子 issue 属于我   -> kiln-input-streams, kiln-list-window
-  我由 1 个 issue 引发  -> kiln-search
-  7 个弱关联（无方向）  -> kiln-cache-budget, …, kiln-v040-adapter
+  2 个子 issue        -> kiln-input-streams, kiln-list-window
+  由 1 个 issue 引发  -> kiln-search
+  7 个弱关联（无方向） -> kiln-cache-budget, …, kiln-v040-adapter
 == kiln-flow-focus-ui
-  我由 1 个 issue 引发  -> kiln-dsh-integration
-  我引发了 1 个 issue   -> kiln-views-shared-focus
+  由 1 个 issue 引发  -> kiln-dsh-integration
+  引发了 1 个 issue   -> kiln-views-shared-focus
 == kiln-list-window
-  我属于 1 个母 issue   -> kiln-many-issues
+  1 个父 issue        -> kiln-many-issues
 ```
 
-因果链因此在两端都读得通：在 `kiln-flow-focus-ui` 上是「我由 A 引发 / 我引发了 B」，在
-`kiln-search` 上是「我引发了 kiln-many-issues」——同一对 issue 换个焦点，方向词自动翻面，
-不再出现「同一段文字两种读法」。
+因果链因此在两端都读得通：在 `kiln-flow-focus-ui` 上是「由 A 引发 / 引发了 B」，在 `kiln-search`
+上是「引发了 kiln-many-issues」——同一对 issue 换个焦点，方向词自动翻面，不再出现「同一段文字
+两种读法」。
 
 测试：`npm test --prefix plugin` → 85（宿主）+ 61（渲染），原为 82 + 58。新增四例：表头一句话
 且行内无 `dkf-edge`、多父全出现、父看子（含 >4 折叠）、因果与阻塞各两向；`run.mjs` 另加三例
 分桶单测（多父、`part-of` 吞 `blocks`、未知关系丢弃、九个桶都带 `{n}`）。
 
 **代价（记下来）**：一个 issue 有九种可能的表头，但只有非空的才渲染（本仓最多三块同现）；
-句子比原来的 `因果 · caused-by 1` 长，侧栏窄到 ~300px 时会占两行——换来的是一眼看懂方向。
+头两轮来回改过口径（「母 issue」→「父 issue」，「我属于 X」→「X 个父 issue」），说明**文案要
+在真数据上看几眼才算定**——测试只能锁住写法，锁不住读感。
+
+## 修订（第二轮 apply）：文案去掉「我」，改短语
+
+反馈很直接：`我属于 1 个母 issue`、`我引发了 1 个 issue` 每组都带「我」，读起来啰嗦，侧栏窄时
+还容易折行。焦点行就在这组行的正上方，主语本来就明确，于是把主语删掉，方向交给语态：
+
+| 桶 | 第一轮 | 定稿 |
+| --- | --- | --- |
+| `part-of\|out`（我的父） | 我属于 1 个母 issue | `1 个父 issue` |
+| `part-of\|in`（我的子） | 2 个子 issue 属于我 | `2 个子 issue` |
+| `blocks\|out` | 我阻塞 1 个 issue | `阻塞了 1 个 issue` |
+| `blocks\|in` | 1 个 issue 阻塞我 | `被 1 个 issue 阻塞` |
+| `supersedes\|out` | 我取代了 1 个 issue | `取代了 1 个 issue` |
+| `supersedes\|in` | 1 个 issue 取代了我 | `被 1 个 issue 取代` |
+| `caused-by\|out` | 我由 1 个 issue 引发 | `由 1 个 issue 引发` |
+| `caused-by\|in` | 我引发了 1 个 issue | `引发了 1 个 issue` |
+| `relates-to` | 7 个弱关联（无方向） | 不变 |
+
+「母 issue」一并改成「父 issue」，跟反馈里的说法一致（父子成对，不再混用母/父）。
+
+只改了 `REL_SIDES` 的 `text`：分桶、顺序、折叠、`data-hint`、CSS 都不动，测试期望同步更新，
+85 + 61 仍全过。

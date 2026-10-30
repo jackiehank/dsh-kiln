@@ -221,21 +221,22 @@ window.__ModuleLoader__.load({
      *
      * 这是**展示表**，不是业务判断：方向由 `a/b` 与焦点的比较得出，文案按 `(rel, dir)` 查表，
      * 没有按关系名写的 `if`——词表外再多一种关系，缺的是一行文案，不是新分支。
-     * 句子一律以「我」（焦点）为主语，计数 `{n}` 写进句子里，行内于是不需要箭头，也不需要
-     * `part-of` 这类原词（见 docs/issues/kiln-relation-direction.md）。
+     * 文案不再写「我」：焦点行就在这组行的正上方，方向靠语态承担（父 / 子、由…引发 / 引发了…），
+     * 计数 `{n}` 写进句子里，于是行内不需要箭头，也不需要 `part-of` 这类原词
+     * （见 docs/issues/kiln-relation-direction.md）。
      *
      * 顺序即渲染顺序：沿用旧的强弱次序 part-of → blocks → supersedes → caused-by → relates-to。
      * `foldable`：这一桶可能很长（伞 issue 的子 issue），超过 4 条先折叠。
      */
     const REL_SIDES = [
-      { rel: 'part-of', dir: 'out', text: '我属于 {n} 个母 issue' },
-      { rel: 'part-of', dir: 'in', text: '{n} 个子 issue 属于我', foldable: true },
-      { rel: 'blocks', dir: 'out', text: '我阻塞 {n} 个 issue' },
-      { rel: 'blocks', dir: 'in', text: '{n} 个 issue 阻塞我' },
-      { rel: 'supersedes', dir: 'out', text: '我取代了 {n} 个 issue' },
-      { rel: 'supersedes', dir: 'in', text: '{n} 个 issue 取代了我' },
-      { rel: 'caused-by', dir: 'out', text: '我由 {n} 个 issue 引发' },
-      { rel: 'caused-by', dir: 'in', text: '我引发了 {n} 个 issue' },
+      { rel: 'part-of', dir: 'out', text: '{n} 个父 issue' },
+      { rel: 'part-of', dir: 'in', text: '{n} 个子 issue', foldable: true },
+      { rel: 'blocks', dir: 'out', text: '阻塞了 {n} 个 issue' },
+      { rel: 'blocks', dir: 'in', text: '被 {n} 个 issue 阻塞' },
+      { rel: 'supersedes', dir: 'out', text: '取代了 {n} 个 issue' },
+      { rel: 'supersedes', dir: 'in', text: '被 {n} 个 issue 取代' },
+      { rel: 'caused-by', dir: 'out', text: '由 {n} 个 issue 引发' },
+      { rel: 'caused-by', dir: 'in', text: '引发了 {n} 个 issue' },
       { rel: 'relates-to', dir: 'none', text: '{n} 个弱关联（无方向）' },
     ].map((side) => ({ ...side, key: `${side.rel}|${side.dir}` }))
     /** 颜色只由 action 类型决定；三页共用同一张表。词表外的动作给中性色，不猜。 */
