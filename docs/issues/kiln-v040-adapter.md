@@ -141,3 +141,97 @@ kiln 于 2026-10-30 发布 v0.4.0（v0.3.0 之后 95 个提交）。CLI 面声�
   宿主现有按 HEAD 缓存快照的写法正好把它压到每次提交一次。
 
 下一步（不在本轮落地）：把文档与 README 的冷/热数字改一遍、补缓存边界；详情的第 2 步另开 issue。
+
+## collect（续，2026-10-30）：机器输出全景，`--jsonl` 只有 `action log`
+
+上游这一版只动了 `action log --jsonl` 的 schema，其余读命令的 `--json` 一律没变。下面是逐条验证，
+外加新字段的规格、实仓分布与「下游能拿它做什么」。
+
+### 1. 全部机器可读输出（v0.4.0）
+
+| 命令 | flag | 形态 | 顶层形状 | 相对 v0.3.0 |
+| --- | --- | --- | --- | --- |
+| `status` | `--json` | 单文档 | `{summary{total,done,open,actions,domains}, worktree{policy,open,current?}, issues[]}` | 逐字节相同 |
+| `list` | `--json` | 单文档 | `{filter,count,issues[{id,domain?,action,done,rank?,title?,commit?,tags?,hit?}]}`；`hit={ordinal,action,commit,subject,total,date}` | 逐字节相同 |
+| `graph` | `--json` | 单文档 | `{summary{issues,edges,missing},nodes[{id,domain?,action,done,title?,tags?}],missing?,edges[{from,to,name,directed}]}` | 逐字节相同 |
+| `path` | `--json` | 单文档（1 个 id）或批量 `{issues[],errors?}` | 每条 `{issue,action,done,actions[{ordinal,action,commit,date,title?,refs?,tags?,stat?}],relations[边]}` | 逐字节相同 |
+| `show` | `--json` | 单文档 | `{issue,ordinal,total,action,commit,date,title?,body?,stat?}` | 逐字节相同（含 `--stat`） |
+| `check` | `--json` | 单文档 | `{passed,findings{ok,warn,error},results[{issue,level,rule,actions[]}]}` | 逐字节相同 |
+| `worktree list` | `--json` | 单文档 | `{backend?,worktrees[{path,main,issue?,gone,dirty,unmerged}]}` | 逐字节相同 |
+| `action list` | `--json` | 单文档 | `{actions{names,start,terminal},source,config?}` | 逐字节相同 |
+| `action log` | `--jsonl` | **NDJSON，一行一个动作** | `issue/action/commit/date` 恒有 + 见下 | **纯增量** |
+
+- **`--jsonl` 是 `action log` 独占**。其余命令给 `--jsonl` 是「未知 flag」：stderr 警告后**回落到文本输出**
+  且 **exit 0**（`list` / `graph` / `status` / `check` 实测）；`path` 是例外，exit 2。反过来
+  `action log --json` 明确拒绝：「action log 用 --jsonl（一行一个动作），不用 --json」，exit 2。
+- `do` / `commit` / `config path` 没有任何 JSON 形态（`do` 的 stdout 必须能直接喂 `git commit -m`）。
+- 逐字节对照补全：两个真仓上 `status` / `check` / `show` / `show --stat` / `worktree list --json`
+  与 v0.3.0 完全相同；加上第一轮的 `list` / `list --search` / `graph` / `path --all` / `action list`，
+  **除 `action log` 外没有任何文档变过**。
+
+### 2. 新字段规格（`internal/cli/action.go:381` 的 `actionLogDoc`）
+
+| 键 | 类型 | 何时出现 | 语义 |
+| --- | --- | --- | --- |
+| `refs` | `[]string` | 有 `refs:` | 引用条目；`SplitList` 后去重 |
+| `target` | `[]string` | 有 `target:` | 涉及文件；去重（提交时校验文件必须在改动里） |
+| `scope` | `string` | 有 `scope:` | 范围文本，单值 |
+| `relations` | `[{name,target}]` | 有任一声明 | **声明**，不是折叠后的边；别名已按词表归一 |
+| `unrelate` | `[]string` | 有 `unrelate:` | 撤销目标列表；单列，不混进 `relations` |
+
+四个旧键（`title` / `domain` / `tags` / `date`）与行序不变；**没有 `ordinal`、没有文件列表、没有
+增量游标**。缺省即省略（不出现 `null` / `[]`），键序固定为结构体顺序（`tags, refs, target, scope,
+relations, unrelate` 依次插在 `domain` 之后），所以同一份历史每次的字节相同。
+
+`relations` 的顺序是**词表序**，不是提交里的书写序（`action.go:303` 的注释）：
+
+- 先按当前词表的声明名顺序输出（`part-of` / `has-part` / `blocks` / …），每个名字下按提交里的书写顺序；
+- 完全相同的 `(name,target)` 只留一条；
+- 别名在 `trailer.Parse` 阶段就归一了（`derived-from` → `caused-by`），逆名**不翻转**：
+  `has-part: X` 原样输出 `{name:"has-part",target:X}`，折叠成边是 `path` / `graph` 的事。
+
+三个探针提交（在一次性克隆里做的，未进本仓历史）验证了上面三条：
+`--derived-from kiln-v030-adapter` 输出 `{"name":"caused-by",...}`；
+`--has-part kiln-v040-adapter` 输出 `{"name":"has-part",...}`；
+两次相同的 `--relates-to x` 只输出一条，而 `--unrelate a,b` 输出 `["a","b"]`。
+
+### 3. 实仓分布（v0.4.0，两个真仓）
+
+| 键 | 本仓 151 行 | `~/kiln` 447 行 |
+| --- | --- | --- |
+| `refs` | 111 行 / 187 条 / 6,731 B | 10 行 / 10 条 / 141 B |
+| `target` | 144 行 / 177 条 / 6,931 B | 58 行 / 99 条 / 3,069 B |
+| `scope` | 19 行 / 414 B | 161 行 / 11,134 B |
+| `relations` | 19 行 / 36 条声明（`relates-to` 29、`caused-by` 4、`part-of` 3） | 90 行 / 154 条（`relates-to` 128、`caused-by` 23、`blocks` / `blocked-by` / `causes` 各 1） |
+| `unrelate` | 0 | 1 行（`commit-cache` 的 `unrelate:["action-log-relations"]`） |
+
+整条流：本仓 43,325 → 59,516 B（+16,191 B，+37.4%，其中 refs+target 占 13.7 KB）；
+`~/kiln` 127,893 → 151,135 B（+23,242 B，+18.2%，其中 `scope` 占 11.1 KB）。
+冷读与热读的 `action log` 输出逐字节相同（清缓存前后对比过），缓存层没有丢字段。
+
+### 4. 「声明」不等于「图」：差多少
+
+- 本仓 36 条声明 → 36 条边，逐条能对上（历史里没有重复声明或逆名）；`~/kiln` 154 条 → 125 条边，
+  差额来自折叠时的合并（同一对 issue 的重复声明、逆名、对称关系、槽内取强）；
+- 例：`kiln-v040-adapter` 的 `ask` 声明 3 条 `relates-to`，`path --json` 给出 3 条无向边
+  （`from`/`to`/`name`/`directed:false`）；
+- 上游在 `action-log-relations` 里明确不承诺「重放流能还原 `graph`」：同秒排序、逆名归一、
+  对称合并、槽内取强都不在流里。所以下游要边就得继续用 `graph` / `path`，流只适合做
+  「谁声明了什么」的展示。
+
+### 5. 插件要不要消费
+
+现状：`timeline.js:46` 的 `mapActionRecord` 只取 7 个旧字段，多余键直接丢弃；
+`client.js:903` 折叠 issue 时把 `refs` 固定成 `[]`。所以新字段**不影响任何渲染**，测试不用改。
+
+逐个看：
+
+- `refs` / `target` / `scope`：可以安全地透传，但界面从不渲染 refs（详情也没展示 target/scope），
+  收益为零；等详情页需要「引用/涉及文件」时再加；
+- `relations`：不能折叠（要复刻词表、逆名、槽位与同秒规则），与「插件不复刻 kiln 状态」的约定冲突，
+  继续用快照的边；
+- `unrelate`：只有真做折叠时才需要，届时必须按时间序撤销——比现在多一类正确性负担，先不接；
+- `--limit N` 截断的是**最新**的 N 条，声明折叠只对完整流成立；插件现在就是全量流，无需改。
+
+结论：这一版对插件是**文档级适配**（数字分冷/热、补缓存边界），代码保持不动；新字段留给
+「按需详情」那条 issue 作为可选素材。
