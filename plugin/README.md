@@ -1,26 +1,26 @@
 # @local/dsh-kiln
 
 DSH × kiln 的插件：在会话顶部标签排（对话 / 轨迹 / 上下文）**之后**加一个 `kiln` 标签，
-只读展示 kiln 仓库的三页视图（时间线 / issue / 关系）。**插件版本 0.9.0**：按视图取数——
-首屏只读一条动作流，关系图与详情点开才取，图 / 详情 / 搜索按会话缓存，列表按 **100 行一屏**
-渲染、滚到底再追加。
+只读展示 kiln 仓库的三页视图（时间线 / issue / 关系）。**插件版本 0.10.0**：按视图取数——
+首屏只读一条动作流，关系图与详情点开才取，图 / 详情 / 搜索按会话缓存；动作流在宿主按 HEAD 缓存
+（HEAD 未变时切回标签 0 子进程），列表按可视区虚拟渲染、滚到底再追加。
 
 - 版本要求：**取数需 kiln v0.2.0+**（`graph --json`、单条 `path --json`、`commit` 键），
   **搜索需 v0.2.1+**（`rank` / `hit.total` / `hit.date`），**动作流与词表需 v0.3.0+**
   （`action log --jsonl`、`action list --json`）。v0.4.0 起热读约 30–40ms（缓存默认开启），
   插件不需要它才能工作，只是更快。旧版会在对应面明确报错，其余页面不受影响。
 - 数据来源：宿主路由 `GET /kiln/graph`（关系图，HEAD 缓存）、`GET /kiln/issue?id=`
-  （详情，点开才取）、`GET /kiln/timeline`（NDJSON 流）、`GET /kiln/actions`（词表）、
-  `GET /kiln/search`（一次搜索）。宿主进程里对应跑 `kiln graph --json`、
-  `kiln path <id> --json`、`kiln action log --jsonl`、`kiln action list --json`、
-  `kiln list --search <q> --json`——**一个视图一条命令**。
+  （详情，点开才取）、`GET /kiln/timeline`（NDJSON 流，HEAD 未变走内存重发）、
+  `GET /kiln/actions`（词表）、`GET /kiln/search`（一次搜索）。宿主进程里对应跑
+  `kiln graph --json`、`kiln path <id> --json`、`kiln action log --jsonl`、
+  `kiln action list --json`、`kiln list --search <q> --json`——**一个视图一条命令**。
 - 浏览器半不直接读文件，也不调 CLI；仓库根 = 当前会话的工作区目录。
 
 ## 三页与取数
 
 | 视图 | 数据 | 何时取 | 本机代价（热 / 冷） |
 | --- | --- | --- | --- |
-| 时间线 | `action log --jsonl`（全仓动作流） | 打开标签就订阅 | 42ms / 120ms |
+| 时间线 | `action log --jsonl`（全仓动作流） | 打开标签就订阅 | 42ms / 120ms（HEAD 未变 ~2ms） |
 | issue 列表 | 同一条流，客户端折叠 | 随流 | 0 |
 | 详情 / 聚焦 | `path <id> --json`（动作 + 进出的边） | 点开时 | 42ms / 120ms |
 | 关系图 | `graph --json`（节点 + 折叠边） | 切到关系页时 | 42ms / 120ms |
@@ -43,6 +43,11 @@ HEAD 用文件直读，命中时宿主只花 1–2ms。）
   点「刷新」或重开页面才失效——与动作流“mount 时重读”的失效模型一致，不落盘。宿主另按
   `(repo, 配置令牌, 二进制令牌)` 缓存词表，浏览器 F5 后不必再起一次 `action list`。
   搜索 effect 通过 ref 读 issue 索引，流式期间不会因为索引每批换新而 abort 重发。
+- **动作流缓存（0.10.0）**：宿主按 `(repo, HEAD, 配置令牌, 二进制令牌)` 记住上一次的动作行，
+  HEAD 没动时**不起子进程**，把行按原 NDJSON 重发（响应头 `x-kiln-mode: hit|build|bypass`）。
+  HEAD 变了就整条重读（前缀增量在 `kiln-memory-cache` 的第三期）；单仓超 **5 万行 / 20MB**
+  就记成 `bypass`，行为退回无缓存。`DSH_KILN_TIMELINE_CACHE=off` 可一键关掉；
+  `?fresh=1` 忽略缓存重建。缓存里只有客户端要的 8 个字段，不留原始 NDJSON。
 - **虚拟列表（0.9.0）**：时间线、issue 列表、搜索结果都只挂“可视区 ± 600px”的行，
   上下用 `.dkf-vspacer` 撑出内容总高；行高先按 30px 估、渲染后按真实高度修正
   （键 = 提交 sha / issue id，流在顶部插行也不会串）。内容总高不超过视口 + 2×overscan 时
@@ -76,6 +81,9 @@ v0.4.0 默认开启提交记录缓存，落在 `<git-common-dir>/kiln/`（层 + 
 - 缓存异常 / 升级后想重建，用 `kiln cache clear`（插件不代劳），日常回收 `kiln cache gc`；
 - 插件只读的边界不变：不写 trailer、不造提交、不落盘。
 
+插件自己还有一层**进程内**缓存（0.7.0 的图/详情/搜索、0.10.0 的动作流），与上面这份互不相干：
+kiln 的缓存省的是“git 进程”，插件省的是“kiln 进程”。两层都失效时才是完整的一次冷读。
+
 ## 文件
 
 | 文件 | 作用 |
@@ -83,12 +91,15 @@ v0.4.0 默认开启提交记录缓存，落在 `<git-common-dir>/kiln/`（层 + 
 | `lib/index.js` | 宿主半：注册只读 HTTP 路由（`/kiln/graph`、`/kiln/issue`、`/kiln/timeline`、`/kiln/actions`、`/kiln/search`） |
 | `lib/flow.js` | 宿主半的数据层：调 kiln CLI（graph / path 单条 / list --search / action list） |
 | `lib/timeline.js` | 宿主半的时间线：spawn `kiln action log --jsonl`、按行切、失败文案 |
+| `lib/timelineHandler.js` | 宿主半的时间线路由体：命中内存重发 / 构建 / bypass 三条路 |
+| `lib/rowsCache.js` | 宿主半的动作流缓存：HEAD / 配置 / 二进制失效，5 万行 / 20MB 上限 |
 | `lib/snapshot.js` | 宿主半的图缓存：HEAD / 配置 / 二进制三元组失效，同仓并发合并 |
 | `lib/git.js` | 宿主半的 git 探测：直读 HEAD、配置/二进制令牌 |
 | `lib/client.js` | 浏览器半：`conversation.view` 插槽条目，名字 `kiln`；折叠与渲染 |
-| `test/run.mjs` | 宿主侧用例（数据层、缓存决策、搜索行映射/筛选纯函数） |
+| `test/run.mjs` | 宿主侧用例（数据层、缓存决策、动作流缓存/路由、搜索行映射/筛选纯函数） |
 | `test/render.mjs` | 渲染冒烟（极简 React 替身，不碰浏览器） |
 | `test/probe-perf.mjs` | 性能探针：graph 冷/热、详情单条、并发合并、旧法逐条取数对照 |
+| `test/probe-memory.mjs` | 内存探针：动作流的传输/解析/折叠/常驻堆，含 10 万行实测 |
 | `cordis.patch.yml` | 宿主侧插入声明（`insert: id: dsh-kiln`） |
 | `package.json` | `dsh.bundle.patch` + `dsh.client` 平台与依赖声明 |
 
@@ -128,12 +139,14 @@ node plugin/test/probe-perf.mjs . C:\Users\jacki\kiln
   第一条、搜索行没有 `rank`、没有 `action` 子命令——插件直接报对应版本，不退回逐条或自己补排序。
 - **规模上界是整条动作流**：issue 列表与时间线都要读完全部动作（O(动作数)）。1k 动作内一次
   42ms 热读；100k 动作（约 29MB）需要上游分页/索引，见 `kiln-many-issues`。
+  0.10.0 起 HEAD 未变时重进标签不再重读（宿主命中）；但**新 HEAD 的第一读仍是全量**。
 - **虚拟列表之外的行不在 DOM**：find-in-page 只能搜到当前挂载的“可视区 ± 600px”；
   滚过去的行会重新挂上，但搜索不会自动跳到它们（虚拟化的固有代价）。
 - **详情按需带来一跳**：点开 issue 多等约 42ms（冷 120ms），换来没有 80 条上限、没有快照/流双源；
   同一 issue 二次点开走会话缓存。hover 预取只在鼠标停留 120ms 后触发，扫过列表不会取一整屏。
-- **缓存 = 会话内的一致视图**：图 / 详情 / 搜索在本次挂载内不随新提交变化；想让新提交可见，
-  按「刷新」或重开页面（动作流本来也是 mount 时重读）。
+- **缓存语义分两层**：图 / 详情 / 搜索是“本次挂载内一致”，刷新或重开页面即失效；
+  动作流是“跟 HEAD 一致”，切页、换会话都复用它，新提交只在 HEAD 前进后重新读。
+  想让两层都作废，按「刷新」或用 `?fresh=1`。
 - 关系词表按 kiln 0.2.0 的内置词表硬编码在 `client.js` 的 `GROUPS` 里；等 kiln 支持
   `.kilnconfig.jsonc` 配置 `relations` 后改成读配置。
 - Flow 布局是初稿，Triage / Genealogy 尚未实现。

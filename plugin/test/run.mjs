@@ -8,7 +8,9 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 
 import { buildGraph, mapActions, parseIssueDocument, searchDocumentError } from '../lib/flow.js'
+import { createRowsCache, evaluateRowsCache } from '../lib/rowsCache.js'
 import { createSnapshotCache, evaluateCache } from '../lib/snapshot.js'
+import { createTimelineHandler } from '../lib/timelineHandler.js'
 import { actionsCacheKey } from '../lib/index.js'
 import {
   actionLogArgs,
@@ -979,7 +981,237 @@ await check('时间线：逐条回调、跨块拼行、坏行不吞、done 只�
   assert.deepEqual(errors, ['spawn kiln ENOENT', 'done'], 'error 之后 close 不能把 done 再说一遍')
 })
 
-// ---------------------------------------------------------------- issue 索引折叠（客户端纯函数）
+// ---------------------------------------------------------------- 动作流缓存（rowsCache + timelineHandler）
+
+const CACHE_ROWS = [
+  { issue: 'a', action: 'ask', commit: SHA_A, date: '2026-10-01T00:00:00+08:00', title: 'A' },
+  { issue: 'b', action: 'apply', commit: SHA_B, date: '2026-10-02T00:00:00+08:00', title: 'B' },
+]
+const CACHE_NDJSON = `${CACHE_ROWS.map((row) => JSON.stringify(row)).join('\n')}\n`
+
+/** 假 res：够用的写端 + 一个能手动收口的连接事件。 */
+function makeFakeRes() {
+  const bus = new EventEmitter()
+  const state = { chunks: [], headers: {}, ended: false }
+  const res = {
+    statusCode: 0,
+    get writableEnded() {
+      return state.ended
+    },
+    setHeader(name, value) {
+      state.headers[String(name).toLowerCase()] = String(value)
+    },
+    write(chunk) {
+      if (state.ended) return false
+      state.chunks.push(String(chunk))
+      return true
+    },
+    end() {
+      if (state.ended) return
+      state.ended = true
+      bus.emit('close')
+    },
+    on(name, fn) {
+      bus.on(name, fn)
+      return res
+    },
+    once(name, fn) {
+      bus.once(name, fn)
+      return res
+    },
+    off(name, fn) {
+      bus.off(name, fn)
+      return res
+    },
+  }
+  const events = () =>
+    state.chunks
+      .join('')
+      .split('\n')
+      .filter((line) => line !== '')
+      .map((line) => JSON.parse(line))
+  const disconnect = () => bus.emit('close')
+  return { res, state, events, disconnect }
+}
+
+/** 假子进程：能 emit 数据，也记账 kill 与 pause（背压路径要能看到）。 */
+function streamChild() {
+  const child = childStub()
+  child.killed = 0
+  child.kill = () => {
+    child.killed += 1
+  }
+  child.stdout.pause = () => {}
+  child.stdout.resume = () => {}
+  return child
+}
+
+function timelineHarness(options = {}) {
+  const state = {
+    head: options.head ?? 'h1',
+    config: 'c1',
+    bin: 'b1',
+    enabled: options.enabled ?? true,
+    spawns: 0,
+    children: [],
+  }
+  const git = {
+    readHead: async () => state.head,
+    configToken: () => state.config,
+    binaryToken: () => state.bin,
+  }
+  const cache = createRowsCache({
+    git,
+    rowsLimit: options.rowsLimit ?? 1000,
+    bytesLimit: options.bytesLimit ?? 1 << 20,
+    repoLimit: options.repoLimit ?? 2,
+  })
+  const handler = createTimelineHandler({
+    resolveKiln: () => '/bin/kiln',
+    repoProblem: () => null,
+    spawnActionLog: () => {
+      state.spawns += 1
+      const child = streamChild()
+      state.children.push(child)
+      return child
+    },
+    consumeActionLog,
+    actionLogProblem,
+    cache,
+    enabled: () => state.enabled,
+  })
+  return { state, cache, handler }
+}
+
+/** 跑一次请求；如果这次起了子进程，就把给定的 NDJSON 喂完并收口。 */
+async function respond(harness, options = {}) {
+  const fake = makeFakeRes()
+  const before = harness.state.children.length
+  await harness.handler(options.cwd ?? '/repo', fake.res, options.args ?? {})
+  const spawned = harness.state.children.length > before
+  if (spawned) {
+    const child = harness.state.children[harness.state.children.length - 1]
+    child.stdout.emit('data', options.payload ?? CACHE_NDJSON)
+    child.emit('close', options.code ?? 0)
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  return { ...fake, spawned }
+}
+
+await check('动作流缓存：决策表——关掉/无 HEAD/冷启/配置/二进制/命中/HEAD 前进', () => {
+  const probe = { head: 'h1', configToken: 'c1', binToken: 'b1' }
+  const entry = { head: 'h1', configToken: 'c1', binToken: 'b1' }
+  assert.equal(evaluateRowsCache(entry, probe).mode, 'hit')
+  assert.equal(evaluateRowsCache(entry, probe, { enabled: false }).reason, 'disabled')
+  assert.equal(evaluateRowsCache(entry, { ...probe, head: null }).reason, 'head-unavailable')
+  assert.equal(evaluateRowsCache(null, probe).reason, 'cold')
+  assert.equal(evaluateRowsCache(entry, { ...probe, configToken: 'c2' }).reason, 'config-changed')
+  assert.equal(evaluateRowsCache(entry, { ...probe, binToken: 'b2' }).reason, 'binary-changed')
+  const moved = evaluateRowsCache(entry, { ...probe, head: 'h2' })
+  assert.equal(moved.mode, 'build')
+  assert.equal(moved.reason, 'head-moved')
+})
+
+await check('动作流缓存：第一次构建并写缓存，第二次同 HEAD 零子进程重发', async () => {
+  const harness = timelineHarness()
+  const first = await respond(harness)
+  const doneFirst = first.events().find((event) => event.kind === 'done')
+  assert.equal(first.state.headers['x-kiln-mode'], 'build')
+  assert.equal(doneFirst.cache, 'stored')
+  assert.equal(harness.state.spawns, 1)
+  assert.equal(first.events().filter((event) => event.kind === 'action').length, 2)
+
+  const second = await respond(harness)
+  const doneSecond = second.events().find((event) => event.kind === 'done')
+  assert.equal(second.state.headers['x-kiln-mode'], 'hit')
+  assert.equal(doneSecond.cache, 'hit')
+  assert.equal(second.spawned, false, '命中时不该再起子进程')
+  assert.equal(harness.state.spawns, 1)
+  assert.deepEqual(
+    second.events().filter((event) => event.kind === 'action').map((event) => event.issueId),
+    ['a', 'b'],
+    '重发的行与原流一致',
+  )
+})
+
+await check('动作流缓存：HEAD 前进 → 重建并覆盖（阶段 1 还不做增量）', async () => {
+  const harness = timelineHarness()
+  await respond(harness)
+  harness.state.head = 'h2'
+  const next = await respond(harness, { payload: `${JSON.stringify(CACHE_ROWS[0])}\n` })
+
+  assert.equal(next.state.headers['x-kiln-mode'], 'build')
+  assert.equal(harness.state.spawns, 2)
+  assert.equal(next.events().filter((event) => event.kind === 'action').length, 1)
+  // 新的一份覆盖旧的：同一个 HEAD 再请求一次应当命中新的那一行
+  const again = await respond(harness)
+  assert.equal(again.state.headers['x-kiln-mode'], 'hit')
+  assert.equal(again.events().filter((event) => event.kind === 'action').length, 1)
+})
+
+await check('动作流缓存：超限不存半截，这一仓本会话改走 bypass', async () => {
+  const harness = timelineHarness({ rowsLimit: 1 })
+  const first = await respond(harness)
+  const done = first.events().find((event) => event.kind === 'done')
+  assert.equal(done.cache, 'oversize')
+  assert.equal(harness.cache.rows('/repo'), null, '超限的仓不留半截缓存')
+
+  const second = await respond(harness)
+  assert.equal(second.state.headers['x-kiln-mode'], 'bypass')
+  assert.equal(harness.state.spawns, 2, 'bypass 就是每次重读')
+  assert.equal(second.events().find((event) => event.kind === 'done').cache, 'skip')
+})
+
+await check('动作流缓存：关掉缓存（env/带 limit）→ bypass，行为与没有缓存一致', async () => {
+  const off = timelineHarness({ enabled: false })
+  const first = await respond(off)
+  assert.equal(first.state.headers['x-kiln-mode'], 'bypass')
+  assert.equal(off.cache.rows('/repo'), null)
+
+  const on = timelineHarness()
+  const limited = await respond(on, { args: { noCache: true } })
+  assert.equal(limited.state.headers['x-kiln-mode'], 'bypass')
+  assert.equal(on.cache.rows('/repo'), null, '带 limit 的缩水结果不能进缓存')
+})
+
+await check('动作流缓存：fresh=1 忽略缓存重建，并把新数据写回去', async () => {
+  const harness = timelineHarness()
+  await respond(harness)
+  assert.equal(harness.cache.rows('/repo').length, 2)
+
+  const fresh = await respond(harness, { args: { fresh: true }, payload: `${JSON.stringify(CACHE_ROWS[1])}\n` })
+  assert.equal(fresh.state.headers['x-kiln-mode'], 'build')
+  assert.equal(harness.state.spawns, 2)
+  const rows = harness.cache.rows('/repo')
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].id, SHA_B)
+})
+
+await check('动作流缓存：客户端断开 → kill 子进程，后续行不再写', async () => {
+  const harness = timelineHarness()
+  const fake = makeFakeRes()
+  await harness.handler('/repo', fake.res, {})
+  const child = harness.state.children[0]
+  child.stdout.emit('data', `${JSON.stringify(CACHE_ROWS[0])}\n`)
+  fake.disconnect()
+  assert.equal(child.killed, 1, '连接关了就该 kill')
+  const written = fake.state.chunks.length
+  child.stdout.emit('data', `${JSON.stringify(CACHE_ROWS[1])}\n`)
+  child.emit('close', 0)
+  assert.equal(fake.state.chunks.length, written, '关掉之后不再写')
+})
+
+await check('动作流缓存：最多留 2 个仓，第 3 个把最久没用的挤掉', async () => {
+  const harness = timelineHarness({ repoLimit: 2 })
+  const rows = [{ ...CACHE_ROWS[0] }]
+  for (const repo of ['r1', 'r2', 'r3']) {
+    harness.cache.commit(repo, { head: 'h1', configToken: 'c1', binToken: 'b1', rows, bytes: 100 })
+  }
+  assert.equal(await harness.cache.rows('r1'), null)
+  assert.notEqual(await harness.cache.rows('r2'), null)
+  assert.notEqual(await harness.cache.rows('r3'), null)
+})
+
 
 function clientInternals() {
   const reactStub = {

@@ -351,3 +351,44 @@ TTL（能精确探测就不猜）、落盘（破坏“不落盘”）、原始�
 
 **一句话结论**：先做阶段 1（不再起进程），再做阶段 2（不搬字节），阶段 3 视真实提交频率决定；
 三者都能单独上线、单独回退。
+
+## 落地（阶段 1，插件 0.10.0）
+
+只做阶段 1：**宿主记住动作行，HEAD 没动就不起子进程**。客户端协议（`?head=`）与前缀增量都没动。
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `plugin/lib/rowsCache.js` | 新增。`evaluateRowsCache` 纯决策 + `createRowsCache` 存储：`(repo, HEAD, 配置令牌, 二进制令牌)` 四元组；5 万行 / 20MB 上限；`hit`/`build`/`bypass`；最多留 2 个仓 |
+| `plugin/lib/timelineHandler.js` | 新增。路由实现体：`hit` 从内存按原 NDJSON 重发（带背压）、`build` 边流边 tee 并在**读完后**提交、`bypass` 与无缓存时逐字节一致 |
+| `plugin/lib/index.js` | 路由改为委托 handler；新增 `fresh=1`、带 `limit` 时强制 `noCache`、`DSH_KILN_TIMELINE_CACHE=off` |
+| `plugin/lib/client.js` | 修词表失效：`clearRepoCaches` 一并清 `actionsCache`，词表 effect 依赖加 `nonce`（改 terminal 词表后刷新即生效） |
+
+响应头 `x-kiln-mode`（`hit|build|bypass`）与 `x-kiln-head` 用于排障；`done` 事件多一个
+`cache` 字段（`hit|stored|oversize|skip|head-unavailable`），客户端忽略未知字段，不用改。
+
+### 边界与取舍（照 hypothesize 执行）
+
+- **HEAD 变了就全量重读**：阶段 1 不做前缀增量，宁可多读一次也不冒漏行的险；
+- **超限不存半截**：超过 5 万行 / 20MB 就 `markOversize`，本会话对该仓一直 `bypass`（换 kiln 二进制后重试）；
+- **不存原始 NDJSON、不存折叠索引**：只留客户端要的 8 个字段；
+- **带 `limit` 的请求永不进缓存**：缩水结果不能顶替全量；
+- **配置令牌也参与失效**：`action log` 是否受词表影响没有上游保证，保守一点只多写一个 statSync。
+
+### 验证
+
+- 宿主用例 **67 个**（原 59 + 新增 8）：决策表 7 种输入；构建→命中零子进程；HEAD 前进重建覆盖；
+  超限转 bypass 且不留半截；`enabled=false` 与带 `limit` 都 bypass；`fresh` 重建并写回；
+  客户端断开即 kill 且不再写；LRU 只留 2 个仓。
+- 渲染用例 58 个照常通过。
+- 真仓（HEAD `9cf4393`）：`cold → build`、写回后 `again → hit`、`fresh → build`、`off → bypass`，
+  `readHead` 直读 `.git/HEAD` 拿到真 sha。
+- 实测口径来自 `probe-memory.mjs`：取数 37.8–45.9ms / 63.5KB，其中 `--limit 1` 也要 33.8ms，
+  所以命中时省下的正是这 34ms 起的固定成本。
+
+### 还没做（后续期）
+
+- 阶段 2：客户端 rows + `?head=` 协议（`unchanged`/`delta`），省掉 24MB 传输与 58ms parse；
+- 阶段 3：HEAD 前进时的前缀增量（停止条件、`merge-base` 前置、EOF 未见 boundary 回退）；
+- 宿主详情缓存与流式增量折叠（优先级见「本仓实测」第五节的 2、4 位）。

@@ -3,15 +3,17 @@
  *
  * - `GET /kiln/graph`：关系图（`kiln graph --json`），HEAD 没动就用缓存；
  * - `GET /kiln/issue?id=`：详情（`kiln path <id> --json`），点开才取；
- * - `GET /kiln/timeline`：动作流（`kiln action log --jsonl`，NDJSON）；
+ * - `GET /kiln/timeline`：动作流（`kiln action log --jsonl`，NDJSON），HEAD 没动就内存重发；
  * - `GET /kiln/actions`：词表；`GET /kiln/search`：整仓搜索。
  *
  * 浏览器里没有 kiln，但宿主进程有；插件只在宿主侧调 CLI。
  * 路由走与 open-in-app 相同的信任栅栏（connection.requestRejection），不额外做鉴权。
  */
 import { readActions, readIssue, readSearch, repoProblem, resolveKiln } from './flow.js'
+import { createRowsCache } from './rowsCache.js'
 import { createSnapshotCache } from './snapshot.js'
 import { binaryToken, configToken } from './git.js'
+import { createTimelineHandler } from './timelineHandler.js'
 import { actionLogProblem, consumeActionLog, spawnActionLog } from './timeline.js'
 
 /** Cordis function-plugin name；与包名一致，便于排查。 */
@@ -28,6 +30,22 @@ const ACTIONS_PATH = '/kiln/actions'
 
 /** 进程内缓存：不落盘，重启即失效。 */
 const cache = createSnapshotCache()
+
+/**
+ * 动作流缓存（阶段 1）：HEAD 没动就不起子进程，把上一次的行按原 NDJSON 重发。
+ * 关掉的方式：`DSH_KILN_TIMELINE_CACHE=off`（等价于每次全量，行为与没有它时一致）。
+ */
+const timelineCache = createRowsCache()
+
+const timeline = createTimelineHandler({
+  resolveKiln,
+  repoProblem,
+  spawnActionLog,
+  consumeActionLog,
+  actionLogProblem,
+  cache: timelineCache,
+  enabled: () => process.env.DSH_KILN_TIMELINE_CACHE !== 'off',
+})
 
 /**
  * 词表缓存：只读配置、不读历史，按 (仓库, 配置令牌, 二进制令牌) 失效。
@@ -176,6 +194,8 @@ export function apply(ctx) {
    * 浏览器拿到的是「一行一个事件」：`action`（一条动作）、`error`（一条人话）、`done`（收口）。
    * 上游没有终止记录，EOF 就是终点，所以 `done` 由宿主补——客户端只认这个事件，不用猜行数。
    * 客户端断开（切页 / 刷新 / 卸载）就 kill 子进程，别让一个大仓的 git log 留在后台。
+   *
+   * HEAD 没动时走缓存的内存重发（`x-kiln-mode: hit`），实现体在 `timelineHandler.js`。
    */
   ctx.effect(
     () =>
@@ -203,60 +223,10 @@ export function apply(ctx) {
             return
           }
           const limit = Number.parseInt(url.searchParams.get('limit') ?? '', 10)
-
-          res.statusCode = 200
-          res.setHeader('content-type', 'application/x-ndjson; charset=utf-8')
-          res.setHeader('cache-control', 'no-store')
-
-          const write = (event) => {
-            if (res.writableEnded === true) return false
-            return res.write(`${JSON.stringify(event)}\n`)
-          }
-          const close = (reason, message, extra) => {
-            write({ kind: 'error', reason, ...(message === undefined ? {} : { message }), ...(extra ?? {}) })
-            write({ kind: 'done', exit: 0, count: 0 })
-            if (res.writableEnded !== true) res.end()
-          }
-
-          const bin = resolveKiln()
-          if (bin === null) {
-            close('kiln-missing', '宿主进程里找不到 kiln 可执行文件。把 kiln 放进 PATH，或设置 DSH_KILN_BIN。')
-            return
-          }
-          const invalid = repoProblem(cwd)
-          if (invalid !== null) {
-            close(invalid)
-            return
-          }
-
-          const startedAt = Date.now()
-          const child = spawnActionLog(bin, cwd, limit)
-          let closed = false
-          res.on('close', () => {
-            closed = true
-            child.kill()
-          })
-
-          consumeActionLog(child, {
-            onRecord: (row) => {
-              if (closed) return
-              // 背压：浏览器没读走之前别让子进程继续吐，100k 仓也不至于把宿主堆满。
-              if (write({ kind: 'action', ...row }) === false) {
-                child.stdout.pause()
-                res.once('drain', () => child.stdout.resume())
-              }
-            },
-            onError: (message) => {
-              if (closed) return
-              write({ kind: 'error', reason: 'kiln-error', message })
-            },
-            onDone: ({ code, stderr, count }) => {
-              if (closed || res.writableEnded === true) return
-              const problem = actionLogProblem(code, stderr)
-              if (problem !== null) write({ kind: 'error', reason: 'kiln-error', message: problem })
-              write({ kind: 'done', exit: code, count, ms: Date.now() - startedAt })
-              res.end()
-            },
+          await timeline(cwd, res, {
+            // limit 的缩水结果不能顶替全量缓存：带 limit 的请求永远直读
+            noCache: Number.isInteger(limit) && limit > 0,
+            fresh: url.searchParams.get('fresh') === '1',
           })
         },
       }),

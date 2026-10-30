@@ -84,10 +84,11 @@ window.__ModuleLoader__.load({
       while (map.size > limit) map.delete(map.keys().next().value)
     }
 
-    /** 刷新时清掉一个仓库的会话缓存。 */
+    /** 刷新时清掉一个仓库的会话缓存（词表也在内：改了 terminal 词表刷新就该立刻生效）。 */
     function clearRepoCaches(cwd) {
       graphCache.delete(cwd)
       graphInflight.delete(cwd)
+      actionsCache.delete(cwd)
       const prefix = `${cwd}\u0000`
       for (const key of [...detailCache.keys()]) if (key.startsWith(prefix)) detailCache.delete(key)
       for (const key of [...detailInflight.keys()]) if (key.startsWith(prefix)) detailInflight.delete(key)
@@ -2562,7 +2563,7 @@ window.__ModuleLoader__.load({
           }
         })()
         return () => controller.abort()
-      }, [cwd, vocabFixture])
+      }, [cwd, vocabFixture, nonce])
 
       // 切焦点时收起附属展开，并把焦点行重新展开：换焦点等于换一批邻居与一份动作
       React.useEffect(() => {
@@ -3390,6 +3391,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, nextSearchIndex, jumpPlan, rowKeyOf, buildOffsets, virtualWindow, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, actionsCache, nextSearchIndex, jumpPlan, rowKeyOf, buildOffsets, virtualWindow, css: CSS } } : {}) }
   },
 })
