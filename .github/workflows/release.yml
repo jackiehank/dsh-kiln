@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要发布的 tag，例如 v0.14.0
+        required: true
 
 permissions:
   contents: write
@@ -12,7 +17,12 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - name: 解析要发布的 tag
+        run: echo "TAG=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -20,7 +30,7 @@ jobs:
 
       - name: tag 与 package.json 版本一致
         run: |
-          node -e "const v=require('./plugin/package.json').version;const t=process.env.GITHUB_REF_NAME.replace(/^v/,'');if(v!==t){console.error('tag '+t+' 与 package.json '+v+' 不一致');process.exit(1)}"
+          node -e "const v=require('./plugin/package.json').version;const t=process.env.TAG.replace(/^v/,'');if(v!==t){console.error('tag '+t+' 与 package.json '+v+' 不一致');process.exit(1)}"
 
       - name: 用例
         working-directory: plugin
@@ -39,4 +49,4 @@ jobs:
       - name: 建 Release 并附 tgz
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" plugin/jackiehank-dsh-kiln-*.tgz --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$TAG" plugin/jackiehank-dsh-kiln-*.tgz --title "$TAG" --generate-notes

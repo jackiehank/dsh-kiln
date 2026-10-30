@@ -326,6 +326,45 @@ git tag v0.14.0; git push origin v0.14.0
 - **公开前扫过历史**：`git log -p` 匹配常见令牌格式（`sk-`、`ghp_`、`AKIA`、私钥头）无命中；
   仓库会连同全部 issue 历史与 `docs/` 一起公开，这是本仓的设计。
 
+## 追加：tag 推了却没有 Release（2026-10-30）
+
+**原因不是 workflow 写错，是它没被登记**：GitHub 只从**默认分支**发现 workflow 文件。
+
+时间线：
+
+1. `main` 推到 `f551420`——当时 `.github/workflows/` 还不存在；
+2. 随后推 tag `v0.14.0` → `59d30f3`，这个提交里**有** workflow，但只在 tag 上，`main` 上没有。
+
+API 证据（公开仓，无需登录）：
+
+| 查询 | 结果 |
+| --- | --- |
+| `GET /repos/jackiehank/dsh-kiln/actions/workflows` | `total_count: 0`——一个 workflow 都没注册 |
+| `GET …/contents/.github/workflows?ref=v0.14.0` | `release.yml` 在（1305 B） |
+| `GET …/branches/main` | `f551420`（不含 workflow） |
+| `GET …/actions/runs` | `total_count: 0` |
+| `GET …/releases` | `[]` |
+
+所以既没有 run、也没有报错、更没有 Release——tag 事件根本没有匹配到任何已注册的 workflow。
+
+### 修了什么
+
+1. **`main` 必须先带 workflow**：推完 main，GitHub 才会登记，tag 事件才有人接；
+2. workflow 加 **`workflow_dispatch`（带 `tag` 输入）**：已经在远端、但当时没登记的 tag 不必删了重打——推完 main 后从 Actions 页手动跑一次，输入 `v0.14.0` 即可；
+3. 补**根 `LICENSE`**（MIT），GitHub 才会显示 license 徽章（`plugin/LICENSE` 只作用于 npm 包）。
+
+### 正确的发布顺序（以后照这个）
+
+```powershell
+git push origin main                        # 先让默认分支带上 workflow
+git tag v0.14.1; git push origin v0.14.1    # 再打 tag，事件才会有人接
+```
+
+已经有 tag 的情况：推完 main → Actions → release → Run workflow → 填 `v0.14.0`。
+
+**教训**：先推代码、后打 tag；tag 是"触发器"，不是"存档"——触发器所在的那一版代码里必须有 workflow。
+
+
 
 
 
