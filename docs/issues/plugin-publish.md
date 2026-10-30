@@ -389,6 +389,46 @@ git tag v0.14.1; git push origin v0.14.1    # 再打 tag，事件才会有人接
 `GET /actions/workflows` 在**未登录**时返回 `total_count: 0`（与 run 实际存在矛盾），说明这个
 端点在匿名访问下不可信——以后查 run 状态要看 Actions 页面或带 token 的 API。
 
+## 结论（2026-10-30）
+
+**v0.14.0 已经发布，这条 issue 的目标达成。**
+
+- Release：<https://github.com/jackiehank/dsh-kiln/releases/tag/v0.14.0>
+- 资产：`jackiehank-dsh-kiln-0.14.0.tgz`，**345,542 B**，`sha256:8cd63b3b059fcbe9c380a9be2db4a5d09fdfd51cfd69d899fc93f2232568d824`，上传者 `github-actions[bot]`，发布时间 11:35:03Z。
+- 工作流：`release.yml`（tag 触发 + 手动 dispatch），步骤是版本一致性 → `npm test` → `npm pack` → 四文件自检 → `gh release create`。
+
+### 我猜错的一件事，记下来
+
+我在上一节把"Release 不存在"归因为**新仓库只读令牌导致 `gh release create` 403**。这个归因是错的：
+Release 在 11:35:03 就发布了，我查 `/releases` 的时候还没到时候（匿名 API 有延迟/缓存），
+我却拿"空数组"当证据去推原因。
+
+教训与上一次同类：**先确认真实状态，再解释原因**。匿名 API 的空结果是弱证据，页面/带 token 的
+API 才是准的；两次失误（workflows 列表的空、releases 的空）都踩在这上面。
+
+### 仍由用户验证的一步
+
+我这个 shell 下载不了 Release 资产：TLS 客户端拿不到凭证（`SEC_E_NO_CREDENTIALS`，与 `git push`
+失败同因），`curl` / `Invoke-WebRequest` 都卡在校验阶段。所以"从 Release 下载的包能装"这一步要在
+普通终端里跑一次：
+
+```powershell
+dsh plugin --profile web add ./jackiehank-dsh-kiln-0.14.0.tgz
+```
+
+我们已经在同样打包方式的 tgz 上端到端验证过（装进独立 profile、`--dump-config` 出层、浏览器半的
+`client.js` 与 `client.pele.js` 按 rev 取到），所以这里只差"下载通道"这一环。
+
+### 现状小结
+
+| 渠道 | 状态 |
+| --- | --- |
+| GitHub Release 的 tgz | **在用**（主渠道） |
+| `github:jackiehank/dsh-kiln#path:/plugin` | 语法就绪，待公开后第一条真实安装验证（沙箱拦 pnpm 的 git） |
+| 本地 checkout | 开发用，已在用（desktop 是旧 `@local/dsh-kiln` 的 junction） |
+| npm | 无账号，随时可补，不改包名/版本 |
+
+
 
 
 
