@@ -141,19 +141,18 @@ node plugin/test/probe-perf.mjs . C:\Users\jacki\kiln
 要求 DSH **0.2.x**（包内 `engines.dsh: >=0.2.0 <0.3.0`）与 kiln v0.3.0+（见开头）。装进哪个
 profile，就把下面的 `web` 换成它（桌面端通常是 `desktop`）。
 
-**npm（推荐）**
+目前**只通过 GitHub 分发**（npm 包还没发布，见 `docs/issues/plugin-publish.md`）。
 
-```powershell
-dsh plugin --profile web add @jackiehank/dsh-kiln
-```
+**GitHub Release 里的 tgz（推荐，一次下载、离线可存）**
 
-**GitHub Release 里的 tgz**（机器上没有 npm 账号也能装）
+1. 到 <https://github.com/jackiehank/dsh-kiln/releases> 下载 `jackiehank-dsh-kiln-<版本>.tgz`；
+2. 装进 profile：
 
 ```powershell
 dsh plugin --profile web add ./jackiehank-dsh-kiln-0.14.0.tgz
 ```
 
-**GitHub 源码**（pnpm 9+ 的 `#path:` 语法；仓库带完整 issue 历史，装一次要 clone 整仓）
+**直接从仓库装**（pnpm 9+ 的 `#path:` 语法，每次安装会 clone 整仓；适合跟最新提交）
 
 ```powershell
 dsh plugin --profile web add github:jackiehank/dsh-kiln#path:/plugin
@@ -167,6 +166,8 @@ dsh plugin --profile web add <本仓库>/plugin
 
 装完刷新 GUI（或重启 DSH）；标签出现后，在 kiln 仓库里打开会话即可看到视图。若 profile 的
 `package.json` 里没有出现 `@jackiehank/dsh-kiln`，手动把它加进 `dsh.profile.bundles` 再重启。
+
+以后有 npm 账号了，多一条最短的 `dsh plugin --profile web add @jackiehank/dsh-kiln`，不影响上面三种。
 
 ## 已知边界
 

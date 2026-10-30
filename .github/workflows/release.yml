@@ -1,0 +1,42 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: tag 与 package.json 版本一致
+        run: |
+          node -e "const v=require('./plugin/package.json').version;const t=process.env.GITHUB_REF_NAME.replace(/^v/,'');if(v!==t){console.error('tag '+t+' 与 package.json '+v+' 不一致');process.exit(1)}"
+
+      - name: 用例
+        working-directory: plugin
+        run: npm test
+
+      - name: 打包并自检内容
+        working-directory: plugin
+        run: |
+          npm pack
+          tar -tzf jackiehank-dsh-kiln-*.tgz | sort
+          tar -tzf jackiehank-dsh-kiln-*.tgz | grep -qx 'package/lib/client.js'
+          tar -tzf jackiehank-dsh-kiln-*.tgz | grep -qx 'package/lib/client.pele.js'
+          tar -tzf jackiehank-dsh-kiln-*.tgz | grep -qx 'package/locale/zh.json'
+          tar -tzf jackiehank-dsh-kiln-*.tgz | grep -qx 'package/cordis.patch.yml'
+
+      - name: 建 Release 并附 tgz
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" plugin/jackiehank-dsh-kiln-*.tgz --title "$GITHUB_REF_NAME" --generate-notes

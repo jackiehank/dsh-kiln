@@ -290,5 +290,42 @@ pnpm 是 Node 程序，spawn git 时用**命名管道**收输出；DSH 的沙箱
 主渠道 = **GitHub Release 附 tgz**；备用 = **git 源码**（`#path:/plugin`）与本地 checkout；npm
 等有账号再补，不改包名、不改版本。
 
+## 落地：GitHub 作为唯一分发渠道（2026-10-30）
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `plugin/README.md` | 安装段按 GitHub 重排：Release 的 tgz 主渠道、`github:…#path:/plugin` 次之、本地 checkout 开发用；npm 降为"以后有账号再多一条最短命令" |
+| `.github/workflows/release.yml` | 新增：tag `v*` 触发 → 校验 tag 与 `package.json` 一致 → `npm test` → `npm pack` → 校验 tgz 里有 `client.js` / `client.pele.js` / `locale/zh.json` / `cordis.patch.yml` → `gh release create` 附 tgz |
+
+包名 `@jackiehank/dsh-kiln`、版本 `0.14.0`、client id 都没动——换分发渠道不改身份。
+
+### 发布流程（需要账号，三步）
+
+```powershell
+# 1) GitHub 建空仓 jackiehank/dsh-kiln，然后：
+git remote add origin https://github.com/jackiehank/dsh-kiln.git
+git push -u origin main
+
+# 2) 打 tag（workflow 只认 v* 且必须与 package.json 的 0.14.0 一致）
+git tag v0.14.0; git push origin v0.14.0
+
+# 3) workflow 自动：跑用例 → 打包 → 建 Release 并附 jackiehank-dsh-kiln-0.14.0.tgz
+```
+
+用户侧就一条：从 Releases 下 tgz，`dsh plugin --profile web add ./jackiehank-dsh-kiln-0.14.0.tgz`。
+
+### 验证边界
+
+- **workflow 本身没在 CI 里跑过**（本机没有 `gh`、也还没有远端）。它的每一步都在本机单独等价跑过：
+  `npm test`（82 + 58 全过）、`npm pack`（16 文件）、`tar -tf` 核对四个关键文件、版本一致性脚本；
+  YAML 在第一次推 tag 时才是真验证。
+- **git 安装路径仍待验**：本机沙箱拦 pnpm 的 `git ls-remote`，只能等仓库公开后在普通终端跑一次
+  `dsh plugin --profile x add github:jackiehank/dsh-kiln#path:/plugin`。
+- **公开前扫过历史**：`git log -p` 匹配常见令牌格式（`sk-`、`ghp_`、`AKIA`、私钥头）无命中；
+  仓库会连同全部 issue 历史与 `docs/` 一起公开，这是本仓的设计。
+
+
 
 
