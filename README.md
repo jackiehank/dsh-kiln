@@ -11,7 +11,7 @@ kiln 用 git commit 的 trailer（`issue:` + `action:`）记录「问题 → 动
 
 ![时间线页：全仓动作流，按时间倒序](docs/screenshots/timeline.png)
 
-**issue**——一行一个 issue；聚焦后读出父子、阻塞、因果、取代与弱关联
+**issue**——一行一个 issue；左侧色条是它的动作序列，聚焦后读出父子、阻塞、因果、取代与弱关联
 
 ![issue 页](docs/screenshots/issue.png)
 
