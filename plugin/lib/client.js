@@ -33,6 +33,11 @@ window.__ModuleLoader__.load({
     const SEARCH_DEBOUNCE_MS = 120
     /** 时间线边收边渲染：最多 20fps，350 行动作不会把 React 刷 350 次。 */
     const TIMELINE_FLUSH_MS = 50
+    /** 列表窗口：首屏只挂 W 行，滚到底再追加一批（虚拟化留给真正的大仓）。 */
+    const LIST_WINDOW = 100
+    const LIST_WINDOW_STEP = 100
+    /** 距底部多少像素算“该要下一批”。 */
+    const SCROLL_NEAR_BOTTOM = 320
     const EMPTY_SEARCH = { query: '', rows: [], pending: false, ms: 0, count: 0, error: null }
     const EMPTY_TIMELINE = { rows: [], phase: 'idle', error: null, ms: 0, count: 0 }
     const EMPTY_GRAPH = { phase: 'idle', payload: null, error: null }
@@ -365,6 +370,10 @@ window.__ModuleLoader__.load({
 .dkf-empty{color:var(--dkf-fg3);margin:8px 4px;font-size:var(--dkf-fs-body);line-height:var(--dkf-lh-body)}
 .dkf-empty p{margin:0 0 4px}
 .dkf-empty p:last-child{margin:0}
+/* 窗口底部：还有没挂出来的行时给计数与「加载更多」 */
+.dkf-more{display:flex;align-items:center;justify-content:center;gap:8px;padding:8px 4px;color:var(--dkf-fg3);font-size:var(--dkf-fs-meta);line-height:var(--dkf-lh-meta)}
+.dkf-more-count{font-family:var(--dkf-mono)}
+.dkf-more-btn{cursor:pointer}
 /* 列表：三页共用同一套列宽，同名列落在同一 x */
 .dkf-list{display:flex;flex-direction:column;outline:none;position:relative}
 /* 竖脊：时间线的“有序”由这一条线承担，色点压在线上 */
@@ -1522,6 +1531,26 @@ window.__ModuleLoader__.load({
           : [head, `命中：${row.action} · 第 ${row.ordinal ?? '?'}/${row.total ?? '?'} 条${when}`, String(row.title ?? '')]
       return lines.join('\n')
     }
+    /** 列表底部：还有没挂出来的行时给计数与「加载更多」（键盘可 Tab 到按钮）。 */
+    function MoreRows(props) {
+      if (!(props.total > props.shown)) return null
+      return h(
+        'div',
+        { className: 'dkf-more' },
+        h('span', { className: 'dkf-more-count' }, `已显示 ${props.shown} / ${props.total}`),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dkf-toggle dkf-more-btn',
+            onClick: props.onLoadMore,
+            'data-hint': '再渲染下一批（也可以滚到底）',
+          },
+          '加载更多',
+        ),
+      )
+    }
+
     /**
      * 搜索结果：一行一条 issue（id / 标题 / 领域 / 状态 / ⏎）。
      * 有输入就整块替掉内容区——不是把当前页的列表收窄（那样搜不到别的页里的东西）。
@@ -1575,6 +1604,12 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
+        h(MoreRows, {
+          key: 'more',
+          shown: props.rows.length,
+          total: props.total ?? props.rows.length,
+          onLoadMore: props.onLoadMore,
+        }),
       )
     }
 
@@ -1593,6 +1628,12 @@ window.__ModuleLoader__.load({
             onFocus: () => props.onFocus(row.issueId),
           }),
         ),
+        h(MoreRows, {
+          key: 'more',
+          shown: props.rows.length,
+          total: props.total ?? props.rows.length,
+          onLoadMore: props.onLoadMore,
+        }),
       )
     }
 
@@ -1612,6 +1653,12 @@ window.__ModuleLoader__.load({
             onFocus: () => props.onFocus(issue.id),
           }),
         ),
+        h(MoreRows, {
+          key: 'more',
+          shown: props.issues.length,
+          total: props.total ?? props.issues.length,
+          onLoadMore: props.onLoadMore,
+        }),
       )
     }
 
@@ -2090,7 +2137,10 @@ window.__ModuleLoader__.load({
       const [detail, setDetail] = React.useState(EMPTY_DETAIL)
       /** 仓库级不可用（不是 kiln 仓库 / 找不到 kiln / 路径无效）：词表路由最先能判定。 */
       const [unavailable, setUnavailable] = React.useState(null)
+      /** 当前列表的渲染窗口：首屏 100 行，滚到底或点按钮追加 100。 */
+      const [listLimit, setListLimit] = React.useState(LIST_WINDOW)
       const rootRef = React.useRef(null)
+      const scrollRef = React.useRef(null)
       const searchRef = React.useRef(null)
       /** 中文输入法组合期间，回车是"上屏"不是"确认"，别让键盘处理抢先。 */
       const composing = React.useRef(false)
@@ -2146,7 +2196,15 @@ window.__ModuleLoader__.load({
         [],
       )
 
+      /** 窗口回到第一屏、滚动回顶：切页 / 换焦点 / 改筛选 / 刷新都走这里。 */
+      const resetViewport = () => {
+        setListLimit(LIST_WINDOW)
+        const node = scrollRef.current
+        if (node !== null && node !== undefined) node.scrollTop = 0
+      }
+
       const selectTab = (id) => {
+        resetViewport()
         setTabId(id)
         // 点页签 = 离开搜索（否则结果页签与结果视图各说一套）
         setQuery('')
@@ -2553,8 +2611,11 @@ window.__ModuleLoader__.load({
         searching &&
         (searchFixture === null || searchFixture === undefined) &&
         (searchState.pending === true || searchState.query !== query)
-      const searchRows = searchPending ? [] : Array.isArray(searchState.rows) ? searchState.rows : []
+      const searchResults = searchPending ? [] : Array.isArray(searchState.rows) ? searchState.rows : []
       const searchMs = searchState.ms ?? 0
+      /** 搜索结果同样按窗口渲染：一屏显示不下的命中不该一次全挂上 DOM。 */
+      const searchTotal = searchResults.length
+      const searchRows = searchResults.slice(0, listLimit)
       const searchError =
         searchFixture === null || searchFixture === undefined ? (searchState.error ?? null) : null
 
@@ -2616,19 +2677,7 @@ window.__ModuleLoader__.load({
         setSearchIndex(-1)
       }, [query])
 
-      // 从搜索结果跳到某条动作：滚到那一行（展开已经由 pickSearch 设好）
-      React.useEffect(() => {
-        if (scrollTo === null) return
-        const root = rootRef.current
-        const node =
-          root === null || root === undefined || typeof root.querySelector !== 'function'
-            ? null
-            : root.querySelector(`[data-key="${scrollTo}"]`)
-        if (node !== null && node !== undefined && typeof node.scrollIntoView === 'function') {
-          node.scrollIntoView({ block: 'center' })
-        }
-        setScrollTo(null)
-      }, [scrollTo, rows.length])
+      // 从搜索结果跳到某条动作的滚动放到窗口逻辑之后（目标行可能还没挂出来）
 
       /**
        * 刷新 = 丢掉本仓库的会话缓存（图 / 详情 / 搜索）再重读动作流。
@@ -2786,7 +2835,9 @@ window.__ModuleLoader__.load({
        */
       const facets = React.useMemo(() => issueFacets(issueList), [issueList])
       const activeFilters = readFilters(filters)
-      const shownIssues = React.useMemo(() => filterIssues(issueList, activeFilters), [issueList, activeFilters])
+      const filteredIssues = React.useMemo(() => filterIssues(issueList, activeFilters), [issueList, activeFilters])
+      const issueTotal = filteredIssues.length
+      const shownIssues = React.useMemo(() => filteredIssues.slice(0, listLimit), [filteredIssues, listLimit])
       const filterOn = filtersActive(activeFilters)
       const filterCount = activeFilters.domains.length + activeFilters.states.length
       const filterGroups = facets.domains.length + facets.states.length
@@ -2812,10 +2863,69 @@ window.__ModuleLoader__.load({
       /** 时间线：筛的是动作（行就是动作），维度是动作名与它所属 issue 的领域。 */
       const rowFacetData = React.useMemo(() => rowFacets(rows, byId), [rows, byId])
       const activeRowFilters = readRowFilters(rowFilters)
-      const shownRows = React.useMemo(() => filterRows(rows, activeRowFilters, byId), [rows, activeRowFilters, byId])
+      const filteredRows = React.useMemo(
+        () => filterRows(rows, activeRowFilters, byId),
+        [rows, activeRowFilters, byId],
+      )
+      const rowTotal = filteredRows.length
+      const shownRows = React.useMemo(() => filteredRows.slice(0, listLimit), [filteredRows, listLimit])
       const rowFilterOn = filtersActive(activeRowFilters)
       const rowFilterCount = activeRowFilters.actions.length + activeRowFilters.domains.length
       const canFilterRows = tabId === 'timeline' && rowFacetData.actions.length + rowFacetData.domains.length > 0
+
+      /**
+       * 渲染窗口：只决定“这一页现在挂多少行”，不改变数据（动作流仍全量读）。
+       * 剩余量按当前视图取，滚到底或点「加载更多」时追加一批。
+       */
+      const windowMore = searching
+        ? searchTotal - searchRows.length
+        : tabId === 'timeline'
+          ? rowTotal - shownRows.length
+          : tabId === 'issue' && focus === null
+            ? issueTotal - shownIssues.length
+            : 0
+
+      const extendList = () => {
+        if (windowMore <= 0) return
+        setListLimit((value) => value + LIST_WINDOW_STEP)
+      }
+
+      const onScroll = (event) => {
+        clearHint()
+        if (windowMore <= 0) return
+        const node = event.currentTarget
+        if (node === null || node === undefined) return
+        if (node.scrollTop + node.clientHeight >= node.scrollHeight - SCROLL_NEAR_BOTTOM) extendList()
+      }
+
+      // 换焦点 / 改筛选 / 改查询 / 换仓库 / 刷新：窗口回到第一屏，滚动回顶。
+      // 切页由 selectTab 自己重置——否则「搜索跳转到时间线某一行」的窗口会被这条 effect 抢回去。
+      React.useEffect(() => {
+        resetViewport()
+      }, [cwd, focusId, query, filters, rowFilters, nonce])
+
+      /**
+       * 从搜索结果跳到某条动作：滚到那一行（展开已经由 pickSearch 设好）。
+       * 目标行可能在窗口之外——先追加一批，下一轮渲染后再找；到不了就放弃，不无限追加。
+       */
+      React.useEffect(() => {
+        if (scrollTo === null) return
+        const root = rootRef.current
+        const node =
+          root === null || root === undefined || typeof root.querySelector !== 'function'
+            ? null
+            : root.querySelector(`[data-key="${scrollTo}"]`)
+        if (node !== null && node !== undefined) {
+          if (typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'center' })
+          setScrollTo(null)
+          return
+        }
+        if (shownRows.length < rowTotal) {
+          setListLimit((value) => value + LIST_WINDOW_STEP)
+          return
+        }
+        setScrollTo(null)
+      }, [scrollTo, shownRows.length, rowTotal])
 
       const toggleRowFilter = (groupId, id) => {
         setRowFilters((previous) => {
@@ -2907,7 +3017,7 @@ window.__ModuleLoader__.load({
                       : h(
                           'span',
                           { key: 'hits', className: 'dkf-count' },
-                          `${searchRows.length} 条命中 · ${searchMs}ms · 仓库共 ${issueList.length} 条`,
+                          `${searchTotal} 条命中 · ${searchMs}ms · 仓库共 ${issueList.length} 条`,
                         )
                   : pageTools !== null
                     ? pageTools
@@ -2953,6 +3063,8 @@ window.__ModuleLoader__.load({
                 )
               : h(SearchResults, {
                   rows: searchRows,
+                  total: searchTotal,
+                  onLoadMore: extendList,
                   query,
                   selected: searchIndex,
                   onPick: pickSearch,
@@ -2960,6 +3072,8 @@ window.__ModuleLoader__.load({
         } else if (tabId === 'timeline') {
           content = h(TimelinePanel, {
             rows: shownRows,
+            total: rowTotal,
+            onLoadMore: extendList,
             expanded,
             onToggle: toggleExpand,
             onFocus: focusIssue,
@@ -2989,6 +3103,8 @@ window.__ModuleLoader__.load({
           } else if (focus === null) {
             content = h(IssuePanel, {
               issues: shownIssues,
+              total: issueTotal,
+              onLoadMore: extendList,
               focusId: null,
               expanded,
               onToggle: toggleExpand,
@@ -3109,7 +3225,7 @@ window.__ModuleLoader__.load({
               })
             : null,
         // 滚动时内容从提示框底下走，必须收起来
-        h('div', { className: 'dkf-scroll', onScroll: clearHint }, body),
+        h('div', { className: 'dkf-scroll', ref: scrollRef, onScroll }, body),
         hintTip,
       )
     }

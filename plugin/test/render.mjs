@@ -222,6 +222,7 @@ function render({
   timeline = timelineFixture,
   vocab = vocabFixture,
   graph = payload,
+  windowLimit = 100,
   detail = undefined,
 }) {
   // 详情：默认按焦点从固定数据里派生，等价于宿主 `path <id>` 会返回的那份
@@ -268,6 +269,7 @@ function render({
     vocab === null ? null : { ...vocab, terminal: new Set(vocab.terminal) }, // vocab（start / terminal）
     detailState, //                detail（聚焦 issue 的动作与边；已有则直接 ready）
     null, //                       unavailable（仓库级不可用）
+    windowLimit, //                listLimit（渲染窗口：首屏 100 行）
   ])
   const requireOf = (name) => {
     if (name === 'react') return React
@@ -898,6 +900,65 @@ check('timeline：流没读完时，动作筛选同样不给假空态', () => {
   })
   assert.equal(byClass(view, 'dkf-arow').length, 0)
   assert.match(textOf(byClass(view, 'dkf-empty')[0]), /筛选中，继续加载/)
+})
+
+// ---------------------------------------------------------------- 渲染窗口（100 行一屏）
+
+/** n 条动作、一条一个 issue（按时间倒序），给窗口用例用。 */
+function bulkTimeline(n) {
+  const rows = []
+  for (let index = 0; index < n; index += 1) {
+    rows.push({
+      issueId: `bulk-${String(index).padStart(3, '0')}`,
+      action: index % 2 === 0 ? 'ask' : 'apply',
+      id: String(index).padStart(40, '0'),
+      short: String(index).padStart(7, '0'),
+      date: new Date(Date.parse('2026-10-30T00:00:00+08:00') - index * 60000).toISOString(),
+      title: `批量动作 ${index}`,
+      domain: 'integration',
+      tags: [],
+    })
+  }
+  return { rows, phase: 'done', error: null, ms: 1, count: n }
+}
+
+check('窗口：时间线 250 行只挂 100 行，底部给计数与「加载更多」', () => {
+  const view = render({ timeline: bulkTimeline(250) })
+  assert.equal(byClass(view, 'dkf-arow').length, 100, '首屏只渲染 100 行')
+  assert.equal(textOf(byClass(view, 'dkf-count')[0]), '250 个动作', '页头计数仍是总数')
+  assert.equal(textOf(byClass(view, 'dkf-more-count')[0]), '已显示 100 / 250')
+  assert.equal(textOf(byClass(view, 'dkf-more-btn')[0]), '加载更多')
+})
+
+check('窗口：窗口已覆盖全部时没有 footer（不足 100 行的仓行为不变）', () => {
+  const full = render({ timeline: bulkTimeline(250), windowLimit: 250 })
+  assert.equal(byClass(full, 'dkf-arow').length, 250)
+  assert.equal(byClass(full, 'dkf-more').length, 0)
+  const small = render({ timeline: bulkTimeline(4) })
+  assert.equal(byClass(small, 'dkf-arow').length, 4)
+  assert.equal(byClass(small, 'dkf-more').length, 0, '小仓不出现加载更多')
+})
+
+check('窗口：issue 列表同样先挂 100 行', () => {
+  const view = render({ tabId: 'issue', timeline: bulkTimeline(120) })
+  assert.equal(byClass(view, 'dkf-row').length, 100)
+  assert.equal(textOf(byClass(view, 'dkf-more-count')[0]), '已显示 100 / 120')
+})
+
+check('窗口：搜索结果也按 100 行截断，页头计数用总数', () => {
+  const rows = []
+  for (let index = 0; index < 150; index += 1) {
+    rows.push(
+      searchRow(
+        { id: `hit-${String(index).padStart(3, '0')}`, title: `命中 ${index}`, domain: 'integration', done: false, actions: [] },
+        { date: '2026-10-01', idRanges: [[0, 3]] },
+      ),
+    )
+  }
+  const view = render({ tabId: 'issue', query: '命中', search: searchFixture('命中', rows) })
+  assert.equal(byClass(view, 'dkf-hit').length, 100)
+  assert.equal(textOf(byClass(view, 'dkf-more-count')[0]), '已显示 100 / 150')
+  assert.match(textOf(byClass(view, 'dkf-count')[0]), /150 条命中/)
 })
 
 // ---------------------------------------------------------------- 汇总
