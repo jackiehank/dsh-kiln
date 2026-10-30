@@ -1714,6 +1714,22 @@ await check('虚拟化：可视区取 scrollTop ± overscan，小列表整份渲
   assert.deepEqual(small, { start: 0, end: 4, top: 0, bottom: 0 })
 })
 
+await check('根 package.json 只是转发：名字 / 版本 / 补丁 / 客户端声明与 plugin 那份一致', async () => {
+  const { readFileSync, existsSync } = await import('node:fs')
+  const root = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.equal(root.name, pkg.name, '根 manifest 的名字必须与插件包一致')
+  assert.equal(root.version, pkg.version, '版本漂移会让 github:owner/repo 装出旧版')
+  assert.equal(root.private, true, '根 manifest 不许被 npm publish（发的是 plugin/ 那份）')
+  assert.equal(root.dsh.bundle.patch, './plugin/cordis.patch.yml')
+  assert.equal(pkg.dsh.bundle.patch, './cordis.patch.yml', '插件那份仍在包内相对路径')
+  assert.deepEqual(root.dsh.client, pkg.dsh.client, '客户端声明两边必须一致')
+  assert.deepEqual(root.engines, pkg.engines)
+  for (const rel of [root.exports['.'], root.exports['./client'], root.dsh.bundle.patch, root.exports['./icon']]) {
+    assert.ok(existsSync(new URL(`../../${rel}`, import.meta.url)), `${rel} 不存在`)
+  }
+})
+
 // ---------------------------------------------------------------- 汇总
 console.log('')
 if (failures.length === 0) {

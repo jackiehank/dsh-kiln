@@ -38,10 +38,17 @@ kiln 用 git commit 的 trailer（`issue:` + `action:`）记录「问题 → 动
 2. 装进 profile：
 
 ```powershell
-dsh plugin --profile web add ./jackiehank-dsh-kiln-0.15.0.tgz
+dsh plugin --profile web add ./jackiehank-dsh-kiln-0.15.1.tgz
 ```
 
-**直接从仓库装**（pnpm 9+ 的 `#path:` 语法，每次安装会 clone 整仓）
+**从 GitHub 直接装**（也是 DSH「安装插件」界面的做法：粘仓库地址）
+
+```powershell
+dsh plugin --profile web add github:jackiehank/dsh-kiln
+```
+
+仓库根有一个 `private` 的转发 manifest（`exports` / `dsh.bundle.patch` 全指向 `plugin/`），所以
+`github:owner/repo` 装出来就是真包。代价是**整仓打包**（约 2MB，含 docs/）。只想装子目录、少下点东西：
 
 ```powershell
 dsh plugin --profile web add github:jackiehank/dsh-kiln#path:/plugin
@@ -100,6 +107,7 @@ npm 包还没发布（见 [`plugin-publish`](docs/issues/plugin-publish.md)）�
 
 ```text
 plugin/              DSH 插件本体（Host 半 lib/index.js + 浏览器半 lib/client.js）
+package.json         仓库根的转发 manifest：private，exports / dsh.bundle 全指向 plugin/
 plugin/test/         宿主两侧用例：run.mjs（纯函数 / 缓存决策）＋ render.mjs（渲染冒烟）
 docs/issues/         一条 issue 一个 Markdown：问题、证据、结论、落地位置
 docs/screenshots/    README 的三张截图

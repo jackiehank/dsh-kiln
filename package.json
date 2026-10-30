@@ -1,0 +1,43 @@
+{
+  "name": "@jackiehank/dsh-kiln",
+  "version": "0.15.1",
+  "private": true,
+  "type": "module",
+  "description": "DSH 插件：把 kiln 的 issue 与动作历史投影成会话内的三页视图（时间线 / issue / 关系图），只读。本文件只是**转发**：包实体在 plugin/，见 README",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jackiehank/dsh-kiln.git"
+  },
+  "homepage": "https://github.com/jackiehank/dsh-kiln#readme",
+  "bugs": {
+    "url": "https://github.com/jackiehank/dsh-kiln/issues"
+  },
+  "exports": {
+    ".": "./plugin/lib/index.js",
+    "./client": "./plugin/lib/client.js",
+    "./locale/*.json": "./plugin/locale/*.json",
+    "./icon": "./plugin/icon.svg"
+  },
+  "files": [
+    "plugin/lib",
+    "plugin/cordis.patch.yml",
+    "plugin/locale",
+    "plugin/icon.svg",
+    "plugin/README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "dsh": ">=0.2.0 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./plugin/cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-api-session-controller", "@deepseek-ai/dsh-client-ui-conversation", "@deepseek-ai/dsh-client-ui-renderer"]
+    }
+  }
+}

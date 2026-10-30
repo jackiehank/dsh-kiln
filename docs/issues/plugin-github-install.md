@@ -98,3 +98,33 @@ UI 自己会拒绝；我们控制不了 UI，所以至少 README 要写清「点
   `#path:` 规格保留为「命令行可用」。
 - `plugin/README.md` 同步一句。
 
+## 落地（apply）：根 manifest + 0.15.1
+
+**先确认了一件事**：`v0.15.0` 的 Release 已经发出去了（资产 347,411 B，与本地 `npm pack` 一致），
+所以修好的形态不能塞回 0.15.0——版本升到 **0.15.1** 再发。
+
+改动：
+
+| 文件 | 内容 |
+| --- | --- |
+| `package.json`（根，新增） | `name` / `version` 与插件一致，`private: true`，`exports` 与 `dsh.bundle.patch` / `dsh.client` 全指向 `plugin/` |
+| `plugin/package.json` | `version` → 0.15.1 |
+| 根 `README.md` | 安装段改成「从 GitHub 直接装」（与点选界面同一条路），保留 `#path:` 与本地 checkout；开发目录树加根 manifest |
+| `plugin/README.md` | 版本行 0.15.1 + 新增一段说明；安装段同步 |
+| `plugin/test/run.mjs` | 新增一例：两份 manifest 的 `name` / `version` / `dsh.bundle.patch` / `dsh.client` / `engines` 必须一致，根 `private` 为真，转发路径必须真实存在 |
+
+验证（都在本机）：
+
+- `npm test --prefix plugin` → **87 + 63**；
+- 根目录 `npm pack` → `jackiehank-dsh-kiln-0.15.1.tgz`，**17 个文件**（多出来的那个是根 `README.md`，
+  npm 自动带上）；
+- 装进沙箱 profile（`DSH_HOME=.tmp-dsh-home`）后 `dependencies` 是 `@jackiehank/dsh-kiln 0.15.1`，
+  包内能看到 `plugin/lib/client.js`、`plugin/cordis.patch.yml`（insert 行 `id: dsh-kiln`）——
+  也就是说 `github:owner/repo` 那种「整仓 tarball」装法能装出可用的包了。
+
+**没验到的**：DSH「安装插件」界面本身（要等 0.15.1 推上去、tag 发版后再点一次）；
+`#path:` 规格在本沙箱测不了（`spawn EPERM`）。
+
+**代价**：两份 manifest 要同步——`name` / `version` / `dsh` 任一处漂移都会被那条新用例打回。
+根那份永远 `private`，npm 仍然只发 `plugin/`。
+
