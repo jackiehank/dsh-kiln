@@ -107,3 +107,72 @@ grid-template-columns: minmax(0,1fr) minmax(96px,min(360px,40%)) minmax(0,1fr)
 - [daintree#4133（侧栏宽度要用容器查询）](https://github.com/daintreehq/daintree/issues/4133)
 - [makandra: prevent a 1fr grid column overflow](https://makandracards.com/makandra/608104-prevent-1fr-grid-column-overflow)
 - [Priority Plus Navigation（自动把溢出项收进 More）](https://wordpress.org/plugins/priority-plus-navigation/)
+
+## 方案（hypothesize）
+
+四个候选，判断标准：**在 280–900px 的侧栏里都不压叠，且不让用户多点一次**。
+
+### A. 只把 `×` 拆出来
+
+把 chip 的文本拆成 `label` + `×` 两段，`×` 不参与省略。**只修症状 2**，头部布局照旧压叠。否决。
+
+### B. 头部换 flex + 容器查询分档 + chip 拆两段（推荐）
+
+三件事一起做：
+
+1. **拆 DOM**（光调 CSS 修不了）：
+   - chip → `焦点：` / `id` / `×` 三个 span，只有 `id` 参与省略，`×` 永远完整；
+   - 刷新 → `刷新` / `↻` 两个 span，窄档只显示字形。
+2. **头部从 grid 换 flex，给每项显式伸缩权**：`minmax(0,1fr)` 只解决「列可以变窄」，没解决
+   「谁先让位」；flex 里每个 `min-width:0` + `flex` 才是一份可读的优先级表。
+3. **两条容器查询**（查 `.dkf-head` 自己的宽度，所以拖侧栏也生效）：
+
+| 内容宽度 | 牺牲什么 |
+| --- | --- |
+| 任意 | 搜索框可缩到 96px；chip 的 id 先省略（`×` 不动） |
+| ≤ 520px | 仓库名收到 72px；chip 去掉「焦点：」前缀（hint 里仍有完整说明） |
+| ≤ 360px | 搜索框地板降到 72px；刷新只剩 `↻`（hint 仍是「重新读取…」） |
+
+硬保证：`.dkf-head{overflow:hidden}` + 所有子项 `min-width:0`——**结构上不可能压叠**，最坏是省略号
+或裁边，不会盖到邻居身上。
+
+估算（内容宽 240px 时）：仓库名 72 + 搜索 72 + chip 约 25 + 刷新 22 + 间距 16 = 207px，仍有余量。
+
+### C. 头部允许换行
+
+和 `.dkf-bar` 的先例一致，窄时搜索框掉到第二行。零风险但头部会从 34px 变成 68px，而下面紧跟着
+的 `.dkf-bar` 本身就会换行，两处换行叠在一起，视觉上分不清哪层是哪层。否决（保留作 B 的兜底：
+真窄到 207px 以下，B 的表现是裁边，C 是换行；需要时再加一条 `@container` 切 `flex-wrap`）。
+
+### D. overflow 菜单
+
+Fluent / Fiori / HIG 的标准做法，但我们的动作只有 2 个（刷新、退出聚焦）。为 1 个动作建菜单：
+菜单按钮 ~40px + 一层交互，比直接显示还贵。否决。
+
+### 决定
+
+**B**。理由：
+
+- 不换行，头部高度与另外两行（`.dkf-bar` / `.dkf-filters`）保持 34–36px 的节奏；
+- 不引入新状态（不像 collapsible search 要记「搜索框是否展开」），也不引入 JS 测宽；
+- 牺牲顺序可写、可测：先省略 chip 的 id，再砍仓库名与「焦点：」前缀，最后把刷新降成字形；
+- `×` 单独成元素后，省略号只能吃 id，关闭入口在任何宽度下都完整可见。
+
+风险与兜底：
+
+- 容器查询要求 Chromium 105+（DSH 的 Electron 与 Web GUI 都满足）；不支持时退化为「不折叠」，
+  但因为 flex + `min-width:0` 仍在，**不会压叠**，只是更早开始省略。
+- 侧栏窄到 ~210px 以下会裁边（`overflow:hidden`）。这属于宿主给的极限，不额外处理；真要处理，
+  按 C 加一条换行。
+
+### 落地清单（apply 时照着做）
+
+- `plugin/lib/client.js:2966` 起的 header JSX：chip 拆三段、刷新拆两段，chip 补 `aria-label`。
+- CSS（`:439`–`:460`）：`.dkf-head` 改 flex + `container-type:inline-size` + `overflow:hidden`；
+  `.dkf-repo` / `.dkf-search` / `.dkf-head-actions` / `.dkf-focuschip` 补 `min-width:0` 与 `flex`；
+  `.dkf-focuschip` 去掉 `overflow/text-overflow`（交给 label），加 `.dkf-focuschip-label` /
+  `.dkf-focuschip-x{flex:none}`；`.dkf-refresh-icon{display:none}`；两条 `@container`。
+- 测试：`render.mjs` 断言 chip 的 `×` 在独立元素、刷新有两个 span；`run.mjs` 断言 CSS 含
+  `container-type:inline-size` 与两条 `@container`，且 `.dkf-head` 不再用那套三列
+  `grid-template-columns`（防止悄悄回退）。
+- 验证：结构测试 + 用户在 GUI 里拖窄侧栏看三档。
