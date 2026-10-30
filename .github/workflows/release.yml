@@ -49,4 +49,35 @@ jobs:
       - name: 建 Release 并附 tgz
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$TAG" plugin/jackiehank-dsh-kiln-*.tgz --title "$TAG" --generate-notes
+        shell: bash
+        run: |
+          set -uo pipefail
+          for f in plugin/jackiehank-dsh-kiln-*.tgz; do ASSET="$f"; break; done
+          echo "资产：$ASSET"
+
+          # 幂等：Release 已存在就只覆盖资产。重跑、或上一次已建好但上传失败，都走这里。
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET" --clobber
+            echo "Release 已存在，资产已覆盖"
+            exit 0
+          fi
+
+          # 5xx 是 GitHub 侧的瞬时错误（v0.15.1 遇到的就是 HTTP 500），退避重试；
+          # 每次失败后再看一眼是不是其实已经建好了（可能 create 已生效才返回 5xx）。
+          for attempt in 1 2 3; do
+            echo "创建 Release（第 $attempt 次）"
+            if gh release create "$TAG" "$ASSET" --title "$TAG" --generate-notes; then
+              exit 0
+            fi
+            sleep $((attempt * 10))
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release upload "$TAG" "$ASSET" --clobber
+              echo "重试期间 Release 已建好，资产已确认"
+              exit 0
+            fi
+          done
+
+          # 最后一条退路：--generate-notes 是唯一「服务端生成」的可选调用，换成固定说明再试一次。
+          echo "带 --generate-notes 连续失败，改用固定说明"
+          gh release create "$TAG" "$ASSET" --title "$TAG" \
+            --notes "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/commits/${TAG}"

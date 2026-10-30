@@ -37,3 +37,25 @@ HTTP 500 (https://api.github.com/repos/jackiehank/dsh-kiln/releases)
 - 只改 `.github/workflows/release.yml` 的最后一步；不动版本校验、用例、打包与自检；
 - 不引入第三方 action（保持只用 `gh`，与既有风格一致）；
 - 已经发出去的 `v0.14.0` / `v0.15.0` 不动。
+
+## 落地（apply）：一条命令换成「幂等 + 重试 + 退路」
+
+`.github/workflows/release.yml` 的最后一步（`:49`）从一行命令换成 30 行脚本，逻辑四条：
+
+1. **先查**：`gh release view "$TAG"` 成功 → 只 `gh release upload --clobber` 覆盖资产，`exit 0`
+   （重跑、或上次建好但上传失败，都不会再红）；
+2. **再建**：`gh release create … --generate-notes`，失败就 `sleep 10/20/30` 退避重试，最多 3 次；
+3. **每次失败后再查一眼**：5xx 有可能是「已经建好了但返回错误」，这时补传资产并 `exit 0`；
+4. **最后一招**：`--generate-notes` 是链上唯一由服务端生成内容的可选调用（也是最可能 500 的环节），
+   三次都失败就换成固定说明 `**Full Changelog**: …/commits/$TAG` 再建一次。
+
+资产路径改成 `for f in plugin/jackiehank-dsh-kiln-*.tgz; do ASSET="$f"; break; done`——原来是把通配符
+直接交给 `gh`，只有一个文件时能用，多一个打包残留就会传错/传多。
+
+**没能本地验证**：这个沙箱里 bash 起不来（Git Bash 报 `couldn't create signal pipe, Win32 error 5`，
+WSL 访问被拒），所以脚本没有 lint 过；YAML 缩进与语法按块标量规则逐行核过。真正的验证是下一次
+`workflow_dispatch` 重跑 `v0.15.1`。
+
+**重跑方式**（`v0.15.1` 的 Release 还缺着）：push main 之后，Actions → release → Run workflow →
+tag 填 `v0.15.1`。这条路径用的是**默认分支上的 workflow 定义**（带重试），代码仍 checkout 到
+`v0.15.1` 那个 tag，所以打包内容不会变。
