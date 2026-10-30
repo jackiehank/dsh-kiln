@@ -11,6 +11,7 @@
  */
 import { readActions, readIssue, readSearch, repoProblem, resolveKiln } from './flow.js'
 import { createSnapshotCache } from './snapshot.js'
+import { binaryToken, configToken } from './git.js'
 import { actionLogProblem, consumeActionLog, spawnActionLog } from './timeline.js'
 
 /** Cordis function-plugin name；与包名一致，便于排查。 */
@@ -27,6 +28,23 @@ const ACTIONS_PATH = '/kiln/actions'
 
 /** 进程内缓存：不落盘，重启即失效。 */
 const cache = createSnapshotCache()
+
+/**
+ * 词表缓存：只读配置、不读历史，按 (仓库, 配置令牌, 二进制令牌) 失效。
+ * 浏览器 F5 会丢掉客户端缓存，宿主这份还在，就不必再起一次 `action list`。
+ */
+const actionsCache = new Map()
+const ACTIONS_CACHE_LIMIT = 16
+
+export function actionsCacheKey(repo, bin) {
+  return `${repo}\u0000${configToken(repo)}\u0000${binaryToken(bin ?? '')}`
+}
+
+function rememberActions(key, result) {
+  if (result?.ok !== true) return
+  if (actionsCache.size >= ACTIONS_CACHE_LIMIT) actionsCache.delete(actionsCache.keys().next().value)
+  actionsCache.set(key, result)
+}
 
 function sendJson(res, status, payload) {
   res.statusCode = status
@@ -276,8 +294,17 @@ export function apply(ctx) {
             return
           }
 
+          const bin = resolveKiln()
+          const key = actionsCacheKey(cwd, bin)
+          const hit = actionsCache.get(key)
+          if (hit !== undefined) {
+            sendJson(res, 200, { ...hit, repo: cwd, generatedAt: new Date().toISOString() })
+            return
+          }
+
           try {
             const result = await readActions(cwd)
+            rememberActions(key, result)
             sendJson(res, 200, { ...result, repo: cwd, generatedAt: new Date().toISOString() })
           } catch (error) {
             sendJson(res, 500, {

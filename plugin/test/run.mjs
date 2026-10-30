@@ -9,6 +9,7 @@ import { EventEmitter } from 'node:events'
 
 import { buildGraph, mapActions, parseIssueDocument, searchDocumentError } from '../lib/flow.js'
 import { createSnapshotCache, evaluateCache } from '../lib/snapshot.js'
+import { actionsCacheKey } from '../lib/index.js'
 import {
   actionLogArgs,
   actionLogProblem,
@@ -1048,6 +1049,37 @@ await check('issue 折叠：词表缺失时 done 不可知，不猜', () => {
   )
   assert.equal(issues[0].done, false)
   assert.equal(issues[0].doneKnown, false, 'UI 据此不画 done chip、状态筛选也不把它算成 open')
+})
+
+// ---------------------------------------------------------------- 会话缓存（纯函数）
+
+await check('会话缓存：键带仓库前缀，不同仓库/不同 id 不串', () => {
+  const { cacheKey } = clientInternals()
+  assert.notEqual(cacheKey('/a', 'x'), cacheKey('/b', 'x'))
+  assert.notEqual(cacheKey('/a', 'x'), cacheKey('/a', 'y'))
+  assert.equal(cacheKey('/a', 'x'), cacheKey('/a', 'x'))
+})
+
+await check('会话缓存：LRU —— 命中挪到末尾，超限淘汰最久未用', () => {
+  const { cacheGet, cacheSet } = clientInternals()
+  const map = new Map()
+  cacheSet(map, 'a', 1, 2)
+  cacheSet(map, 'b', 2, 2)
+  assert.equal(cacheGet(map, 'a'), 1, '命中并挪到末尾')
+  assert.equal(cacheGet(map, 'nope'), undefined)
+  cacheSet(map, 'c', 3, 2)
+  assert.equal(map.has('b'), false, 'b 最久未用，被淘汰')
+  assert.equal(map.has('a'), true)
+  assert.equal(map.has('c'), true)
+})
+
+await check('词表缓存键：仓库 / 配置 / 二进制任一变化都换键', () => {
+  const a = actionsCacheKey('/repo-a', '')
+  const b = actionsCacheKey('/repo-b', '')
+  const c = actionsCacheKey('/repo-a', '/bin/kiln.exe')
+  assert.equal(a, actionsCacheKey('/repo-a', ''), '同样的输入给同样的键')
+  assert.notEqual(a, b)
+  assert.notEqual(a, c)
 })
 
 // ---------------------------------------------------------------- 汇总

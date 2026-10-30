@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-kiln",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "DSH × kiln：只读 kiln 仓库的三页视图；一个视图一条命令（动作流 mount、关系图与详情按需），需 kiln v0.2.0+，搜索 v0.2.1+，动作流 v0.3.0+",

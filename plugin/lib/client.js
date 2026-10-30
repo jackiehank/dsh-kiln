@@ -39,6 +39,52 @@ window.__ModuleLoader__.load({
     const EMPTY_DETAIL = { id: null, phase: 'idle', issue: null, error: null }
     /** 动作词表按仓库缓存：一次进程、不读历史，重挂载不重取。 */
     const actionsCache = new Map()
+    /**
+     * 会话内取数缓存：键都带仓库，刷新（nonce）才整体失效。
+     *
+     * 插件是只读视图，失效模型本来就是“刷新才更新”（动作流也只在 mount/刷新时重读），
+     * 所以图 / 详情 / 搜索在会话内复用；不跨刷新，也不落盘。
+     */
+    const graphCache = new Map()
+    /** 页签预取与切页可能同时发：同一仓库只发一次。 */
+    const graphInflight = new Map()
+    const detailCache = new Map()
+    /** 预取与点击可能同时发生：同一 (repo,id) 只发一次。 */
+    const detailInflight = new Map()
+    const searchCache = new Map()
+    const CACHE_LIMIT = 20
+    /** hover 预取的延迟：太短会在扫过列表时把每一行都取一遍。 */
+    const PREFETCH_MS = 120
+
+    /** 缓存键：仓库与标识之间用 NUL 分隔，id 里不可能出现。 */
+    function cacheKey(scope, id) {
+      return `${scope}\u0000${id}`
+    }
+
+    /** 读缓存并把命中的键挪到末尾（LRU）；未命中返回 undefined。 */
+    function cacheGet(map, key) {
+      if (!map.has(key)) return undefined
+      const value = map.get(key)
+      map.delete(key)
+      map.set(key, value)
+      return value
+    }
+
+    function cacheSet(map, key, value, limit = CACHE_LIMIT) {
+      if (map.has(key)) map.delete(key)
+      map.set(key, value)
+      while (map.size > limit) map.delete(map.keys().next().value)
+    }
+
+    /** 刷新时清掉一个仓库的会话缓存。 */
+    function clearRepoCaches(cwd) {
+      graphCache.delete(cwd)
+      graphInflight.delete(cwd)
+      const prefix = `${cwd}\u0000`
+      for (const key of [...detailCache.keys()]) if (key.startsWith(prefix)) detailCache.delete(key)
+      for (const key of [...detailInflight.keys()]) if (key.startsWith(prefix)) detailInflight.delete(key)
+      for (const key of [...searchCache.keys()]) if (key.startsWith(prefix)) searchCache.delete(key)
+    }
 
     /** NDJSON 按行切：chunk 不保证按行到，半行留到下一块（与宿主 timeline.js 同一套规则）。 */
     function createLineSplitter() {
@@ -1274,6 +1320,7 @@ window.__ModuleLoader__.load({
             tabIndex: -1,
             style: { '--dkf-row-color': colorOf(issue.action) },
             onClick: props.onToggle,
+            onPointerEnter: () => props.onPrefetch?.(issue.id),
             onKeyDown: (event) => rowKeyDown(event, props),
           },
           strip(issue.actions),
@@ -1328,6 +1375,7 @@ window.__ModuleLoader__.load({
             tabIndex: -1,
             style: { '--dkf-row-color': colorOf(row.action) },
             onClick: props.onToggle,
+            onPointerEnter: () => props.onPrefetch?.(row.issueId),
             onKeyDown: (event) => rowKeyDown(event, props),
             'data-hint': '点开看这条提交的详情',
           },
@@ -1396,6 +1444,9 @@ window.__ModuleLoader__.load({
               tabIndex: selected ? 0 : -1,
               className: cls('dkf-tab', selected && 'dkf-tab-active'),
               onClick: () => props.onSelect(page.id),
+              // 只表达“想去这一页”的意图：调用方据此预取（关系页的图），不改变选中
+              onPointerEnter: () => props.onIntent?.(page.id),
+              onFocus: () => props.onIntent?.(page.id),
               onKeyDown: (event) => onKeyDown(event, index),
             },
             page.label,
@@ -1536,6 +1587,7 @@ window.__ModuleLoader__.load({
           h(ActionRow, {
             key: `${row.issueId}-${row.ordinal ?? row.id ?? index}-${index}`,
             row,
+            onPrefetch: props.onPrefetch,
             expanded: props.expanded !== null && props.expanded.kind === 'action' && props.expanded.id === actionKey(row),
             onToggle: () => props.onToggle({ kind: 'action', id: actionKey(row) }),
             onFocus: () => props.onFocus(row.issueId),
@@ -1554,6 +1606,7 @@ window.__ModuleLoader__.load({
             key: issue.id,
             issue,
             focus: issue.id === props.focusId,
+            onPrefetch: props.onPrefetch,
             expanded: props.expanded !== null && props.expanded.kind === 'issue' && props.expanded.id === issue.id,
             onToggle: () => props.onToggle({ kind: 'issue', id: issue.id }),
             onFocus: () => props.onFocus(issue.id),
@@ -1586,6 +1639,7 @@ window.__ModuleLoader__.load({
 
       const rowProps = (issue, extra) => ({
         issue,
+        onPrefetch: props.onPrefetch,
         expanded: props.expanded !== null && props.expanded.kind === 'issue' && props.expanded.id === issue.id,
         onToggle: () => props.onToggle({ kind: 'issue', id: issue.id }),
         onFocus: () => props.onFocus(issue.id),
@@ -2040,6 +2094,10 @@ window.__ModuleLoader__.load({
       const searchRef = React.useRef(null)
       /** 中文输入法组合期间，回车是"上屏"不是"确认"，别让键盘处理抢先。 */
       const composing = React.useRef(false)
+      /** 搜索 effect 通过 ref 读最新的 issue 索引（见搜索 effect 的依赖说明）。 */
+      const byIdRef = React.useRef(new Map())
+      /** hover 预取的延迟句柄：扫过列表时只取最后停下的那一行。 */
+      const prefetchTimer = React.useRef(null)
 
       /**
        * 提示框：元素上只写 `data-hint`，机制收在这里（根节点监听 pointerover 做委托）。
@@ -2129,16 +2187,18 @@ window.__ModuleLoader__.load({
 
       /**
        * 关系图：只在关系页取（`kiln graph --json`）。
-       * 宿主按 HEAD 缓存；切回页签重取一次（热读约 40ms），有旧图时保留着换，不闪空。
+       * 会话内按仓库缓存：切回页签先渲染缓存，再后台重取一次（有旧图就不闪空）；
+       * 刷新时缓存被清掉，重新拉起。
        */
       React.useEffect(() => {
         if (graphFixture !== null && graphFixture !== undefined) return undefined
         if (cwd === '' || tabId !== 'relation') return undefined
         const controller = new AbortController()
+        const cached = cacheGet(graphCache, cwd)
         setGraph((previous) => {
           // 换了仓库就不能拿上一份图顶着；同一仓库则保留旧图后台刷新，不闪空
-          const reusable = previous.payload !== null && previous.payload.repo === cwd ? previous.payload : null
-          return { phase: reusable === null ? 'loading' : 'refreshing', payload: reusable, error: null }
+          const reusable = cached ?? (previous.payload !== null && previous.payload.repo === cwd ? previous.payload : null)
+          return { phase: reusable === null ? 'loading' : 'ready', payload: reusable, error: null }
         })
         ;(async () => {
           try {
@@ -2153,6 +2213,7 @@ window.__ModuleLoader__.load({
               setGraph({ phase: 'error', payload: null, error: graphFailureText(body) })
               return
             }
+            cacheSet(graphCache, cwd, body, 4)
             setGraph({ phase: 'ready', payload: body, error: null })
           } catch (error) {
             if (controller.signal.aborted) return
@@ -2165,8 +2226,8 @@ window.__ModuleLoader__.load({
       /**
        * 详情：聚焦一个 issue 时才取（`kiln path <id> --json`）。
        *
-       * 动作、序号和这个 issue 的全部边都在这一份文档里，所以聚焦页与时间线收窄
-       * 都不再需要关系图；换焦点 / 刷新即重取，不维护第二套缓存。
+       * 动作、序号和这个 issue 的全部边都在这一份文档里。同一 (repo,id) 在会话内复用，
+       * 再次聚焦不再起进程；hover 预取会先把缓存填上。刷新时清空。
        */
       React.useEffect(() => {
         if (detailFixture !== null && detailFixture !== undefined) return undefined
@@ -2175,6 +2236,12 @@ window.__ModuleLoader__.load({
           return undefined
         }
         const controller = new AbortController()
+        const key = cacheKey(cwd, focusId)
+        const cached = cacheGet(detailCache, key)
+        if (cached !== undefined) {
+          setDetail({ id: focusId, phase: 'ready', issue: cached, error: null })
+          return () => controller.abort()
+        }
         setDetail((previous) => ({
           id: focusId,
           phase: 'loading',
@@ -2193,6 +2260,7 @@ window.__ModuleLoader__.load({
               setDetail({ id: focusId, phase: 'error', issue: null, error: detailFailureText(body) })
               return
             }
+            cacheSet(detailCache, key, body.issue)
             setDetail({ id: focusId, phase: 'ready', issue: body.issue, error: null })
           } catch (error) {
             if (controller.signal.aborted) return
@@ -2377,6 +2445,8 @@ window.__ModuleLoader__.load({
         [timelineState.rows, timelineState.phase, vocab],
       )
       const byId = React.useMemo(() => new Map(streamIssues.map((issue) => [issue.id, issue])), [streamIssues])
+      // 搜索 effect 通过 ref 读它：流式期间 byId 每批都换新，不该因此 abort 重发搜索
+      byIdRef.current = byId
 
       /** 详情只补“这个 issue 的边”（以及 path 给出的序号/refs）；动作在流里本来就有。 */
       const detailIssue = detailFixture ?? (detail.id === focusId ? detail.issue : null)
@@ -2419,6 +2489,13 @@ window.__ModuleLoader__.load({
           setRawSearch(EMPTY_SEARCH)
           return
         }
+        // 同一个词在本会话里查过就直接回放：回退 / 重输不再起进程
+        const key = cacheKey(cwd, query)
+        const cached = cacheGet(searchCache, key)
+        if (cached !== undefined) {
+          setRawSearch({ query, rows: cached.rows, pending: false, ms: 0, count: cached.count, error: null })
+          return
+        }
         const controller = new AbortController()
         let cancelled = false
         const startedAt = Date.now()
@@ -2442,13 +2519,15 @@ window.__ModuleLoader__.load({
               })
               return
             }
-            const rows = mapSearchRows(body.document, byId, terms)
+            const rows = mapSearchRows(body.document, byIdRef.current, terms)
+            const count = Number.isInteger(body.document?.count) ? body.document.count : rows.length
+            cacheSet(searchCache, key, { rows, count })
             setRawSearch({
               query,
               rows,
               pending: false,
               ms: Date.now() - startedAt,
-              count: Number.isInteger(body.document?.count) ? body.document.count : rows.length,
+              count,
               error: null,
             })
           } catch (error) {
@@ -2468,7 +2547,7 @@ window.__ModuleLoader__.load({
           clearTimeout(timer)
           controller.abort()
         }
-      }, [query, cwd, byId, searchFixture])
+      }, [query, cwd, nonce, searchFixture])
 
       const searchPending =
         searching &&
@@ -2551,7 +2630,64 @@ window.__ModuleLoader__.load({
         setScrollTo(null)
       }, [scrollTo, rows.length])
 
-      const refresh = () => setNonce((value) => value + 1)
+      /**
+       * 刷新 = 丢掉本仓库的会话缓存（图 / 详情 / 搜索）再重读动作流。
+       * 缓存只活一次挂载，刷新后一切按当前历史重建。
+       */
+      const refresh = () => {
+        clearRepoCaches(cwd)
+        setNonce((value) => value + 1)
+      }
+
+      /** 取一条详情（点开与 hover 预取共用）：同一 (repo,id) 同时只发一次。 */
+      const prefetchDetail = (id) => {
+        if (cwd === '' || typeof id !== 'string' || id === '') return
+        const key = cacheKey(cwd, id)
+        if (detailCache.has(key) || detailInflight.has(key)) return
+        const promise = fetch(
+          `${ISSUE_URL}?cwd=${encodeURIComponent(cwd)}&id=${encodeURIComponent(id)}`,
+          { credentials: 'same-origin', cache: 'no-store' },
+        )
+          .then((response) => response.json())
+          .then((body) => {
+            if (body?.ok === true && body.issue !== undefined) cacheSet(detailCache, key, body.issue)
+          })
+          .catch(() => {})
+          .finally(() => detailInflight.delete(key))
+        detailInflight.set(key, promise)
+      }
+
+      /** hover 停在行上 120ms 才预取：扫过列表不会取一整屏。 */
+      const schedulePrefetch = (id) => {
+        if (prefetchTimer.current !== null) clearTimeout(prefetchTimer.current)
+        prefetchTimer.current = setTimeout(() => {
+          prefetchTimer.current = null
+          prefetchDetail(id)
+        }, PREFETCH_MS)
+      }
+
+      /** 页签意图：鼠标移到「关系」页签就先取图，点开即开。 */
+      const prefetchGraph = () => {
+        if (cwd === '' || graphCache.has(cwd) || graphInflight.has(cwd)) return
+        const promise = fetch(`${GRAPH_URL}?cwd=${encodeURIComponent(cwd)}`, {
+          credentials: 'same-origin',
+          cache: 'no-store',
+        })
+          .then((response) => response.json())
+          .then((body) => {
+            if (body?.ok === true) cacheSet(graphCache, cwd, body, 4)
+          })
+          .catch(() => {})
+          .finally(() => graphInflight.delete(cwd))
+        graphInflight.set(cwd, promise)
+      }
+
+      React.useEffect(
+        () => () => {
+          if (prefetchTimer.current !== null) clearTimeout(prefetchTimer.current)
+        },
+        [],
+      )
 
       const graphHint =
         graph.phase === 'ready'
@@ -2751,7 +2887,15 @@ window.__ModuleLoader__.load({
           ? h(
               'div',
               { className: 'dkf-bar' },
-              h(PageTabs, { pages: PAGES, active: tabId, onSelect: selectTab, idBase }),
+              h(PageTabs, {
+                pages: PAGES,
+                active: tabId,
+                onSelect: selectTab,
+                idBase,
+                onIntent: (id) => {
+                  if (id === 'relation') prefetchGraph()
+                },
+              }),
               h(
                 'div',
                 { className: 'dkf-bar-tools' },
@@ -2819,6 +2963,7 @@ window.__ModuleLoader__.load({
             expanded,
             onToggle: toggleExpand,
             onFocus: focusIssue,
+            onPrefetch: schedulePrefetch,
             emptyText: rowFilterOn
               ? timelineStreaming
                 ? '筛选中，继续加载…'
@@ -2848,6 +2993,7 @@ window.__ModuleLoader__.load({
               expanded,
               onToggle: toggleExpand,
               onFocus: focusIssue,
+              onPrefetch: schedulePrefetch,
               emptyText: filterOn
                 ? issueStreaming
                   ? '筛选中，继续加载…'
@@ -2873,6 +3019,7 @@ window.__ModuleLoader__.load({
                 onToggle: toggleExpand,
                 onToggleFocus: () => setFocusOpen((value) => !value),
                 onFocus: focusIssue,
+                onPrefetch: schedulePrefetch,
                 onToggleChildren: () => setExpandedChildren((value) => !value),
               }),
             )
@@ -2988,6 +3135,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, css: CSS } } : {}) }
   },
 })
