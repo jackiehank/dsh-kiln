@@ -146,6 +146,31 @@ let keepC = measure(
       .join('\n'),
 )
 
+// G2. 数组行 + 数组线上，date 保留原字符串（不丢提交自己的 offset）
+let keepG2 = measure(
+  'G2 数组+数组线上(date 原串)',
+  () => {
+    const pool = new Map()
+    const id = (s) => pool.get(s) ?? (pool.set(s, s), s)
+    return parsed().map((r) => {
+      const row = mapActionRecord(r)
+      return [id(row.issueId), id(row.action), row.id, row.date, row.title, id(row.domain), row.tags.length === 0 ? null : row.tags.join('\u0001')]
+    })
+  },
+  (rows) => rows.map((r) => JSON.stringify(r)).join('\n'),
+)
+
+// G3. 同 G2 但不驻留：看驻留在数组形态里还剩多少
+let keepG3 = measure(
+  'G3 数组(date 原串,不驻留)',
+  () =>
+    parsed().map((r) => {
+      const row = mapActionRecord(r)
+      return [row.issueId, row.action, row.id, row.date, row.title, row.domain, row.tags.length === 0 ? null : row.tags.join('\u0001')]
+    }),
+  (rows) => rows.map((r) => JSON.stringify(r)).join('\n'),
+)
+
 // D. 数组行 [issueId, action, id, dateMs, title, domain, tagsStr]，驻留重复串
 let keepD = measure(
   'D 数组行（7 槽）',
@@ -254,6 +279,18 @@ const oneBig = time(() => Buffer.from(lines.join('\n')))
 gc()
 const afterOne = process.memoryUsage()
 console.log(`H2 原始字节（一整块）        heap +${mb(afterOne.heapUsed - beforeOne.heapUsed).padStart(7)}  external +${mb(afterOne.external - beforeOne.external)}  ${(oneBig.v.length / N).toFixed(0)}B/行  build ${oneBig.ms.toFixed(0)}ms`)
+
+// 客户端收行成本：现状（对象事件 → 建行对象，等价 take()）vs 数组（parse 完直接 push）
+const objLines = keepA.map((r) => JSON.stringify({ kind: 'action', ...r }))
+const aryLines = keepG2.map((r) => JSON.stringify(r))
+const takeObj = time(() =>
+  objLines.map((line) => {
+    const e = JSON.parse(line)
+    return { issueId: e.issueId, action: e.action, id: e.id, short: e.short, date: e.date, title: e.title, domain: e.domain, tags: e.tags }
+  }),
+)
+const takeAry = time(() => aryLines.map((line) => JSON.parse(line)))
+console.log(`客户端收 100k 行：对象 ${takeObj.ms.toFixed(0)}ms（含建行对象）  数组 ${takeAry.ms.toFixed(0)}ms（parse 即行）`)
 
 const accessA = time(() => {
   let n = 0
