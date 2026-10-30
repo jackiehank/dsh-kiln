@@ -8,7 +8,8 @@
  *   大仓每次都会付全量流的钱，硬存一份只会多占几十 MB。
  *
  * 只存内存，进程重启即丢。**不存原始 NDJSON**：parse 十万行只要几十毫秒，
- * 多留一份原始文本是白占（实测多 25MB）。缓存里只有客户端要的那 8 个字段。
+ * 多留一份原始文本是白占（实测多 25MB）。缓存里是**客户端要的同一份 7 槽数组行**
+ * （形状见 `timeline.js` 的 `ROW`）——宿主存的数组就是重发出去的字节，不再有转换层。
  *
  * 增量判定（`planIncrement`）宁可保守：旧 HEAD 不是祖先、区间内有回退日期的提交、
  * 区间太大、缓存太小，任何一条都回退全量。判定依据与实测见
@@ -21,10 +22,21 @@ import {
   rangeAuthorTimes as rangeAuthorTimesOf,
   readHead,
 } from './git.js'
+import { ROW } from './timeline.js'
 
-/** 单仓上限：5 万行或 20MB（按发出去的 NDJSON 字节算）。超过就 bypass。 */
-export const ROWS_LIMIT = 50_000
-export const BYTES_LIMIT = 20 * 1024 * 1024
+/**
+ * 单仓上限：12 万行或 32MB（按发出去的 NDJSON 字节算）。超过就 bypass。
+ *
+ * 口径来自实测（`docs/issues/kiln-cache-budget.md`）：10 万行 7 槽数组约 23.6MB 线上、
+ * 35MB 堆；32MB 留 35% 余量，12 万行给“比 10 万再多一点”的仓。
+ */
+export const ROWS_LIMIT = 120_000
+export const BYTES_LIMIT = 32 * 1024 * 1024
+/**
+ * 两端的总预算：所有仓加起来不超过这个数，超了按 LRU 挤掉最久没用的仓。
+ * 单仓上限 × 仓数是乘法，这里按**总和**再兜一道——两个 10 万行仓约 47MB，离 56MB 还有余量。
+ */
+export const TOTAL_BYTES_LIMIT = 56 * 1024 * 1024
 /** 最多留几个仓库（按最后访问淘汰）。 */
 export const REPO_LIMIT = 2
 /**
@@ -64,6 +76,7 @@ export function createRowsCache(deps = {}) {
   const limits = {
     rows: Number.isInteger(deps.rowsLimit) ? deps.rowsLimit : ROWS_LIMIT,
     bytes: Number.isInteger(deps.bytesLimit) ? deps.bytesLimit : BYTES_LIMIT,
+    totalBytes: Number.isInteger(deps.totalBytes) ? deps.totalBytes : TOTAL_BYTES_LIMIT,
     repos: Number.isInteger(deps.repoLimit) ? deps.repoLimit : REPO_LIMIT,
     incrementMinRows: Number.isInteger(deps.incrementMinRows) ? deps.incrementMinRows : INCREMENT_MIN_ROWS,
     incrementMaxCommits: Number.isInteger(deps.incrementMaxCommits)
@@ -155,7 +168,7 @@ export function createRowsCache(deps = {}) {
     }
 
     const boundary = entry.rows[0]
-    const boundaryMs = Date.parse(String(boundary?.date ?? ''))
+    const boundaryMs = Date.parse(String(boundary?.[ROW.DATE] ?? ''))
     if (!Number.isFinite(boundaryMs)) return { mode: 'full', reason: 'boundary-date-unknown' }
 
     let ancestor = null
@@ -181,7 +194,7 @@ export function createRowsCache(deps = {}) {
     return {
       mode: 'incremental',
       reason: 'prefix-safe',
-      boundary: boundary.id,
+      boundary: boundary[ROW.COMMIT],
       commits: range.count,
       previousHead: entry.head,
     }
@@ -218,8 +231,23 @@ export function createRowsCache(deps = {}) {
       binToken: entry?.binToken ?? '',
       rows: list,
       bytes,
+      /** 驻留池跟着条目走：增量追加时新行与旧行共享同一批字符串。 */
+      pool: entry?.pool instanceof Map ? entry.pool : null,
     })
-    while (store.size > limits.repos) store.delete(store.keys().next().value)
+    while (store.size > limits.repos) {
+      store.delete(store.keys().next().value)
+      stats.dropped += 1
+    }
+    // 再按总字节兜一道：单仓都很小、但仓数多起来时，乘法会顶到这里
+    let total = 0
+    for (const held of store.values()) total += held.bytes
+    while (total > limits.totalBytes && store.size > 1) {
+      const oldest = store.keys().next().value
+      const dropped = store.get(oldest)
+      store.delete(oldest)
+      total -= dropped.bytes
+      stats.dropped += 1
+    }
     stats.stored += 1
     return { stored: true }
   }

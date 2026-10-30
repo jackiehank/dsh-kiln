@@ -13,11 +13,13 @@ import { createSnapshotCache, evaluateCache } from '../lib/snapshot.js'
 import { createTimelineHandler } from '../lib/timelineHandler.js'
 import { actionsCacheKey } from '../lib/index.js'
 import {
+  ROW,
   actionLogArgs,
   actionLogProblem,
   consumeActionLog,
   createLineSplitter,
   mapActionRecord,
+  rowTags,
 } from '../lib/timeline.js'
 
 let passed = 0
@@ -39,6 +41,18 @@ async function check(name, fn) {
 
 const SHA_A = 'a'.repeat(40)
 const SHA_B = 'b'.repeat(40)
+/** 动作行的测试夹具：7 槽数组（形状见 lib/timeline.js 的 ROW）。 */
+const rowOf = (issue, action, commit, date = '', title = '', domain = '', tags = null) => [
+  issue,
+  action,
+  commit,
+  date,
+  title,
+  domain,
+  tags,
+]
+/** 一次响应里的事件流：行是数组，事件是对象。 */
+const rowsOf = (result) => result.events().filter((event) => Array.isArray(event))
 
 const graphOf = () => ({
   nodes: [
@@ -747,16 +761,12 @@ await check('时间线筛选：动作与领域两组，过滤的是动作行', a
     ['a', { id: 'a', domain: 'design' }],
     ['b', { id: 'b', domain: 'cli' }],
   ])
-  const rows = [
-    { issueId: 'a', action: 'ask' },
-    { issueId: 'a', action: 'apply' },
-    { issueId: 'b', action: 'ask' },
-  ]
+  const rows = [rowOf('a', 'ask', SHA_A), rowOf('a', 'apply', SHA_B), rowOf('b', 'ask', SHA_A)]
   const facets = rowFacets(rows, byId)
   assert.deepEqual(facets.actions.map((o) => [o.id, o.count]), [['ask', 2], ['apply', 1]])
   assert.deepEqual(facets.domains.map((o) => [o.id, o.count]), [['design', 2], ['cli', 1]])
 
-  const single = rowFacets([{ issueId: 'a', action: 'ask' }], byId)
+  const single = rowFacets([rowOf('a', 'ask', SHA_A)], byId)
   assert.deepEqual(single.actions, [], '只有一种动作就不给这一组')
   assert.deepEqual(single.domains, [], '只有一个领域就不给这一组')
 
@@ -905,23 +915,14 @@ await check('时间线：chunk 不按行到，半行留到下一块，CRLF 也�
   assert.deepEqual(splitter.flush(), ['tail'], '没有换行收尾的最后一行不能丢')
 })
 
-await check('时间线：记录按契约映射，缺省字段就是空（键不存在 ≠ null）', () => {
+await check('时间线：记录按契约映射成 7 槽数组，缺省字段就是空（不补默认值）', () => {
   const row = mapActionRecord({
     issue: 'a',
     action: 'apply',
     commit: SHA_A,
     date: '2026-10-28T23:06:28+08:00',
   })
-  assert.deepEqual(row, {
-    issueId: 'a',
-    action: 'apply',
-    id: SHA_A,
-    short: 'aaaaaaa',
-    date: '2026-10-28T23:06:28+08:00',
-    title: '',
-    domain: '',
-    tags: [],
-  })
+  assert.deepEqual(row, ['a', 'apply', SHA_A, '2026-10-28T23:06:28+08:00', '', '', null])
   const full = mapActionRecord({
     issue: 'b',
     action: 'test',
@@ -931,9 +932,10 @@ await check('时间线：记录按契约映射，缺省字段就是空（键不�
     domain: 'integration',
     tags: ['plugin', 'flow'],
   })
-  assert.equal(full.title.length, 200, '标题沿用快照同样的 200 字截断')
-  assert.equal(full.domain, 'integration')
-  assert.deepEqual(full.tags, ['plugin', 'flow'])
+  assert.equal(full[ROW.TITLE].length, 200, '标题沿用快照同样的 200 字截断')
+  assert.equal(full[ROW.DOMAIN], 'integration')
+  assert.equal(full[ROW.TAGS], 'plugin\u0001flow', '标签存连接串，读出时才切')
+  assert.deepEqual(rowTags(full), ['plugin', 'flow'])
   assert.equal(mapActionRecord({ issue: 'a', action: 'apply' }), null, '缺 commit 是坏行')
   assert.equal(mapActionRecord(null), null)
 })
@@ -956,7 +958,7 @@ await check('时间线：逐条回调、跨块拼行、坏行不吞、done 只�
   const calls = []
   const child = childStub()
   consumeActionLog(child, {
-    onRecord: (row) => calls.push(row.issueId),
+    onRecord: (row) => calls.push(row[ROW.ISSUE]),
     onError: (message) => calls.push(`err:${message.slice(0, 4)}`),
     onDone: (info) => calls.push(`done:${info.code}:${info.count}:${info.failed}`),
   })
@@ -1085,6 +1087,7 @@ function timelineHarness(options = {}) {
     git,
     rowsLimit: options.rowsLimit ?? 1000,
     bytesLimit: options.bytesLimit ?? 1 << 20,
+    totalBytes: options.totalBytes ?? 64 << 20,
     repoLimit: options.repoLimit ?? 2,
     incrementMinRows: options.incrementMinRows ?? 0,
     incrementMaxCommits: options.incrementMaxCommits ?? 100,
@@ -1118,7 +1121,7 @@ async function respond(harness, options = {}) {
   const payloads = options.payloads ?? [options.payload ?? CACHE_NDJSON]
   let finished = false
   const running = harness
-    .handler(options.cwd ?? '/repo', fake.res, options.args ?? {})
+    .handler(options.cwd ?? '/repo', fake.res, { format: 2, ...(options.args ?? {}) })
     .finally(() => {
       finished = true
     })
@@ -1158,7 +1161,7 @@ await check('动作流缓存：第一次构建并写缓存，第二次同 HEAD �
   assert.equal(first.state.headers['x-kiln-mode'], 'build')
   assert.equal(doneFirst.cache, 'stored')
   assert.equal(harness.state.spawns, 1)
-  assert.equal(first.events().filter((event) => event.kind === 'action').length, 2)
+  assert.equal(first.events().filter((event) => Array.isArray(event)).length, 2)
 
   const second = await respond(harness)
   const doneSecond = second.events().find((event) => event.kind === 'done')
@@ -1167,7 +1170,7 @@ await check('动作流缓存：第一次构建并写缓存，第二次同 HEAD �
   assert.equal(second.spawned, false, '命中时不该再起子进程')
   assert.equal(harness.state.spawns, 1)
   assert.deepEqual(
-    second.events().filter((event) => event.kind === 'action').map((event) => event.issueId),
+    second.events().filter((event) => Array.isArray(event)).map((row) => row[ROW.ISSUE]),
     ['a', 'b'],
     '重发的行与原流一致',
   )
@@ -1181,11 +1184,11 @@ await check('动作流缓存：HEAD 前进 → 重建并覆盖（阶段 1 还不
 
   assert.equal(next.state.headers['x-kiln-mode'], 'build')
   assert.equal(harness.state.spawns, 2)
-  assert.equal(next.events().filter((event) => event.kind === 'action').length, 1)
+  assert.equal(next.events().filter((event) => Array.isArray(event)).length, 1)
   // 新的一份覆盖旧的：同一个 HEAD 再请求一次应当命中新的那一行
   const again = await respond(harness)
   assert.equal(again.state.headers['x-kiln-mode'], 'hit')
-  assert.equal(again.events().filter((event) => event.kind === 'action').length, 1)
+  assert.equal(again.events().filter((event) => Array.isArray(event)).length, 1)
 })
 
 // ---------------------------------------------------------------- 阶段 3：前缀增量
@@ -1217,15 +1220,15 @@ await check('阶段3：HEAD 前进且前缀可安全读 → 只读新前缀，�
   assert.equal(result.state.headers['x-kiln-mode'], 'incremental')
   assert.deepEqual(
     result.events()
-      .filter((event) => event.kind === 'action')
-      .map((event) => event.issueId),
+      .filter((event) => Array.isArray(event))
+      .map((row) => row[ROW.ISSUE]),
     ['c', 'a', 'b'],
     '新行在前、缓存行在后',
   )
   assert.equal(harness.state.spawns, 2, '增量只起一次子进程（加上首次构建）')
   const rows = harness.cache.rows('/repo')
   assert.equal(rows.length, 3)
-  assert.equal(rows[0].id, CACHE_NEW.commit)
+  assert.equal(rows[0][ROW.COMMIT], CACHE_NEW.commit)
   assert.equal(harness.cache.peek('/repo').head, 'h2')
 })
 
@@ -1241,8 +1244,8 @@ await check('阶段3：客户端 HEAD 正好是缓存那一份 → 只发新增�
   assert.equal(result.state.headers['x-kiln-mode'], 'delta')
   assert.deepEqual(
     result.events()
-      .filter((event) => event.kind === 'action')
-      .map((event) => event.issueId),
+      .filter((event) => Array.isArray(event))
+      .map((row) => row[ROW.ISSUE]),
     ['c'],
     'delta 只发新增的那一行',
   )
@@ -1287,8 +1290,8 @@ await check('阶段3：新前缀读完都没撞到 boundary → 回退全量', a
   assert.equal(harness.cache.rows('/repo').length, 2)
   assert.deepEqual(
     result.events()
-      .filter((event) => event.kind === 'action')
-      .map((event) => event.issueId),
+      .filter((event) => Array.isArray(event))
+      .map((row) => row[ROW.ISSUE]),
     ['a', 'b'],
     '客户端只收到全量结果，没有半截新行',
   )
@@ -1368,7 +1371,7 @@ await check('动作流缓存：fresh=1 忽略缓存重建，并把新数据写�
   assert.equal(harness.state.spawns, 2)
   const rows = harness.cache.rows('/repo')
   assert.equal(rows.length, 1)
-  assert.equal(rows[0].id, SHA_B)
+  assert.equal(rows[0][ROW.COMMIT], SHA_B)
 })
 
 await check('动作流缓存：客户端带同一个 HEAD → unchanged，空 body 零子进程', async () => {
@@ -1380,7 +1383,7 @@ await check('动作流缓存：客户端带同一个 HEAD → unchanged，空 bo
   assert.equal(harness.state.spawns, 1, 'unchanged 不该再起子进程')
   const done = again.events().find((event) => event.kind === 'done')
   assert.equal(done.cache, 'unchanged')
-  assert.equal(again.events().filter((event) => event.kind === 'action').length, 0, 'unchanged 不发行')
+  assert.equal(again.events().filter((event) => Array.isArray(event)).length, 0, 'unchanged 不发行')
 })
 
 await check('动作流缓存：客户端 HEAD 过期 → 走全量重发', async () => {
@@ -1390,7 +1393,7 @@ await check('动作流缓存：客户端 HEAD 过期 → 走全量重发', async
   const stale = await respond(harness, { args: { head: 'h1' }, payload: `${JSON.stringify(CACHE_ROWS[0])}\n` })
   assert.equal(stale.state.headers['x-kiln-mode'], 'build')
   assert.equal(stale.spawned, true)
-  assert.equal(stale.events().filter((event) => event.kind === 'action').length, 1)
+  assert.equal(stale.events().filter((event) => Array.isArray(event)).length, 1)
 })
 
 await check('动作流缓存：配置换了就算 HEAD 相同也要重发（客户端那份语义可能过时）', async () => {
@@ -1402,11 +1405,22 @@ await check('动作流缓存：配置换了就算 HEAD 相同也要重发（客�
   assert.equal(rebuilt.spawned, true)
 })
 
+await check('时间线：不带 format=2 的请求被 400 拒绝，提示刷新（不给假空列表）', async () => {
+  const harness = timelineHarness()
+  const fake = makeFakeRes()
+  await harness.handler('/repo', fake.res, {})
+  assert.equal(fake.res.statusCode, 400)
+  assert.equal(harness.state.spawns, 0, '没到取数就该拒绝')
+  const body = JSON.parse(fake.state.chunks.join(''))
+  assert.equal(body.reason, 'format-required')
+  assert.match(body.message, /刷新/)
+})
+
 await check('动作流缓存：客户端断开 → kill 子进程，后续行不再写', async () => {
   const harness = timelineHarness()
   const fake = makeFakeRes()
   let finished = false
-  const running = harness.handler('/repo', fake.res, {}).finally(() => {
+  const running = harness.handler('/repo', fake.res, { format: 2 }).finally(() => {
     finished = true
   })
   // 等子进程起来（handler 里先 await 探测，再 spawn）
@@ -1423,6 +1437,15 @@ await check('动作流缓存：客户端断开 → kill 子进程，后续行不
   child.emit('close', 0)
   await running
   assert.equal(fake.state.chunks.length, written, '关掉之后不再写')
+})
+
+await check('动作流缓存：总预算超过就按 LRU 挤掉，不是只看仓数', async () => {
+  const harness = timelineHarness({ bytesLimit: 2 << 20, totalBytes: 3 << 20 })
+  const rows = [rowOf('a', 'ask', SHA_A)]
+  harness.cache.commit('r1', { head: 'h1', configToken: 'c1', binToken: 'b1', rows, bytes: 2 << 20 })
+  harness.cache.commit('r2', { head: 'h1', configToken: 'c1', binToken: 'b1', rows, bytes: 2 << 20 })
+  assert.equal(await harness.cache.rows('r1'), null, '总预算 3MB：两份 2MB 只能留最近的一份')
+  assert.notEqual(await harness.cache.rows('r2'), null)
 })
 
 await check('动作流缓存：最多留 2 个仓，第 3 个把最久没用的挤掉', async () => {
@@ -1464,9 +1487,9 @@ await check('issue 折叠：首现=最近动作、domain 取首个非空、tags 
   assert.ok(vocab !== null)
   const SHA_C = 'c'.repeat(40)
   const rows = [
-    { issueId: 'a', action: 'apply', id: SHA_A, short: 'aaaaaaa', date: '2026-10-05T00:00:00+08:00', title: 'a apply', domain: 'newest', tags: ['t1'] },
-    { issueId: 'b', action: 'test', id: SHA_B, short: 'bbbbbbb', date: '2026-10-04T00:00:00+08:00', title: 'b test', tags: [] },
-    { issueId: 'a', action: 'ask', id: SHA_C, short: 'ccccccc', date: '2026-10-01T00:00:00+08:00', title: 'a ask', domain: 'oldest', tags: ['t2'] },
+    rowOf('a', 'apply', SHA_A, '2026-10-05T00:00:00+08:00', 'a apply', 'newest', 't1'),
+    rowOf('b', 'test', SHA_B, '2026-10-04T00:00:00+08:00', 'b test'),
+    rowOf('a', 'ask', SHA_C, '2026-10-01T00:00:00+08:00', 'a ask', 'oldest', 't2'),
   ]
   const issues = foldIssues(rows, { start: vocab.start, terminal: vocab.terminal, complete: true })
   assert.deepEqual(issues.map((issue) => issue.id), ['a', 'b'], '首现顺序 = 最近动作顺序')
@@ -1484,8 +1507,8 @@ await check('issue 折叠：首现=最近动作、domain 取首个非空、tags 
 await check('issue 折叠：没读到起点、流也没结束时，ordinal 不提前编', () => {
   const { foldIssues } = clientInternals()
   const rows = [
-    { issueId: 'a', action: 'apply', id: SHA_A, short: 'aaaaaaa', date: '2026-10-05T00:00:00+08:00', title: 'a apply', tags: [] },
-    { issueId: 'a', action: 'test', id: SHA_B, short: 'bbbbbbb', date: '2026-10-04T00:00:00+08:00', title: 'a test', tags: [] },
+    rowOf('a', 'apply', SHA_A, '2026-10-05T00:00:00+08:00', 'a apply'),
+    rowOf('a', 'test', SHA_B, '2026-10-04T00:00:00+08:00', 'a test'),
   ]
   const partial = foldIssues(rows, { start: 'ask', terminal: new Set(['apply']), complete: false })
   assert.equal(partial[0].done, true)
@@ -1500,7 +1523,7 @@ await check('issue 折叠：词表缺失时 done 不可知，不猜', () => {
   assert.equal(normalizeVocab({ names: [], start: 'ask', terminal: [] }), null)
   assert.equal(normalizeVocab({ names: ['ask'], start: '', terminal: [] }), null)
   const issues = foldIssues(
-    [{ issueId: 'a', action: 'apply', id: SHA_A, short: 'aaaaaaa', date: '2026-10-05T00:00:00+08:00', title: '', tags: [] }],
+    [rowOf('a', 'apply', SHA_A, '2026-10-05T00:00:00+08:00', '')],
     { start: 'ask', terminal: null, complete: true },
   )
   assert.equal(issues[0].done, false)
@@ -1541,7 +1564,7 @@ await check('词表缓存键：仓库 / 配置 / 二进制任一变化都换键'
 await check('动作流客户端缓存：按仓库记 HEAD，超限/换仓/刷新各自处理', () => {
   const { timelineCache, rememberTimeline, clearRepoCaches } = clientInternals()
   timelineCache.clear()
-  const rows = [{ id: 'sha1' }]
+  const rows = [rowOf('a', 'ask', 'sha1')]
 
   assert.equal(rememberTimeline('/a', 'h1', rows, 100), true)
   assert.equal(timelineCache.get('/a').head, 'h1')
@@ -1552,22 +1575,31 @@ await check('动作流客户端缓存：按仓库记 HEAD，超限/换仓/刷新
   assert.equal(timelineCache.has('/a'), false, '只留最近两个仓')
 
   assert.equal(rememberTimeline('/d', '', rows, 100), false, '没有 HEAD 不记')
-  assert.equal(rememberTimeline('/d', 'h1', rows, 20 * 1024 * 1024 + 1), false, '超过字节上限不记')
-  assert.equal(rememberTimeline('/d', 'h1', new Array(50001).fill(rows[0]), 100), false, '超过行数上限不记')
+  assert.equal(rememberTimeline('/d', 'h1', rows, 32 * 1024 * 1024 + 1), false, '超过字节上限不记')
+  assert.equal(rememberTimeline('/d', 'h1', new Array(120001).fill(rows[0]), 100), false, '超过行数上限不记')
 
   timelineCache.set('/x', { head: 'h1', rows, bytes: 1 })
   clearRepoCaches('/x')
   assert.equal(timelineCache.has('/x'), false, '刷新要连动作流缓存一起清')
+
+  // 总预算：两份 40MB 超过 64MB，挤掉最久没用的那份
+  timelineCache.clear()
+  assert.equal(rememberTimeline('/big1', 'h1', rows, 30 * 1024 * 1024), true)
+  assert.equal(rememberTimeline('/big2', 'h1', rows, 30 * 1024 * 1024), true)
+  assert.equal(timelineCache.has('/big1'), false, '总预算 56MB：两份 30MB 只能留最近的一份')
+  assert.equal(timelineCache.has('/big2'), true)
+  timelineCache.clear()
 })
 
 await check('动作流客户端缓存：delta 合并——新行在前、按 sha 去重、空旧集照抄', () => {
   const { mergeTimelineRows } = clientInternals()
-  const newer = [{ id: 'c' }]
-  const older = [{ id: 'a' }, { id: 'b' }]
-  assert.deepEqual(mergeTimelineRows(newer, older).map((row) => row.id), ['c', 'a', 'b'])
-  assert.deepEqual(mergeTimelineRows([{ id: 'a' }], older).map((row) => row.id), ['a', 'b'], '重复的 sha 不出现两次')
-  assert.deepEqual(mergeTimelineRows(newer, []).map((row) => row.id), ['c'])
-  assert.deepEqual(mergeTimelineRows([], older).map((row) => row.id), ['a', 'b'])
+  const ids = (rows) => rows.map((row) => row[ROW.COMMIT])
+  const newer = [rowOf('c', 'ask', 'sha-c')]
+  const older = [rowOf('a', 'ask', 'sha-a'), rowOf('b', 'ask', 'sha-b')]
+  assert.deepEqual(ids(mergeTimelineRows(newer, older)), ['sha-c', 'sha-a', 'sha-b'])
+  assert.deepEqual(ids(mergeTimelineRows([rowOf('a', 'ask', 'sha-a')], older)), ['sha-a', 'sha-b'], '重复的 sha 不出现两次')
+  assert.deepEqual(ids(mergeTimelineRows(newer, [])), ['sha-c'])
+  assert.deepEqual(ids(mergeTimelineRows([], older)), ['sha-a', 'sha-b'])
 })
 
 await check('搜索结果键盘：在结果里上下移动，到两端回绕', () => {
@@ -1593,7 +1625,7 @@ await check('虚拟化：前缀高度表用真实高度、缺的用估算', () =
   const heights = new Map([['issue\u0000b', 50]])
   const offsets = buildOffsets(rows, 'issue', heights, 30)
   assert.deepEqual(Array.from(offsets), [0, 30, 80, 110])
-  assert.equal(rowKeyOf('timeline', { id: 'sha', issueId: 'x' }), 'sha')
+  assert.equal(rowKeyOf('timeline', rowOf('x', 'ask', 'sha')), 'sha')
   assert.equal(rowKeyOf('issue', { id: 'x' }), 'x')
 })
 

@@ -65,25 +65,39 @@ window.__ModuleLoader__.load({
      * 动作流行缓存（0.11.0）：按仓库记住「这份行对应哪个 HEAD」。
      *
      * 切页 / 换会话时先拿它渲染，再带 `?head=` 去问宿主：HEAD 没变就一个字节都不传
-     * （宿主回 `x-kiln-mode: unchanged`）。上限与宿主一致——5 万行 / 20MB，
-     * 超了就不存，退回每次流式（大仓在浏览器里再留一份不划算）。
+     * （宿主回 `x-kiln-mode: unchanged`）。上限见下——12 万行 / 32MB 单仓、总预算 56MB，
+     * 超了不存或按 LRU 挤掉，退回每次流式（大仓在浏览器里再留一份不划算）。
      */
     const timelineCache = new Map()
-    const TIMELINE_CACHE_ROWS = 50_000
-    const TIMELINE_CACHE_BYTES = 20 * 1024 * 1024
+    /**
+     * 上限与宿主同一口径：12 万行 / 32MB 单仓，**两端总预算 56MB**。
+     * 超了不存（大仓不划算）或按 LRU 挤掉最久没用的仓——不留给用户配。
+     */
+    const TIMELINE_CACHE_ROWS = 120_000
+    const TIMELINE_CACHE_BYTES = 32 * 1024 * 1024
     const TIMELINE_CACHE_REPOS = 2
+    const TIMELINE_CACHE_TOTAL_BYTES = 56 * 1024 * 1024
 
     /**
      * 记一份动作流（只在流完整读完时调用）。
      * 返回是否真的留下——超限时静默不留，页面照常工作。
      */
-    function rememberTimeline(cwd, head, rows, bytes) {
+    function rememberTimeline(cwd, head, rows, bytes, pool) {
       timelineCache.delete(cwd)
       if (typeof head !== 'string' || head === '') return false
       if (!Array.isArray(rows) || rows.length > TIMELINE_CACHE_ROWS) return false
       if (!Number.isFinite(bytes) || bytes > TIMELINE_CACHE_BYTES) return false
-      timelineCache.set(cwd, { head, rows, bytes })
+      timelineCache.set(cwd, { head, rows, bytes, pool: pool instanceof Map ? pool : null })
+      const total = () => {
+        let sum = 0
+        for (const entry of timelineCache.values()) if (Number.isFinite(entry.bytes)) sum += entry.bytes
+        return sum
+      }
       while (timelineCache.size > TIMELINE_CACHE_REPOS) timelineCache.delete(timelineCache.keys().next().value)
+      // 单仓都很小、仓数多起来时乘法会顶到这里；留最后一份，别把自己也挤掉
+      while (timelineCache.size > 1 && total() > TIMELINE_CACHE_TOTAL_BYTES) {
+        timelineCache.delete(timelineCache.keys().next().value)
+      }
       return true
     }
 
@@ -94,8 +108,8 @@ window.__ModuleLoader__.load({
     function mergeTimelineRows(newer, older) {
       const head = Array.isArray(newer) ? newer : []
       if (!Array.isArray(older) || older.length === 0) return head.slice()
-      const known = new Set(head.map((row) => row.id))
-      return head.concat(older.filter((row) => !known.has(row.id)))
+      const known = new Set(head.map((row) => rowCommit(row)))
+      return head.concat(older.filter((row) => !known.has(rowCommit(row))))
     }
     /** hover 预取的延迟：太短会在扫过列表时把每一行都取一遍。 */
     const PREFETCH_MS = 120
@@ -146,6 +160,50 @@ window.__ModuleLoader__.load({
           const line = rest
           rest = ''
           return line === '' ? [] : [line]
+        },
+      }
+    }
+
+    /**
+     * 动作行的形状：7 槽数组，与宿主 `timeline.js` 的 `ROW` 一一对应。
+     *
+     * 宿主发出来的行就是这个数组（`?format=2`），客户端 parse 完直接存——不再建对象。
+     * 下标只从 `ROW` 取；读字段一律走下面几个函数，避免 `row[1]` 写错槽还能静默跑。
+     */
+    const ROW = Object.freeze({ ISSUE: 0, ACTION: 1, COMMIT: 2, DATE: 3, TITLE: 4, DOMAIN: 5, TAGS: 6 })
+    const TAGS_SEPARATOR = '\u0001'
+    /** 空标签的共享数组：折叠时 86% 的行没有标签，不该每行造一个空数组。 */
+    const NO_TAGS = Object.freeze([])
+    /** 行形状的版本号：2 = 7 槽数组。宿主不带它就 400，让旧页面刷新而不是静默空列表。 */
+    const TIMELINE_FORMAT = 2
+    const rowIssue = (row) => (typeof row[ROW.ISSUE] === 'string' ? row[ROW.ISSUE] : '')
+    const rowAction = (row) => (typeof row[ROW.ACTION] === 'string' ? row[ROW.ACTION] : '')
+    const rowCommit = (row) => (typeof row[ROW.COMMIT] === 'string' ? row[ROW.COMMIT] : '')
+    const rowDate = (row) => (typeof row[ROW.DATE] === 'string' ? row[ROW.DATE] : '')
+    const rowTitle = (row) => (typeof row[ROW.TITLE] === 'string' ? row[ROW.TITLE] : '')
+    const rowDomain = (row) => (typeof row[ROW.DOMAIN] === 'string' ? row[ROW.DOMAIN] : '')
+    const rowShort = (row) => rowCommit(row).slice(0, 7)
+    const rowTags = (row) => {
+      const tags = row[ROW.TAGS]
+      return typeof tags === 'string' && tags !== '' ? tags.split(TAGS_SEPARATOR) : []
+    }
+    /** 驻留：issueId/action/domain 在整条流里重复，共享同一批字符串（实测省约 108B/行）。 */
+    const createRowInterner = (shared) => {
+      const pool = shared instanceof Map ? shared : new Map()
+      const intern = (value) => {
+        if (typeof value !== 'string' || value === '') return value ?? ''
+        const hit = pool.get(value)
+        if (hit !== undefined) return hit
+        pool.set(value, value)
+        return value
+      }
+      return {
+        pool,
+        intern(row) {
+          row[ROW.ISSUE] = intern(row[ROW.ISSUE])
+          row[ROW.ACTION] = intern(row[ROW.ACTION])
+          row[ROW.DOMAIN] = intern(row[ROW.DOMAIN])
+          return row
         },
       }
     }
@@ -312,9 +370,10 @@ window.__ModuleLoader__.load({
       return peleLoader
     }
 
-    /** 展开项的键：优先用提交 sha；空提交退化成 issue#序号，避免多条空 sha 互相顶掉。 */
+    /** 展开项的键：优先用提交 sha；空提交退化成 issue#时间，避免多条空 sha 互相顶掉。 */
     function actionKey(row) {
-      return typeof row.id === 'string' && row.id !== '' ? row.id : `${row.issueId}#${row.ordinal}`
+      const commit = rowCommit(row)
+      return commit !== '' ? commit : `${rowIssue(row)}#${rowDate(row)}`
     }
 
     const CSS = `
@@ -999,7 +1058,7 @@ window.__ModuleLoader__.load({
      */
     function scopeTimeline(rows, view) {
       if (view === null) return rows
-      return rows.filter((row) => view.ids.has(row.issueId))
+      return rows.filter((row) => view.ids.has(rowIssue(row)))
     }
 
     /** `action list --json` → 折叠要用的词表；形状不对就当没有（done 未知，不猜）。 */
@@ -1031,7 +1090,7 @@ window.__ModuleLoader__.load({
       const byId = new Map()
       const order = []
       for (const row of Array.isArray(rows) ? rows : []) {
-        const id = typeof row?.issueId === 'string' ? row.issueId : ''
+        const id = rowIssue(row)
         if (id === '') continue
         let issue = byId.get(id)
         if (issue === undefined) {
@@ -1050,15 +1109,15 @@ window.__ModuleLoader__.load({
           byId.set(id, issue)
           order.push(id)
         }
-        if (issue.domain === '' && typeof row.domain === 'string' && row.domain !== '') issue.domain = row.domain
+        if (issue.domain === '' && rowDomain(row) !== '') issue.domain = rowDomain(row)
         issue.actions.push({
-          action: row.action,
-          id: row.id,
-          short: row.short,
-          date: row.date,
-          title: row.title ?? '',
-          /** 动作级标签只在折叠时用来合并 issue 级 tags，渲染不看它。 */
-          tags: Array.isArray(row.tags) ? row.tags : [],
+          action: rowAction(row),
+          id: rowCommit(row),
+          short: rowShort(row),
+          date: rowDate(row),
+          title: rowTitle(row),
+          /** 动作级标签只在折叠时用来合并 issue 级 tags，渲染不看它。空的共用一份，别每行建数组。 */
+          tags: row[ROW.TAGS] === null ? NO_TAGS : rowTags(row),
           refs: [],
         })
       }
@@ -1142,9 +1201,9 @@ window.__ModuleLoader__.load({
     function filterRows(rows, filters, byId) {
       if (filters === null || filters === undefined || !filtersActive(filters)) return rows
       return rows.filter((row) => {
-        if (filters.actions.length > 0 && !filters.actions.includes(row.action)) return false
+        if (filters.actions.length > 0 && !filters.actions.includes(rowAction(row))) return false
         if (filters.domains.length > 0) {
-          const domain = byId?.get?.(row.issueId)?.domain ?? ''
+          const domain = byId?.get?.(rowIssue(row))?.domain ?? ''
           if (!filters.domains.includes(domain)) return false
         }
         return true
@@ -1160,9 +1219,9 @@ window.__ModuleLoader__.load({
       const actions = new Map()
       const domains = new Map()
       for (const row of rows) {
-        const action = row.action ?? ''
+        const action = rowAction(row)
         actions.set(action, (actions.get(action) ?? 0) + 1)
-        const domain = byId?.get?.(row.issueId)?.domain ?? ''
+        const domain = byId?.get?.(rowIssue(row))?.domain ?? ''
         domains.set(domain, (domains.get(domain) ?? 0) + 1)
       }
       const toOptions = (map, emptyLabel) =>
@@ -1414,18 +1473,19 @@ window.__ModuleLoader__.load({
     /** timeline 行展开：这条提交的详情。动作级 domain/tags 由 action log 给，缺了就不显示。 */
     function ActionDetail(props) {
       const row = props.row
-      const tags = Array.isArray(row.tags) ? row.tags : []
+      const tags = rowTags(row)
+      const domain = rowDomain(row)
       return h(
         'div',
         { className: 'dkf-detail' },
-        h('div', null, h('span', { className: 'dkf-detail-key' }, '提交'), h('code', null, row.id || '（无 sha）')),
-        row.domain !== undefined && row.domain !== ''
-          ? h('div', null, h('span', { className: 'dkf-detail-key' }, '领域'), h('span', null, row.domain))
+        h('div', null, h('span', { className: 'dkf-detail-key' }, '提交'), h('code', null, rowCommit(row) || '（无 sha）')),
+        domain !== ''
+          ? h('div', null, h('span', { className: 'dkf-detail-key' }, '领域'), h('span', null, domain))
           : null,
         tags.length > 0
           ? h('div', null, h('span', { className: 'dkf-detail-key' }, '标签'), h('span', null, tags.join('、')))
           : null,
-        h('div', null, h('span', { className: 'dkf-detail-key' }, '时间'), h('span', null, row.date || '')),
+        h('div', null, h('span', { className: 'dkf-detail-key' }, '时间'), h('span', null, rowDate(row))),
       )
     }
 
@@ -1489,6 +1549,9 @@ window.__ModuleLoader__.load({
     /** timeline 的一行：动作色条 + 所属 issue + action + 完整标题 + 短 sha + 相对时间。 */
     function ActionRow(props) {
       const row = props.row
+      const issue = rowIssue(row)
+      const action = rowAction(row)
+      const title = rowTitle(row)
       return h(
         React.Fragment,
         null,
@@ -1499,25 +1562,25 @@ window.__ModuleLoader__.load({
             'data-row': '',
             'data-key': actionKey(row),
             tabIndex: -1,
-            style: { '--dkf-row-color': colorOf(row.action) },
+            style: { '--dkf-row-color': colorOf(action) },
             onClick: props.onToggle,
-            onPointerEnter: () => props.onPrefetch?.(row.issueId),
+            onPointerEnter: () => props.onPrefetch?.(issue),
             onKeyDown: (event) => rowKeyDown(event, props),
             'data-hint': '点开看这条提交的详情',
           },
           h('span', { className: 'dkf-abar' }),
-          h('span', { className: 'dkf-aissue', 'data-hint': row.issueId }, row.issueId),
-          h('span', { className: 'dkf-achip' }, row.action || '?'),
-          h('span', { className: 'dkf-atitle', 'data-hint': row.title }, row.title || '（无标题）'),
-          h('span', { className: 'dkf-ashort' }, row.short || ''),
-          h('span', { className: 'dkf-ago' }, ago(row.date)),
+          h('span', { className: 'dkf-aissue', 'data-hint': issue }, issue),
+          h('span', { className: 'dkf-achip' }, action || '?'),
+          h('span', { className: 'dkf-atitle', 'data-hint': title }, title || '（无标题）'),
+          h('span', { className: 'dkf-ashort' }, rowShort(row)),
+          h('span', { className: 'dkf-ago' }, ago(rowDate(row))),
           h(
             'button',
             {
               type: 'button',
               className: 'dkf-focusbtn',
               tabIndex: -1,
-              'data-hint': `聚焦 ${row.issueId}（快捷键 f）`,
+              'data-hint': `聚焦 ${issue}（快捷键 f）`,
               onClick: (event) => {
                 event.stopPropagation()
                 props.onFocus()
@@ -1746,7 +1809,7 @@ window.__ModuleLoader__.load({
               expanded:
                 props.expanded !== null && props.expanded.kind === 'action' && props.expanded.id === key,
               onToggle: () => props.onToggle({ kind: 'action', id: key }),
-              onFocus: () => props.onFocus(row.issueId),
+              onFocus: () => props.onFocus(rowIssue(row)),
             }),
           )
         }),
@@ -2500,6 +2563,7 @@ window.__ModuleLoader__.load({
             if (!settled) publish('streaming')
           }, TIMELINE_FLUSH_MS)
         }
+        const interner = createRowInterner(cached?.pool)
         const take = (line) => {
           const text = String(line ?? '').trim()
           if (text === '') return
@@ -2510,17 +2574,13 @@ window.__ModuleLoader__.load({
             error = `时间线输出不是 JSON：${text.slice(0, 120)}`
             return
           }
-          if (event?.kind === 'action' && typeof event.issueId === 'string') {
-            rows.push({
-              issueId: event.issueId,
-              action: event.action,
-              id: event.id,
-              short: event.short,
-              date: event.date,
-              title: event.title,
-              domain: event.domain,
-              tags: Array.isArray(event.tags) ? event.tags : [],
-            })
+          // 行是 7 槽数组（format=2），事件是对象：按形状分流，不再靠 kind 标记每一行
+          if (Array.isArray(event)) {
+            if (typeof event[ROW.ISSUE] !== 'string' || typeof event[ROW.COMMIT] !== 'string') {
+              error = `时间线行不是 7 槽数组：${text.slice(0, 120)}`
+              return
+            }
+            rows.push(interner.intern(event))
             schedule()
             return
           }
@@ -2542,7 +2602,7 @@ window.__ModuleLoader__.load({
         }
         const run = async () => {
           try {
-            const query = `${TIMELINE_URL}?cwd=${encodeURIComponent(cwd)}${cached !== undefined ? `&head=${encodeURIComponent(cached.head)}` : ''}`
+            const query = `${TIMELINE_URL}?cwd=${encodeURIComponent(cwd)}&format=${TIMELINE_FORMAT}${cached !== undefined ? `&head=${encodeURIComponent(cached.head)}` : ''}`
             const response = await fetch(query, {
               credentials: 'same-origin',
               signal: controller.signal,
@@ -2594,10 +2654,10 @@ window.__ModuleLoader__.load({
             if (error === null && sawDone && delta === true) {
               // 只收到新增的几行：和本地那份拼起来，再整体存回
               const merged = mergeTimelineRows(rows, cached.rows)
-              rememberTimeline(cwd, head, merged, bytes + cached.bytes)
+              rememberTimeline(cwd, head, merged, bytes + cached.bytes, interner.pool)
               setTimeline({ rows: merged, phase: 'done', error: null, ms: Date.now() - startedAt, count: merged.length })
             } else if (error === null && sawDone) {
-              rememberTimeline(cwd, head, rows.slice(), bytes)
+              rememberTimeline(cwd, head, rows.slice(), bytes, interner.pool)
               publish('done')
             } else {
               timelineCache.delete(cwd)
@@ -3499,6 +3559,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, actionsCache, timelineCache, rememberTimeline, mergeTimelineRows, nextSearchIndex, jumpPlan, rowKeyOf, buildOffsets, virtualWindow, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, actionsCache, timelineCache, rememberTimeline, mergeTimelineRows, nextSearchIndex, jumpPlan, rowKeyOf, buildOffsets, virtualWindow, ROW, rowIssue, rowAction, rowCommit, rowDate, rowTitle, rowDomain, rowShort, rowTags, createRowInterner, css: CSS } } : {}) }
   },
 })

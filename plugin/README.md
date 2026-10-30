@@ -1,10 +1,11 @@
 # @local/dsh-kiln
 
 DSH × kiln 的插件：在会话顶部标签排（对话 / 轨迹 / 上下文）**之后**加一个 `kiln` 标签，
-只读展示 kiln 仓库的三页视图（时间线 / issue / 关系）。**插件版本 0.12.0**：按视图取数——
+只读展示 kiln 仓库的三页视图（时间线 / issue / 关系）。**插件版本 0.13.0**：按视图取数——
 首屏只读一条动作流，关系图与详情点开才取，图 / 详情 / 搜索按会话缓存；动作流双端按 HEAD 缓存
 （HEAD 未变时切回标签 **0 子进程、0 字节**），HEAD 前进时只读**安全可证的前缀**，
-列表按可视区虚拟渲染、滚到底再追加。
+列表按可视区虚拟渲染、滚到底再追加。动作行是 **7 槽数组**（宿主缓存、线上、客户端缓存同形），
+10 万行线上约 24MB。
 
 - 版本要求：**取数需 kiln v0.2.0+**（`graph --json`、单条 `path --json`、`commit` 键），
   **搜索需 v0.2.1+**（`rank` / `hit.total` / `hit.date`），**动作流与词表需 v0.3.0+**
@@ -44,15 +45,20 @@ HEAD 用文件直读，命中时宿主只花 1–2ms。）
   点「刷新」或重开页面才失效——与动作流“mount 时重读”的失效模型一致，不落盘。宿主另按
   `(repo, 配置令牌, 二进制令牌)` 缓存词表，浏览器 F5 后不必再起一次 `action list`。
   搜索 effect 通过 ref 读 issue 索引，流式期间不会因为索引每批换新而 abort 重发。
-- **动作流缓存（0.10.0 → 0.12.0）**：宿主按 `(repo, HEAD, 配置令牌, 二进制令牌)` 记住上一次的动作行；
+- **动作流缓存（0.10.0 → 0.13.0）**：宿主按 `(repo, HEAD, 配置令牌, 二进制令牌)` 记住上一次的动作行；
   客户端也按仓库记住同一份行与它对应的 HEAD，下次带 `?head=` 去问：
   HEAD 没动就回 `x-kiln-mode: unchanged`（**0 子进程、0 字节**，切页直接复用本地行）；
   HEAD 前进且**前缀可以证明安全**时只读新前缀（`incremental`），客户端那份正好是旧 HEAD 时
   只发新增行（`delta`）。客户端先用手上的行渲染、等流读完一次性换掉，不闪白也不闪半截。
   安全条件（缺一即全量）：旧 HEAD 是新 HEAD 的祖先；`旧..新` 区间里所有提交的 author 时间
   都晚于缓存首行（挡住 cherry-pick / rebase 带进来的旧日期提交）；缓存 ≥ 5000 行
-  （小仓全读更快）；区间提交数 ≤ 2000。单仓超 **5 万行 / 20MB** 两端都不存。
+  （小仓全读更快）；区间提交数 ≤ 2000。单仓超 **12 万行 / 32MB** 两端都不存；
+  两端各有 **56MB 总预算**，跨仓按 LRU 淘汰（单仓超限只降级它自己）。
   `DSH_KILN_TIMELINE_CACHE=off` 一键关掉宿主那份，`?fresh=1` / 「刷新」清掉两份。
+- **行的形状（0.13.0）**：`[issueId, action, commit, date, title, domain, tags]`，标签存连接串、
+  `short` 由 commit 现切、重复的 issueId/action/domain 走驻留池。宿主存的数组就是发出去的字节，
+  客户端 parse 出来就是要存的行——两端都不再“建对象”。线上带 `?format=2`；
+  不带（旧客户端）由宿主回 400 并提示刷新，避免拿到假的空列表。
 - **虚拟列表（0.9.0）**：时间线、issue 列表、搜索结果都只挂“可视区 ± 600px”的行，
   上下用 `.dkf-vspacer` 撑出内容总高；行高先按 30px 估、渲染后按真实高度修正
   （键 = 提交 sha / issue id，流在顶部插行也不会串）。内容总高不超过视口 + 2×overscan 时
@@ -97,7 +103,7 @@ kiln 的缓存省的是“git 进程”，插件省的是“kiln 进程”。两
 | `lib/flow.js` | 宿主半的数据层：调 kiln CLI（graph / path 单条 / list --search / action list） |
 | `lib/timeline.js` | 宿主半的时间线：spawn `kiln action log --jsonl`、按行切、失败文案 |
 | `lib/timelineHandler.js` | 宿主半的时间线路由体：命中内存重发 / 构建 / bypass 三条路 |
-| `lib/rowsCache.js` | 宿主半的动作流缓存：HEAD / 配置 / 二进制失效，5 万行 / 20MB 上限 |
+| `lib/rowsCache.js` | 宿主半的动作流缓存：HEAD / 配置 / 二进制失效，12 万行 / 32MB 单仓 + 56MB 总预算 |
 | `lib/snapshot.js` | 宿主半的图缓存：HEAD / 配置 / 二进制三元组失效，同仓并发合并 |
 | `lib/git.js` | 宿主半的 git 探测：直读 HEAD、配置/二进制令牌 |
 | `lib/client.js` | 浏览器半：`conversation.view` 插槽条目，名字 `kiln`；折叠与渲染 |
@@ -105,6 +111,7 @@ kiln 的缓存省的是“git 进程”，插件省的是“kiln 进程”。两
 | `test/render.mjs` | 渲染冒烟（极简 React 替身，不碰浏览器） |
 | `test/probe-perf.mjs` | 性能探针：graph 冷/热、详情单条、并发合并、旧法逐条取数对照 |
 | `test/probe-memory.mjs` | 内存探针：动作流的传输/解析/折叠/常驻堆，含 10 万行实测 |
+| `test/probe-format.mjs` | 形状探针：7 槽数组 / 旧对象 / 原始行 / Buffer 的 10 万行堆与重发对照 |
 | `cordis.patch.yml` | 宿主侧插入声明（`insert: id: dsh-kiln`） |
 | `package.json` | `dsh.bundle.patch` + `dsh.client` 平台与依赖声明 |
 
@@ -143,7 +150,8 @@ node plugin/test/probe-perf.mjs . C:\Users\jacki\kiln
 - **版本下限**：取数 v0.2.0+、搜索 v0.2.1+、动作流与词表 v0.3.0+。旧版对多余 id 会静默只回
   第一条、搜索行没有 `rank`、没有 `action` 子命令——插件直接报对应版本，不退回逐条或自己补排序。
 - **规模上界是整条动作流**：issue 列表与时间线都要读完全部动作（O(动作数)）。1k 动作内一次
-  42ms 热读；100k 动作（约 29MB）需要上游分页/索引，见 `kiln-many-issues`。
+  42ms 热读；100k 动作约 24MB 线上，默认预算（12 万行 / 32MB）正好覆盖，上游明确不做分页
+  （`issue-list-scaling`：多了靠筛/搜/解释命中），见 `kiln-many-issues`。
   0.10.0 起 HEAD 未变时重进标签 0 子进程、0 字节（双端命中）；0.12.0 起 HEAD 前进且前缀安全时
   只读新前缀，但仍要先跑两次 git 探测（`merge-base` + 区间 `git log`，约 40–60ms）。
 - **增量的残余风险**：判定用的是“旧 HEAD 是新 HEAD 的祖先 + 区间提交日期都晚于缓存首行”。
@@ -157,8 +165,9 @@ node plugin/test/probe-perf.mjs . C:\Users\jacki\kiln
 - **缓存语义分两层**：图 / 详情 / 搜索是“本次挂载内一致”，刷新或重开页面即失效；
   动作流是“跟 HEAD 一致”，切页、换会话都复用它，新提交只在 HEAD 前进后重新读。
   想让两层都作废，按「刷新」或用 `?fresh=1`。
-- **动作流缓存占内存**：客户端与宿主各留一份（5 万行约 39MB/份）。超过 5 万行 / 20MB 两端都不存，
-  退回每次流式；浏览器堆没有可靠的测量 API，页头显示的是自报字节数，不是实测堆。
+- **动作流缓存占内存**：客户端与宿主各留一份（10 万行约 35MB/份，7 槽数组实测 356B/行）。
+  单仓超 12 万行 / 32MB 不存，两端各 56MB 总预算按 LRU 淘汰（单仓超限只降级它自己）；
+  浏览器堆没有可靠的测量 API，页头显示的是自报字节数，不是实测堆。
 - 关系词表按 kiln 0.2.0 的内置词表硬编码在 `client.js` 的 `GROUPS` 里；等 kiln 支持
   `.kilnconfig.jsonc` 配置 `relations` 后改成读配置。
 - Flow 布局是初稿，Triage / Genealogy 尚未实现。

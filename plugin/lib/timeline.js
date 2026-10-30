@@ -40,6 +40,66 @@ export function createLineSplitter() {
 }
 
 /**
+ * 动作行的形状：**7 槽数组**，宿主缓存、线上 NDJSON、客户端缓存、折叠输入全同形。
+ *
+ * 为什么不是对象（测量见 `docs/issues/kiln-cache-budget.md`）：
+ * - 线上省掉键名与 `short` 派生字段，10 万行 32MB → 23.6MB（−26%）；
+ * - 宿主存的数组就是发出去的字节，客户端 parse 出来的就是要存的行，两端都不再“建对象”；
+ * - 代价：数组比同槽对象多约 24B/行；纯省内存该用对象（B2）或列式（F）。
+ *
+ * 形状一变，两端所有字段访问都要跟——所以下标只从这里取，不写字面量。
+ */
+export const ROW = Object.freeze({
+  ISSUE: 0,
+  ACTION: 1,
+  COMMIT: 2,
+  DATE: 3,
+  TITLE: 4,
+  DOMAIN: 5,
+  TAGS: 6,
+})
+export const ROW_WIDTH = 7
+/** 标签的连接符：kiln 的标签是 kebab 词，不含控制字符。 */
+export const TAGS_SEPARATOR = '\u0001'
+
+/** 行的短 sha：只对可见行调用，不存（省 7 字符 × 每行）。 */
+export function rowShort(row) {
+  return String(row?.[ROW.COMMIT] ?? '').slice(0, 7)
+}
+
+/** 行的标签：驱动里存连接串，读出时才切。 */
+export function rowTags(row) {
+  const tags = row?.[ROW.TAGS]
+  return typeof tags === 'string' && tags !== '' ? tags.split(TAGS_SEPARATOR) : []
+}
+
+/**
+ * 驻留池：issueId / action / domain 在整条流里高度重复，共享成同一批字符串。
+ * 实测 10 万行省约 108B/行；池的键数 = 唯一值数（issue 数 + 动作名数 + 领域数），有界。
+ */
+export function createRowInterner(sharedPool) {
+  const pool = sharedPool instanceof Map ? sharedPool : new Map()
+  const intern = (value) => {
+    if (typeof value !== 'string' || value === '') return value ?? ''
+    const hit = pool.get(value)
+    if (hit !== undefined) return hit
+    pool.set(value, value)
+    return value
+  }
+  return {
+    pool,
+    /** 原地把三个重复字段换成池里的那一份。 */
+    intern(row) {
+      if (!Array.isArray(row)) return row
+      row[ROW.ISSUE] = intern(row[ROW.ISSUE])
+      row[ROW.ACTION] = intern(row[ROW.ACTION])
+      row[ROW.DOMAIN] = intern(row[ROW.DOMAIN])
+      return row
+    },
+  }
+}
+
+/**
  * `action log --jsonl` 的一条记录 → 视图的行。
  * 缺 `issue` / `action` / `commit` 的算坏行（返回 null）；其余字段缺失就是空，不补默认值。
  */
@@ -49,19 +109,20 @@ export function mapActionRecord(record) {
   const action = typeof record.action === 'string' ? record.action : ''
   const commit = typeof record.commit === 'string' ? record.commit : ''
   if (issueId === '' || action === '' || commit === '') return null
-  return {
+  const tags = Array.isArray(record.tags) ? record.tags.map((tag) => String(tag)) : []
+  return [
     issueId,
     action,
-    /** 完整 sha：行 key、搜索跳转与「跳回提交」都用它。 */
-    id: commit,
-    short: commit.slice(0, 7),
-    date: typeof record.date === 'string' ? record.date : '',
-    title: truncateTitle(record.title),
+    /** 完整 sha：行 key、搜索跳转与「跳回提交」都用它；短 sha 由 `rowShort` 现切。 */
+    commit,
+    typeof record.date === 'string' ? record.date : '',
+    truncateTitle(record.title),
     /** 动作级分类（这一条提交声明的），不是 issue 级；筛选目前仍按 issue 的领域。 */
-    domain: typeof record.domain === 'string' ? record.domain : '',
-    tags: Array.isArray(record.tags) ? record.tags.map((tag) => String(tag)) : [],
-  }
+    typeof record.domain === 'string' ? record.domain : '',
+    tags.length === 0 ? null : tags.join(TAGS_SEPARATOR),
+  ]
 }
+
 
 /** 把退出码 + stderr 折成一句人话；正常（0）返回 null。 */
 export function actionLogProblem(code, stderr) {

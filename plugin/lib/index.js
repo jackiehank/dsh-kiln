@@ -229,6 +229,8 @@ export function apply(ctx) {
             fresh: url.searchParams.get('fresh') === '1',
             // 客户端已经持有的 HEAD：相同就回 unchanged，一个字节都不发（阶段 2）
             head: url.searchParams.get('head') ?? '',
+            // 行形状的版本号：2 = 7 槽数组。旧客户端不带 → 400 让它刷新，不给假空态。
+            format: Number.parseInt(url.searchParams.get('format') ?? '', 10),
           })
         },
       }),

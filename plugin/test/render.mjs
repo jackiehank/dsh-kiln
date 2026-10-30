@@ -153,26 +153,27 @@ const fixtureB = searchFixture('b', [
 const fixtureEmpty = searchFixture('zzz', [])
 
 /**
- * 时间线的宿主流形状（`/kiln/timeline` 的 action 事件落成的行）。
+ * 时间线的宿主流形状（`/kiln/timeline` 的 `format=2` 行：7 槽数组）。
  * 与线上一样按 author-date 倒序、同刻按 issue id，动作级 domain/tags 由流带下来。
  */
+const ROW = { ISSUE: 0, ACTION: 1, COMMIT: 2, DATE: 3, TITLE: 4, DOMAIN: 5, TAGS: 6 }
+const rowOf = (issue, action, commit, date, title, domain = '', tags = null) => [
+  issue,
+  action,
+  commit,
+  date,
+  title,
+  domain,
+  tags,
+]
 const timelineFixture = {
   rows: payload.issues
     .flatMap((issue) =>
-      issue.actions.map((item) => ({
-        issueId: issue.id,
-        action: item.action,
-        id: item.id,
-        short: item.short,
-        date: item.date,
-        title: item.title,
-        domain: issue.domain,
-        tags: [],
-      })),
+      issue.actions.map((item) => rowOf(issue.id, item.action, item.id, item.date, item.title, issue.domain, null)),
     )
     .sort((left, right) => {
-      if (left.date !== right.date) return left.date < right.date ? 1 : -1
-      if (left.issueId !== right.issueId) return left.issueId < right.issueId ? -1 : 1
+      if (left[ROW.DATE] !== right[ROW.DATE]) return left[ROW.DATE] < right[ROW.DATE] ? 1 : -1
+      if (left[ROW.ISSUE] !== right[ROW.ISSUE]) return left[ROW.ISSUE] < right[ROW.ISSUE] ? -1 : 1
       return 0
     }),
   phase: 'done',
@@ -465,7 +466,7 @@ check('搜索：没有命中时给明确空态', () => {
 
 check('筛选：本仓没有可筛维度时不给空壳按钮', () => {
   // 只用 b、c 两条（都进行中、同一领域、没有标签）：领域与状态各只有一个值，没有可筛的
-  const rows = timelineFixture.rows.filter((row) => row.issueId !== 'a')
+  const rows = timelineFixture.rows.filter((row) => row[ROW.ISSUE] !== 'a')
   const view = render({
     tabId: 'issue',
     timeline: { rows, phase: 'done', error: null, ms: 4, count: rows.length },
@@ -802,16 +803,7 @@ check('timeline 流失败：给出可读错误，其余页面照常', () => {
 
 check('timeline 里流中的 issue 也能聚焦（不再有「快照外」）', () => {
   const rows = timelineFixture.rows.concat([
-    {
-      issueId: 'zzz',
-      action: 'apply',
-      id: 'c'.repeat(40),
-      short: 'ccccccc',
-      date: '2026-10-06T00:00:00+08:00',
-      title: '快照外的动作',
-      domain: 'integration',
-      tags: [],
-    },
+    rowOf('zzz', 'apply', 'c'.repeat(40), '2026-10-06T00:00:00+08:00', '快照外的动作', 'integration'),
   ])
   const view = render({
     timeline: { rows, phase: 'done', error: null, ms: 4, count: rows.length },
@@ -826,27 +818,9 @@ check('timeline 里流中的 issue 也能聚焦（不再有「快照外」）', 
 
 /** 时间线 fixture + 一条只在流里出现的 issue（zzz）：最近 apply、最早 ask。 */
 const outsideIssueRows = [
-  {
-    issueId: 'zzz',
-    action: 'apply',
-    id: 'd'.repeat(40),
-    short: 'ddddddd',
-    date: '2026-10-06T00:00:00+08:00',
-    title: 'zzz 收尾',
-    domain: 'integration',
-    tags: [],
-  },
+  rowOf('zzz', 'apply', 'd'.repeat(40), '2026-10-06T00:00:00+08:00', 'zzz 收尾', 'integration'),
   ...timelineFixture.rows,
-  {
-    issueId: 'zzz',
-    action: 'ask',
-    id: 'e'.repeat(40),
-    short: 'eeeeeee',
-    date: '2026-09-01T00:00:00+08:00',
-    title: 'zzz 开题',
-    domain: 'integration',
-    tags: [],
-  },
+  rowOf('zzz', 'ask', 'e'.repeat(40), '2026-09-01T00:00:00+08:00', 'zzz 开题', 'integration'),
 ]
 
 check('issue 页：流里多出来的 issue 也进列表，色条来自流、done 认终点词表', () => {
@@ -912,16 +886,16 @@ check('timeline：流没读完时，动作筛选同样不给假空态', () => {
 function bulkTimeline(n) {
   const rows = []
   for (let index = 0; index < n; index += 1) {
-    rows.push({
-      issueId: `bulk-${String(index).padStart(3, '0')}`,
-      action: index % 2 === 0 ? 'ask' : 'apply',
-      id: String(index).padStart(40, '0'),
-      short: String(index).padStart(7, '0'),
-      date: new Date(Date.parse('2026-10-30T00:00:00+08:00') - index * 60000).toISOString(),
-      title: `批量动作 ${index}`,
-      domain: 'integration',
-      tags: [],
-    })
+    rows.push(
+      rowOf(
+        `bulk-${String(index).padStart(3, '0')}`,
+        index % 2 === 0 ? 'ask' : 'apply',
+        String(index).padStart(40, '0'),
+        new Date(Date.parse('2026-10-30T00:00:00+08:00') - index * 60000).toISOString(),
+        `批量动作 ${index}`,
+        'integration',
+      ),
+    )
   }
   return { rows, phase: 'done', error: null, ms: 1, count: n }
 }

@@ -16,6 +16,8 @@
  */
 import { once } from 'node:events'
 
+import { ROW, createRowInterner } from './timeline.js'
+
 export function createTimelineHandler(deps) {
   const {
     resolveKiln,
@@ -31,6 +33,22 @@ export function createTimelineHandler(deps) {
     res.statusCode = 200
     res.setHeader('content-type', 'application/x-ndjson; charset=utf-8')
     res.setHeader('cache-control', 'no-store')
+
+    // 行的形状变了（对象 → 7 槽数组）。旧客户端解析新行会静默得到空列表，
+    // 所以按显式格式号拒绝：宁可让旧页面报“刷新”，也不给它假空态。
+    if (options.format !== 2) {
+      res.statusCode = 400
+      res.setHeader('content-type', 'application/json; charset=utf-8')
+      res.write(
+        JSON.stringify({
+          ok: false,
+          reason: 'format-required',
+          message: '时间线格式已升级（插件 0.13.0 起行是数组）。刷新页面后再试。',
+        }),
+      )
+      res.end()
+      return
+    }
 
     const startedAt = Date.now()
     let closed = false
@@ -52,10 +70,10 @@ export function createTimelineHandler(deps) {
       if (res.writableEnded !== true) res.end()
     }
     const waitDrain = () => Promise.race([once(res, 'drain'), once(res, 'close')])
-    /** 逐行写；返回 false 表示连接没了，别再写了。 */
+    /** 逐行写；返回 false 表示连接没了，别再写了。行本身就是要发的形状。 */
     const writeRow = async (row) => {
       if (closed || res.writableEnded === true) return false
-      if (write({ kind: 'action', ...row }) === false) await waitDrain()
+      if (res.write(`${JSON.stringify(row)}\n`) === false) await waitDrain()
       return !closed && res.writableEnded !== true
     }
     const replay = async (rows) => {
@@ -136,6 +154,8 @@ export function createTimelineHandler(deps) {
       }
       // 客户端手上正好是缓存里的那份 HEAD：只需要发新增行
       const deltaForClient = clientHead !== '' && clientHead === entry.head
+      // 新行也过同一张驻留池：delta 只发新增，但内存里要和旧行共享同一批字符串
+      const interner = createRowInterner(entry.pool)
       const buffered = []
       let settled = false
       let failure = null
@@ -144,9 +164,10 @@ export function createTimelineHandler(deps) {
       const release = killOnClose(child)
       const finished = await new Promise((resolve) => {
         consumeActionLog(child, {
-          onRecord: (row) => {
+          onRecord: (record) => {
             if (closed || settled) return
-            if (row.id === plan.boundary) {
+            const row = interner.intern(record)
+            if (row[ROW.COMMIT] === plan.boundary) {
               // 撞到缓存的首行：后面的全都已经在了
               settled = true
               child.kill()
@@ -181,7 +202,7 @@ export function createTimelineHandler(deps) {
 
       const rows = buffered.concat(entry.rows)
       let bytes = entry.bytes
-      for (const row of buffered) bytes += Buffer.byteLength(JSON.stringify({ kind: 'action', ...row })) + 1
+      for (const row of buffered) bytes += Buffer.byteLength(JSON.stringify(row)) + 1
       if (rows.length > cache.limits().rows || bytes > cache.limits().bytes) {
         // 拼起来超限：不存了，回退全量（全量路径会把它记成 oversize）
         return false
@@ -192,6 +213,7 @@ export function createTimelineHandler(deps) {
         binToken: decided.binToken,
         rows,
         bytes,
+        pool: interner.pool,
       })
 
       const payload = deltaForClient ? buffered : rows
@@ -205,6 +227,7 @@ export function createTimelineHandler(deps) {
     async function runFull(decided) {
       const limits = cache.limits()
       const collected = decided.mode === 'build' ? [] : null
+      const interner = createRowInterner()
       let bytes = 0
       let overflowed = false
       let settled = false
@@ -213,9 +236,10 @@ export function createTimelineHandler(deps) {
       const release = killOnClose(child)
       await new Promise((resolve) => {
         consumeActionLog(child, {
-          onRecord: (row) => {
+          onRecord: (record) => {
             if (closed || settled) return resolve()
-            const text = `${JSON.stringify({ kind: 'action', ...row })}\n`
+            const row = interner.intern(record)
+            const text = `${JSON.stringify(row)}\n`
             if (collected !== null && overflowed === false) {
               collected.push(row)
               bytes += text.length
@@ -250,6 +274,7 @@ export function createTimelineHandler(deps) {
                 binToken: decided.binToken,
                 rows: collected,
                 bytes,
+                pool: interner.pool,
               })
               cacheState = stored.stored === true ? 'stored' : stored.reason
             } else if (overflowed === true) {

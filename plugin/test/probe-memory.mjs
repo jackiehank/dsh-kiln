@@ -96,8 +96,8 @@ const lines = text.split(/\r?\n/).filter((line) => line.trim() !== '')
 
 gc()
 const base = heap()
-const parsed = time(() => lines.map((line) => JSON.parse(line)))
-const rows = parsed.value.map((record) => mapActionRecord(record)).filter((row) => row !== null)
+const parsed = time(() => lines.map((line) => mapActionRecord(JSON.parse(line))).filter((row) => row !== null))
+const rows = parsed.value
 gc()
 const rowsHeap = heap() - base
 
@@ -116,16 +116,15 @@ function cloneRows(source, times) {
   const out = []
   for (let copy = 0; copy < times; copy += 1) {
     for (const row of source) {
-      out.push({
-        issueId: `${row.issueId}-${copy}`,
-        action: row.action,
-        id: row.id.slice(0, 32) + copy.toString(16).padStart(8, '0'),
-        short: row.short,
-        date: row.date,
-        title: `${copy}:${row.title}`,
-        domain: row.domain,
-        tags: row.tags.slice(),
-      })
+      out.push([
+        `${row[0]}-${copy}`,
+        row[1],
+        row[2].slice(0, 32) + copy.toString(16).padStart(8, '0'),
+        row[3],
+        `${copy}:${row[4]}`,
+        row[5],
+        row[6],
+      ])
     }
   }
   return out
