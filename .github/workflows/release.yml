@@ -20,11 +20,11 @@ jobs:
       - name: 解析要发布的 tag
         run: echo "TAG=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_ENV"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 

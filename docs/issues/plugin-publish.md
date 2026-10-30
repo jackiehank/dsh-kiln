@@ -364,6 +364,32 @@ git tag v0.14.1; git push origin v0.14.1    # 再打 tag，事件才会有人接
 
 **教训**：先推代码、后打 tag；tag 是"触发器"，不是"存档"——触发器所在的那一版代码里必须有 workflow。
 
+## 追加：run 起来了，但 Release 还是没有（2026-10-30）
+
+### 先修掉的：Node 20 弃用
+
+日志提示 `actions/checkout@v4` 与 `actions/setup-node@v4` 被强制跑在 Node 24。两个 action 都已有
+`v7` 移动 tag（`GET /repos/actions/checkout/tags` 与 `…/setup-node/tags` 核对过），workflow 里
+升到 `@v7`。这是**警告不是失败**，不影响功能，但会一直刷。
+
+### 还没解释的：`/releases` 仍是空
+
+公开 API 的 `GET /repos/jackiehank/dsh-kiln/releases` 返回 `[]`，说明那次 run 没有走到
+`gh release create`。最可能的原因是按仓库默认权限被降级：
+
+- 2023 年后新建的个人仓库，Actions 默认令牌是 **Read repository contents and packages permissions**；
+- workflow 里写的 `permissions: contents: write` 只是**请求**，仓库上限是只读时会被降级；
+- 于是最后一步 `gh release create` 拿到只读令牌 → 403，Release 建不出来。
+
+自查/修法（二选一）：
+
+1. Settings → Actions → General → Workflow permissions → 选 **Read and write permissions** → 保存，再跑一次；
+2. 或者把 run 里失败那一步的日志贴出来，按真实的错误码改。
+
+`GET /actions/workflows` 在**未登录**时返回 `total_count: 0`（与 run 实际存在矛盾），说明这个
+端点在匿名访问下不可信——以后查 run 状态要看 Actions 页面或带 token 的 API。
+
+
 
 
 
