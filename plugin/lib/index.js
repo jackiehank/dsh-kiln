@@ -227,6 +227,8 @@ export function apply(ctx) {
             // limit 的缩水结果不能顶替全量缓存：带 limit 的请求永远直读
             noCache: Number.isInteger(limit) && limit > 0,
             fresh: url.searchParams.get('fresh') === '1',
+            // 客户端已经持有的 HEAD：相同就回 unchanged，一个字节都不发（阶段 2）
+            head: url.searchParams.get('head') ?? '',
           })
         },
       }),

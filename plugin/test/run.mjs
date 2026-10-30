@@ -1187,6 +1187,37 @@ await check('动作流缓存：fresh=1 忽略缓存重建，并把新数据写�
   assert.equal(rows[0].id, SHA_B)
 })
 
+await check('动作流缓存：客户端带同一个 HEAD → unchanged，空 body 零子进程', async () => {
+  const harness = timelineHarness()
+  await respond(harness)
+  const again = await respond(harness, { args: { head: 'h1' } })
+  assert.equal(again.state.headers['x-kiln-mode'], 'unchanged')
+  assert.equal(again.spawned, false)
+  assert.equal(harness.state.spawns, 1, 'unchanged 不该再起子进程')
+  const done = again.events().find((event) => event.kind === 'done')
+  assert.equal(done.cache, 'unchanged')
+  assert.equal(again.events().filter((event) => event.kind === 'action').length, 0, 'unchanged 不发行')
+})
+
+await check('动作流缓存：客户端 HEAD 过期 → 走全量重发', async () => {
+  const harness = timelineHarness()
+  await respond(harness)
+  harness.state.head = 'h2'
+  const stale = await respond(harness, { args: { head: 'h1' }, payload: `${JSON.stringify(CACHE_ROWS[0])}\n` })
+  assert.equal(stale.state.headers['x-kiln-mode'], 'build')
+  assert.equal(stale.spawned, true)
+  assert.equal(stale.events().filter((event) => event.kind === 'action').length, 1)
+})
+
+await check('动作流缓存：配置换了就算 HEAD 相同也要重发（客户端那份语义可能过时）', async () => {
+  const harness = timelineHarness()
+  await respond(harness)
+  harness.state.config = 'c2'
+  const rebuilt = await respond(harness, { args: { head: 'h1' } })
+  assert.equal(rebuilt.state.headers['x-kiln-mode'], 'build')
+  assert.equal(rebuilt.spawned, true)
+})
+
 await check('动作流缓存：客户端断开 → kill 子进程，后续行不再写', async () => {
   const harness = timelineHarness()
   const fake = makeFakeRes()
@@ -1312,6 +1343,28 @@ await check('词表缓存键：仓库 / 配置 / 二进制任一变化都换键'
   assert.equal(a, actionsCacheKey('/repo-a', ''), '同样的输入给同样的键')
   assert.notEqual(a, b)
   assert.notEqual(a, c)
+})
+
+await check('动作流客户端缓存：按仓库记 HEAD，超限/换仓/刷新各自处理', () => {
+  const { timelineCache, rememberTimeline, clearRepoCaches } = clientInternals()
+  timelineCache.clear()
+  const rows = [{ id: 'sha1' }]
+
+  assert.equal(rememberTimeline('/a', 'h1', rows, 100), true)
+  assert.equal(timelineCache.get('/a').head, 'h1')
+  assert.equal(rememberTimeline('/a', 'h2', rows, 100), true, '同一仓覆盖为新的 HEAD')
+  assert.equal(timelineCache.get('/a').head, 'h2')
+  assert.equal(rememberTimeline('/b', 'h1', rows, 100), true)
+  assert.equal(rememberTimeline('/c', 'h1', rows, 100), true)
+  assert.equal(timelineCache.has('/a'), false, '只留最近两个仓')
+
+  assert.equal(rememberTimeline('/d', '', rows, 100), false, '没有 HEAD 不记')
+  assert.equal(rememberTimeline('/d', 'h1', rows, 20 * 1024 * 1024 + 1), false, '超过字节上限不记')
+  assert.equal(rememberTimeline('/d', 'h1', new Array(50001).fill(rows[0]), 100), false, '超过行数上限不记')
+
+  timelineCache.set('/x', { head: 'h1', rows, bytes: 1 })
+  clearRepoCaches('/x')
+  assert.equal(timelineCache.has('/x'), false, '刷新要连动作流缓存一起清')
 })
 
 await check('搜索结果键盘：在结果里上下移动，到两端回绕', () => {

@@ -1,8 +1,9 @@
 /**
  * `/kiln/timeline` 的实现体：命中就内存重发，没命中就流式读并顺手把行存起来。
  *
- * 三条路（`x-kiln-mode` 头会写出来，排障时一眼能看出走的哪条）：
- * - `hit`：HEAD/配置/二进制都没变，零子进程，把缓存的行按同样的 NDJSON 发一遍；
+ * 四条路（`x-kiln-mode` 头会写出来，排障时一眼能看出走的哪条）：
+ * - `unchanged`：客户端带 `?head=` 且与当前 HEAD 相同 —— 空 body，一个字节都不发（阶段 2）；
+ * - `hit`：宿主手里有这份 HEAD 的行，零子进程，把行按同样的 NDJSON 重发；
  * - `build`：要读一遍，读完整了才写缓存（半截数据会让折叠算错 done）；
  * - `bypass`：关掉了 / 读不到 HEAD / 仓库太大，行为与没有缓存时完全一致。
  *
@@ -53,6 +54,26 @@ export function createTimelineHandler(deps) {
     const decision = await cache.decide(cwd, bin, { enabled: cacheEnabled, fresh: options.fresh === true })
     res.setHeader('x-kiln-mode', decision.mode)
     if (typeof decision.head === 'string' && decision.head !== '') res.setHeader('x-kiln-head', decision.head)
+
+    /**
+     * 阶段 2：客户端已经持有这个 HEAD 的行，就一个字节都不用发。
+     *
+     * 只在“HEAD 相同且没有换解析口径”时成立：配置/二进制一变，客户端那份的语义可能不同，
+     * 宁可整份重发。`fresh`（刷新按钮）也走全量。
+     */
+    const clientHead = typeof options.head === 'string' ? options.head : ''
+    const reusable =
+      clientHead !== '' &&
+      decision.head === clientHead &&
+      decision.reason !== 'fresh' &&
+      decision.reason !== 'config-changed' &&
+      decision.reason !== 'binary-changed'
+    if (reusable) {
+      res.setHeader('x-kiln-mode', 'unchanged')
+      write({ kind: 'done', exit: 0, count: 0, ms: Date.now() - startedAt, cache: 'unchanged' })
+      if (res.writableEnded !== true) res.end()
+      return
+    }
 
     if (decision.mode === 'hit') {
       const rows = cache.rows(cwd) ?? []

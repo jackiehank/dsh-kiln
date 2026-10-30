@@ -61,6 +61,31 @@ window.__ModuleLoader__.load({
     const detailInflight = new Map()
     const searchCache = new Map()
     const CACHE_LIMIT = 20
+    /**
+     * 动作流行缓存（0.11.0）：按仓库记住「这份行对应哪个 HEAD」。
+     *
+     * 切页 / 换会话时先拿它渲染，再带 `?head=` 去问宿主：HEAD 没变就一个字节都不传
+     * （宿主回 `x-kiln-mode: unchanged`）。上限与宿主一致——5 万行 / 20MB，
+     * 超了就不存，退回每次流式（大仓在浏览器里再留一份不划算）。
+     */
+    const timelineCache = new Map()
+    const TIMELINE_CACHE_ROWS = 50_000
+    const TIMELINE_CACHE_BYTES = 20 * 1024 * 1024
+    const TIMELINE_CACHE_REPOS = 2
+
+    /**
+     * 记一份动作流（只在流完整读完时调用）。
+     * 返回是否真的留下——超限时静默不留，页面照常工作。
+     */
+    function rememberTimeline(cwd, head, rows, bytes) {
+      timelineCache.delete(cwd)
+      if (typeof head !== 'string' || head === '') return false
+      if (!Array.isArray(rows) || rows.length > TIMELINE_CACHE_ROWS) return false
+      if (!Number.isFinite(bytes) || bytes > TIMELINE_CACHE_BYTES) return false
+      timelineCache.set(cwd, { head, rows, bytes })
+      while (timelineCache.size > TIMELINE_CACHE_REPOS) timelineCache.delete(timelineCache.keys().next().value)
+      return true
+    }
     /** hover 预取的延迟：太短会在扫过列表时把每一行都取一遍。 */
     const PREFETCH_MS = 120
 
@@ -84,11 +109,12 @@ window.__ModuleLoader__.load({
       while (map.size > limit) map.delete(map.keys().next().value)
     }
 
-    /** 刷新时清掉一个仓库的会话缓存（词表也在内：改了 terminal 词表刷新就该立刻生效）。 */
+    /** 刷新时清掉一个仓库的会话缓存（词表与动作流也在内：刷新就该拿到真数据）。 */
     function clearRepoCaches(cwd) {
       graphCache.delete(cwd)
       graphInflight.delete(cwd)
       actionsCache.delete(cwd)
+      timelineCache.delete(cwd)
       const prefix = `${cwd}\u0000`
       for (const key of [...detailCache.keys()]) if (key.startsWith(prefix)) detailCache.delete(key)
       for (const key of [...detailInflight.keys()]) if (key.startsWith(prefix)) detailInflight.delete(key)
@@ -2432,16 +2458,28 @@ window.__ModuleLoader__.load({
           setTimeline(EMPTY_TIMELINE)
           return undefined
         }
+        // 先拿上一次的行把页面画出来（切页不再白屏），再带 head 去问一句变没变
+        const cached = timelineCache.get(cwd)
+        if (cached !== undefined) {
+          setTimeline({ rows: cached.rows, phase: 'done', error: null, ms: 0, count: cached.rows.length })
+        }
         const controller = new AbortController()
         const startedAt = Date.now()
         const splitter = createLineSplitter()
         const decoder = new TextDecoder()
         const rows = []
+        let bytes = 0
+        let head = cached?.head ?? ''
         let error = null
         let settled = false
         let sawDone = false
         let timer = null
+        /**
+         * 有缓存时不把半截流画到屏幕上——那会把整张列表闪成几条。
+         * 缓存先顶着，HEAD 变了就等流读完一次性换掉（最多多等一次传输的时间）。
+         */
         const publish = (phase) => {
+          if (cached !== undefined && phase !== 'done') return
           setTimeline({ rows: rows.slice(), phase, error, ms: Date.now() - startedAt, count: rows.length })
         }
         const schedule = () => {
@@ -2481,19 +2519,55 @@ window.__ModuleLoader__.load({
           }
           if (event?.kind === 'done') sawDone = true
         }
+        const fail = (failure) => {
+          settled = true
+          error = String(failure?.message ?? failure)
+          if (cached !== undefined) {
+            // 缓存还能看，就把错误挂在它上面，而不是把列表清空
+            setTimeline({ rows: cached.rows, phase: 'error', error, ms: Date.now() - startedAt, count: cached.rows.length })
+            return
+          }
+          publish('error')
+        }
         const run = async () => {
           try {
-            const response = await fetch(`${TIMELINE_URL}?cwd=${encodeURIComponent(cwd)}`, {
+            const query = `${TIMELINE_URL}?cwd=${encodeURIComponent(cwd)}${cached !== undefined ? `&head=${encodeURIComponent(cached.head)}` : ''}`
+            const response = await fetch(query, {
               credentials: 'same-origin',
               signal: controller.signal,
               cache: 'no-store',
             })
             if (!response.ok) throw new Error(`HTTP ${response.status}`)
+            head = response.headers.get('x-kiln-head') ?? head
+            if (response.headers.get('x-kiln-mode') === 'unchanged') {
+              // 客户端这份就是最新的：一个字节都不用读，渲染保持缓存，只把耗时刷新一下
+              settled = true
+              if (timer !== null) {
+                clearTimeout(timer)
+                timer = null
+              }
+              try {
+                await response.body?.cancel?.()
+              } catch {
+                // 空 body 取不取消都不影响
+              }
+              if (cached !== undefined) {
+                setTimeline({
+                  rows: cached.rows,
+                  phase: 'done',
+                  error: null,
+                  ms: Date.now() - startedAt,
+                  count: cached.rows.length,
+                })
+              }
+              return
+            }
             const reader = response.body?.getReader?.()
             if (reader === undefined || reader === null) throw new Error('当前环境不支持流式读取')
             for (;;) {
               const { done, value } = await reader.read()
               if (done) break
+              bytes += value?.byteLength ?? 0
               for (const line of splitter.push(decoder.decode(value, { stream: true }))) take(line)
             }
             for (const line of splitter.flush()) take(line)
@@ -2503,12 +2577,27 @@ window.__ModuleLoader__.load({
               timer = null
             }
             if (!sawDone && error === null) error = '时间线流被提前中断（没有收到收口事件）。'
-            publish('done')
+            if (error === null && sawDone) {
+              rememberTimeline(cwd, head, rows.slice(), bytes)
+              publish('done')
+            } else {
+              timelineCache.delete(cwd)
+              if (cached !== undefined) {
+                // 新流没读成：别拿半截覆盖缓存，挂着错误继续显示旧数据
+                setTimeline({
+                  rows: cached.rows,
+                  phase: 'error',
+                  error,
+                  ms: Date.now() - startedAt,
+                  count: cached.rows.length,
+                })
+              } else {
+                publish('done')
+              }
+            }
           } catch (failure) {
             if (controller.signal.aborted) return
-            settled = true
-            error = String(failure?.message ?? failure)
-            publish('error')
+            fail(failure)
           }
         }
         publish('streaming')
@@ -3391,6 +3480,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, actionsCache, nextSearchIndex, jumpPlan, rowKeyOf, buildOffsets, virtualWindow, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, actionsCache, timelineCache, rememberTimeline, nextSearchIndex, jumpPlan, rowKeyOf, buildOffsets, virtualWindow, css: CSS } } : {}) }
   },
 })
