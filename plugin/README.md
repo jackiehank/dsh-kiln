@@ -66,10 +66,11 @@ HEAD 用文件直读，命中时宿主只花 1–2ms。）
   选中行；搜索跳转同样按索引 + 高度表滚过去，目标还没进流就等流。没有「加载更多」按钮，
   也没有 footer。切页 / 换焦点 / 改筛选 / 改查询 / 刷新都回到第一屏。
   已知：find-in-page / aria 只覆盖已挂行；极端快速滚动时实测高度修正可能带来轻微位移。
-- 视图语义：三页共享一个焦点 issue。issue 页无焦点时一行一个 issue；有焦点时读出结构——
-  part-of 作母/子分组与面包屑，`blocks` → `supersedes` → `caused-by` 按强弱排，弱关联（relates-to）
-  默认展开，行内带方向与关系名。关系页只有图（全局 / 聚焦），hover 节点弹出该 issue 的 ask 标题。
-  焦点切换只在内存里，不落盘。
+- 视图语义：三页共享一个焦点 issue。issue 页无焦点时一行一个 issue；有焦点时**按方向分桶**读结构——
+  `N 个父 issue` / `N 个子 issue`、`阻塞了 N 个 issue` / `被 N 个 issue 阻塞`、`取代了…` / `被…取代`、
+  `由 N 个 issue 引发` / `引发了 N 个 issue`、`N 个弱关联（无方向）`；每组一句话带计数，行内不再有
+  箭头和关系名（`kiln-relation-direction`）。关系页只有图（全局 / 聚焦），hover 节点弹出该 issue 的
+  ask 标题。焦点切换只在内存里，不落盘。页头随侧栏宽度分档收缩（`kiln-head-width`）。
 - 筛选（见 `docs/issues/kiln-issue-filter.md`、`kiln-timeline-filter.md`）：两页各筛自己的行。
   issue 页按 **领域 / 状态**，时间线页按 **动作 / 领域**；同组多选是 OR、组间是 AND，
   某个维度在本仓没有可选项时整组不出现。筛选是纯客户端过滤（不调 `kiln list`），状态按仓库记在内存里。
@@ -193,6 +194,6 @@ dsh plugin --profile web add <本仓库>/plugin
 - **动作流缓存占内存**：客户端与宿主各留一份（10 万行约 35MB/份，7 槽数组实测 356B/行）。
   单仓超 12 万行 / 32MB 不存，两端各 64MB 总预算按 LRU 淘汰（单仓超限只降级它自己）；
   浏览器堆没有可靠的测量 API，页头显示的是自报字节数，不是实测堆。
-- 关系词表按 kiln 0.2.0 的内置词表硬编码在 `client.js` 的 `GROUPS` 里；等 kiln 支持
-  `.kilnconfig.jsonc` 配置 `relations` 后改成读配置。
+- 关系词表仍是 kiln 内置的五种，展示文案硬编码在 `client.js` 的 `REL_SIDES`（方向 × 一句话的表）；
+  等 kiln 支持在 `.kilnconfig.jsonc` 里配置 `relations` 后改成读配置——那时缺的是一行文案，不是新分支。
 - Flow 布局是初稿，Triage / Genealogy 尚未实现。
