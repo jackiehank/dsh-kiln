@@ -242,3 +242,112 @@
 - 对 1 万 / 5 万 / 10 万动作给出堆与首次加载的估算，并标注验证方式；
 - 明确与现有图/详情/搜索缓存、刷新语义、虚拟列表的关系；
 - 列出风险与回退（缓存坏了会怎样、怎么一键清掉）。
+
+## 选型假设（hypothesize）
+
+前提是一条便宜的事实：**探 HEAD 不要钱**。`readHeadFast` 直读 `.git/HEAD`（`git.js:68-89`，实测 ~2ms），
+不需要 spawn；贵的是“没变也把 24MB 再搬一遍”。所以问题不是“要不要每次问一句”，而是“问完能不能不搬”。
+
+### 三个候选
+
+| 维度 | A：只缓存宿主 rows | B：只缓存客户端 rows | C：两层 + 协议 |
+| --- | --- | --- | --- |
+| 切回标签（HEAD 未变） | 一次全量 HTTP + parse + fold | 探测 HEAD 后直接用本地 | 2ms 探测，0 传输 |
+| F5 / 换会话 | 宿主还在，直接重发 | 全量流（34–166ms） | 重发一次，之后恢复 |
+| 新提交之后 | 全量重跑 `action log` | 全量流 | 只读新前缀（增量） |
+| 常驻堆（10 万行） | 78MB（宿主） | 78MB（浏览器） | 156MB，阈值要更严 |
+| 实现量 / 风险 | 小 / 低 | 中 / 中 | 大 / 中 |
+
+单看某一次切页，B 最省（连 HTTP 都省）；但它不知道数据新不新，必须靠 A 的 HEAD 探测；
+而 A 没有 B 的话，每次切页仍要搬 24MB。**两者缺一都只解决一半**，但可以分期落地，每阶段自身可用。
+
+### 推荐：C 的做法，分三个阶段，每期独立可回退
+
+| 阶段 | 做什么 | 拿到的收益 | 验收 |
+| --- | --- | --- | --- |
+| 1 | 宿主 rows 缓存，HEAD 未变直接按原 NDJSON 重发 | 不再起子进程（省 34–166ms） | 切页时 `x-kiln-mode: hit`，宿主子进程数 0；HEAD 变了走 build |
+| 2 | 客户端模块级 rows + `?head=` 协议（unchanged / full） | 切页 0 传输、0 parse、0 fold | 切页时无请求体传输，页头显示 cache 命中 |
+| 3 | 宿主前缀增量（HEAD 前进只读新前缀） | 新提交后也是 ~40ms，不是 166ms | 新加 1 条动作后 `x-kiln-mode: delta`，只发新增行 |
+
+阶段 4（可选，暂不做）：客户端已持有旧 rows 时只发差集（delta 传输）。它只省“有新提交那一次”的 24MB，
+而阶段 2 已经把最常见的情况（没新提交）降到 0；先量再决定。
+
+### 阶段 2/3 的协议
+
+```text
+GET /kiln/timeline?cwd=<repo>[&head=<客户端持有的 HEAD>][&fresh=1]
+  x-kiln-mode: full | unchanged | delta | bypass
+  x-kiln-head: <本次看到的 HEAD>
+  x-kiln-rows: <本次发出的行数>
+```
+
+- `unchanged`：空 body，客户端保留本地 rows，只更新耗时；
+- `delta`：body 是**新前缀**（倒序，最后一行紧邻客户端已知的第一条），客户端 prepend；
+- `full`：整个流，客户端替换；
+- `bypass`：仓库超限或 HEAD 探测失败，按老样子流式读，客户端不写缓存。
+
+客户端合并按 sha 去重（`existing.has(row.id)`），**不按日期**：同秒多条只靠 sha 定序，日期只用于显示。
+
+### 增量算法（阶段 3）
+
+前置：宿主缓存 `{ head: Hc, rows }`、`binToken` 相同、`readHeadFast` 得到 `Hn`。
+
+1. `Hn === Hc` → `unchanged`，收工。
+2. `Hn !== Hc` → 跑一次 `git merge-base --is-ancestor Hc Hn`（只在 HEAD 变化时跑，约 15–30ms）：
+   - 非祖先（rebase / amend / force-push）→ `full` 重建；
+   - 是祖先 → 继续。
+3. 起 `action log --jsonl`，边收边比：收到 `row.id === rows[0].id`（缓存里最新那条）即停，kill 子进程，
+   把新前缀 prepend 到缓存，`head = Hn`。
+4. EOF 都没撞上 → 缓存的第一条已被改写/裁剪 → `full` 重建。
+
+**已知漏洞（要写进文档，不装看不见）**：cherry-pick / rebase 会保留**旧 author date**，这种新提交在
+author-date 倒序里排在 boundary 之后，前缀读法看不到。`merge-base` 只能挡住改写，挡不住这种。
+在拿到上游 `--since` / 范围查询之前，这是信息上限；缓解是「刷新 = 清双端 + full」，
+以及第一次发现 `Hn !== Hc` 时**总是**至少跑一次完整校验（可配置关掉）。
+
+### 容量与降级
+
+- 单仓上限：**50,000 行 / 20MB 原始 NDJSON**（客户端 rows 序列化后约 12MB）。
+- 超限 → `bypass` 并记 `oversize`（本会话不再尝试；HEAD 或 binToken 变化时重置）。行为**等于今天**。
+- 不做“只缓存首屏 N 条”：issue 页的 done 与序号要全史，截断的 rows 会让 `foldIssues` 算错，
+  比没缓存更糟。也不做“首屏 + 新前缀”的混合态，理由相同。
+- 双端预算：宿主最多 2 个仓（按最后访问 LRU），客户端只留当前仓。5 万阈值下双端合计约 78MB，
+  10 万行会到 156MB —— 所以阈值按下限取，不按“能放得下”取。
+- 不存原始 NDJSON：多 25MB / 10 万行，而 parse 只要 58ms。
+- 不存 fold 索引：10 万行 61ms，memo 在 rows 身份上就够（`React.useMemo` 已经这么做）。
+
+### 估算（实测外推）
+
+| 规模 | rows 传输 | 每层堆 | 全量流 | HEAD 命中 | 增量（+1 条） |
+| --- | --- | --- | --- | --- | --- |
+| 1 万 | 2.4MB | 7.8MB | ~40ms | ~2ms | ~40ms + 2.4KB |
+| 5 万 | 12MB | 39MB | ~83ms | ~2ms | ~40ms |
+| 10 万 | 24MB | 78MB | ~166ms | ~2ms | ~40ms + 0.1MB |
+
+验证方式：`probe-memory.mjs` 的克隆行给堆与 fold；假子进程 stub 进 `run.mjs` 测协议分支
+（unchanged / delta / fallback / bypass）；真仓再用页头 `x-kiln-mode` 复核。
+
+### 与现有缓存、刷新的关系
+
+- 图缓存（`snapshot.js`）不动：同样是 HEAD+config+bin 键控，但它没有“增量”这一层；
+  timeline 的决策函数可以复用它的形状（`evaluateCache` 的返回多加一个 `changed` 分支）。
+- 详情 / 搜索不进这套：37ms/次、KB 级，收益与复杂度不匹配，留作后续小改动。
+- 刷新按钮：清双端 + `?fresh=1` → 保证 user 能拿到真数据；这也是增量漏洞的自愈通道。
+- 词表：顺手把 `actionsCache` 纳入 `clearRepoCaches`（或让词表 effect 依赖 `nonce`）。
+- 虚拟列表无关：它只管 DOM，rows 有多少由缓存决定。
+
+### 风险与回退
+
+1. **增量漏行**（back-dated 提交）→ 刷新自愈；文档写明，不假装没有。
+2. **双份内存** → 50k 阈值 + `bypass` + 页头可见，超限就退回今天的流式。
+3. **半截缓存**：只在收到 `done` 事件（流完整）后才提交缓存，中途失败不写。
+4. **kill 时机**：撞到 boundary 立刻 kill，走现有 `res.close → child.kill` 路径，不新开机制。
+5. **一键回退**：宿主 `DSH_KILN_TIMELINE_CACHE=off`（等价于 `bypass`），客户端 `?fresh=1`；不动配置文件。
+6. **升级 kiln**：`binaryToken` 变化 → 双端丢弃，重新全量。
+
+### 明确不做
+
+TTL（能精确探测就不猜）、落盘（破坏“不落盘”）、原始行缓存、fold 索引缓存、分页 UI、上游改接口。
+
+**一句话结论**：先做阶段 1（不再起进程），再做阶段 2（不搬字节），阶段 3 视真实提交频率决定；
+三者都能单独上线、单独回退。
