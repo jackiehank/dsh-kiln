@@ -117,3 +117,38 @@ export function binaryToken(bin) {
     return `${bin}:unknown`
   }
 }
+
+/**
+ * `old` 是不是 `next` 的祖先。**只用于决定“能不能做前缀增量”**：
+ * 返回 null 表示判断不了（超时 / git 不可用），调用方必须当作否定处理。
+ */
+export async function isAncestor(repo, old, next) {
+  if (!HASH.test(String(old ?? '')) || !HASH.test(String(next ?? ''))) return null
+  const result = await run(repo, ['merge-base', '--is-ancestor', old, next])
+  if (result.code === 0) return true
+  if (result.code === 1) return false
+  return null
+}
+
+/**
+ * `from..to` 区间内所有提交的 author 时间：`{ count, min }`（秒级 epoch）。
+ *
+ * 只读时间戳，不碰 trailer——插件不解析 kiln 的状态，只判断“新提交是不是都排在前缀里”。
+ * 超过 `maxCount` 个提交时返回 null：区间太大就不做增量，调用方回退全量。
+ */
+export async function rangeAuthorTimes(repo, from, to, maxCount = 2000) {
+  if (!HASH.test(String(from ?? '')) || !HASH.test(String(to ?? ''))) return null
+  const cap = Number.isInteger(maxCount) && maxCount > 0 ? maxCount : 2000
+  const result = await run(repo, ['log', '--format=%at', '--max-count', String(cap + 1), `${from}..${to}`])
+  if (result.code !== 0) return null
+  const lines = result.stdout.split(/\r?\n/).filter((line) => line.trim() !== '')
+  if (lines.length === 0) return { count: 0, min: 0 }
+  if (lines.length > cap) return null
+  let min = Number.POSITIVE_INFINITY
+  for (const line of lines) {
+    const value = Number.parseInt(line, 10)
+    if (!Number.isInteger(value)) return null
+    if (value < min) min = value
+  }
+  return { count: lines.length, min }
+}

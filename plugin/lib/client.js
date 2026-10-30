@@ -86,6 +86,17 @@ window.__ModuleLoader__.load({
       while (timelineCache.size > TIMELINE_CACHE_REPOS) timelineCache.delete(timelineCache.keys().next().value)
       return true
     }
+
+    /**
+     * 增量响应（`delta`）要和手上那份拼起来：新行在前，旧行里去掉重复的 sha。
+     * 按 sha（不是日期）去重——同秒多条的先后顺序只有 sha 能定。
+     */
+    function mergeTimelineRows(newer, older) {
+      const head = Array.isArray(newer) ? newer : []
+      if (!Array.isArray(older) || older.length === 0) return head.slice()
+      const known = new Set(head.map((row) => row.id))
+      return head.concat(older.filter((row) => !known.has(row.id)))
+    }
     /** hover 预取的延迟：太短会在扫过列表时把每一行都取一遍。 */
     const PREFETCH_MS = 120
 
@@ -2539,7 +2550,10 @@ window.__ModuleLoader__.load({
             })
             if (!response.ok) throw new Error(`HTTP ${response.status}`)
             head = response.headers.get('x-kiln-head') ?? head
-            if (response.headers.get('x-kiln-mode') === 'unchanged') {
+            const mode = response.headers.get('x-kiln-mode') ?? ''
+            // 增量响应：body 里只有新增的行，读完要和手上那份拼起来
+            const delta = mode === 'delta' && cached !== undefined
+            if (mode === 'unchanged') {
               // 客户端这份就是最新的：一个字节都不用读，渲染保持缓存，只把耗时刷新一下
               settled = true
               if (timer !== null) {
@@ -2577,7 +2591,12 @@ window.__ModuleLoader__.load({
               timer = null
             }
             if (!sawDone && error === null) error = '时间线流被提前中断（没有收到收口事件）。'
-            if (error === null && sawDone) {
+            if (error === null && sawDone && delta === true) {
+              // 只收到新增的几行：和本地那份拼起来，再整体存回
+              const merged = mergeTimelineRows(rows, cached.rows)
+              rememberTimeline(cwd, head, merged, bytes + cached.bytes)
+              setTimeline({ rows: merged, phase: 'done', error: null, ms: Date.now() - startedAt, count: merged.length })
+            } else if (error === null && sawDone) {
               rememberTimeline(cwd, head, rows.slice(), bytes)
               publish('done')
             } else {
@@ -3480,6 +3499,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, actionsCache, timelineCache, rememberTimeline, nextSearchIndex, jumpPlan, rowKeyOf, buildOffsets, virtualWindow, css: CSS } } : {}) }
+    return { name: '@local/dsh-kiln', inject, apply, ...(globalThis.__DSH_KILN_TEST__ === true ? { __internals: { paintFocus, buildMermaid, graphTiers, issueSummary, tipPlacement, graphFontSize, issueFacets, filterIssues, filtersActive, readFilters, rowFacets, filterRows, readRowFilters, filterGroups: FILTER_GROUPS, splitTerms, mapSearchRows, matchRanges, mergeRanges, foldIssues, normalizeVocab, scopeTimeline, cacheKey, cacheGet, cacheSet, clearRepoCaches, actionsCache, timelineCache, rememberTimeline, mergeTimelineRows, nextSearchIndex, jumpPlan, rowKeyOf, buildOffsets, virtualWindow, css: CSS } } : {}) }
   },
 })

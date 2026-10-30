@@ -32,7 +32,8 @@ async function check(name, fn) {
   } catch (error) {
     failures.push({ name, error })
     console.log(`FAIL ${name}`)
-    console.log(`     ${String(error?.message ?? error).split('\n')[0]}`)
+    // 断言失败的关键信息在第二行起（expected/actual），整段打出来才排得动
+    for (const line of String(error?.message ?? error).split('\n')) console.log(`     ${line}`)
   }
 }
 
@@ -1054,17 +1055,39 @@ function timelineHarness(options = {}) {
     enabled: options.enabled ?? true,
     spawns: 0,
     children: [],
+    /** 增量前置：祖先与区间日期由测试直接摆布。 */
+    ancestor: options.ancestor ?? true,
+    range: options.range ?? { count: 0, min: 0 },
+    probes: [],
+    headCalls: 0,
+    /** 模拟“读前缀期间又有人提交”：从第 N 次 readHead 起返回 raceHead。 */
+    raceFrom: null,
+    raceHead: 'h-race',
   }
   const git = {
-    readHead: async () => state.head,
+    readHead: async () => {
+      state.headCalls += 1
+      if (Number.isInteger(state.raceFrom) && state.headCalls >= state.raceFrom) return state.raceHead
+      return state.head
+    },
     configToken: () => state.config,
     binaryToken: () => state.bin,
+    isAncestor: async (_repo, from, to) => {
+      state.probes.push(`ancestor:${from}->${to}`)
+      return state.ancestor
+    },
+    rangeAuthorTimes: async (_repo, from, to) => {
+      state.probes.push(`range:${from}..${to}`)
+      return state.range
+    },
   }
   const cache = createRowsCache({
     git,
     rowsLimit: options.rowsLimit ?? 1000,
     bytesLimit: options.bytesLimit ?? 1 << 20,
     repoLimit: options.repoLimit ?? 2,
+    incrementMinRows: options.incrementMinRows ?? 0,
+    incrementMaxCommits: options.incrementMaxCommits ?? 100,
   })
   const handler = createTimelineHandler({
     resolveKiln: () => '/bin/kiln',
@@ -1083,19 +1106,35 @@ function timelineHarness(options = {}) {
   return { state, cache, handler }
 }
 
-/** 跑一次请求；如果这次起了子进程，就把给定的 NDJSON 喂完并收口。 */
+/**
+ * 跑一次请求；起了子进程就按顺序喂 payload，直到 handler 收工。
+ *
+ * 支持“先试增量、失败退回全量”这种一轮里起两次子进程的路径：
+ * `payloads` 依次给每个子进程，最后一个会重复使用。
+ */
 async function respond(harness, options = {}) {
   const fake = makeFakeRes()
   const before = harness.state.children.length
-  await harness.handler(options.cwd ?? '/repo', fake.res, options.args ?? {})
-  const spawned = harness.state.children.length > before
-  if (spawned) {
-    const child = harness.state.children[harness.state.children.length - 1]
-    child.stdout.emit('data', options.payload ?? CACHE_NDJSON)
-    child.emit('close', options.code ?? 0)
-    await new Promise((resolve) => setImmediate(resolve))
+  const payloads = options.payloads ?? [options.payload ?? CACHE_NDJSON]
+  let finished = false
+  const running = harness
+    .handler(options.cwd ?? '/repo', fake.res, options.args ?? {})
+    .finally(() => {
+      finished = true
+    })
+  let fed = before
+  for (let guard = 0; guard < 5000 && finished === false; guard += 1) {
+    if (harness.state.children.length > fed) {
+      const child = harness.state.children[fed]
+      fed += 1
+      child.stdout.emit('data', payloads[Math.min(fed - before - 1, payloads.length - 1)])
+      child.emit('close', options.code ?? 0)
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 1))
+    }
   }
-  return { ...fake, spawned }
+  await running
+  return { ...fake, spawned: harness.state.children.length > before }
 }
 
 await check('动作流缓存：决策表——关掉/无 HEAD/冷启/配置/二进制/命中/HEAD 前进', () => {
@@ -1147,6 +1186,151 @@ await check('动作流缓存：HEAD 前进 → 重建并覆盖（阶段 1 还不
   const again = await respond(harness)
   assert.equal(again.state.headers['x-kiln-mode'], 'hit')
   assert.equal(again.events().filter((event) => event.kind === 'action').length, 1)
+})
+
+// ---------------------------------------------------------------- 阶段 3：前缀增量
+
+const CACHE_NEW = {
+  issue: 'c',
+  action: 'test',
+  commit: 'c'.repeat(40),
+  date: '2026-10-03T00:00:00+08:00',
+  title: 'C',
+}
+const BOUNDARY_SEC = Math.floor(Date.parse(CACHE_ROWS[0].date) / 1000)
+
+/** 增量成功所需的 git 探测结果：祖先成立、区间里只有更新的提交。 */
+function safeIncrement(state, min = BOUNDARY_SEC + 60) {
+  state.ancestor = true
+  state.range = { count: 1, min }
+}
+
+await check('阶段3：HEAD 前进且前缀可安全读 → 只读新前缀，拼在缓存前面', async () => {
+  const harness = timelineHarness()
+  await respond(harness)
+  harness.state.head = 'h2'
+  safeIncrement(harness.state)
+
+  const payload = `${JSON.stringify(CACHE_NEW)}\n${JSON.stringify(CACHE_ROWS[0])}\n`
+  const result = await respond(harness, { payloads: [payload] })
+
+  assert.equal(result.state.headers['x-kiln-mode'], 'incremental')
+  assert.deepEqual(
+    result.events()
+      .filter((event) => event.kind === 'action')
+      .map((event) => event.issueId),
+    ['c', 'a', 'b'],
+    '新行在前、缓存行在后',
+  )
+  assert.equal(harness.state.spawns, 2, '增量只起一次子进程（加上首次构建）')
+  const rows = harness.cache.rows('/repo')
+  assert.equal(rows.length, 3)
+  assert.equal(rows[0].id, CACHE_NEW.commit)
+  assert.equal(harness.cache.peek('/repo').head, 'h2')
+})
+
+await check('阶段3：客户端 HEAD 正好是缓存那一份 → 只发新增行（delta）', async () => {
+  const harness = timelineHarness()
+  await respond(harness)
+  harness.state.head = 'h2'
+  safeIncrement(harness.state)
+
+  const payload = `${JSON.stringify(CACHE_NEW)}\n${JSON.stringify(CACHE_ROWS[0])}\n`
+  const result = await respond(harness, { args: { head: 'h1' }, payloads: [payload] })
+
+  assert.equal(result.state.headers['x-kiln-mode'], 'delta')
+  assert.deepEqual(
+    result.events()
+      .filter((event) => event.kind === 'action')
+      .map((event) => event.issueId),
+    ['c'],
+    'delta 只发新增的那一行',
+  )
+  assert.equal(harness.cache.rows('/repo').length, 3)
+})
+
+await check('阶段3：区间里有回退日期的提交（cherry-pick/rebase）→ 拒绝增量，全量重读', async () => {
+  const harness = timelineHarness()
+  await respond(harness)
+  harness.state.head = 'h2'
+  safeIncrement(harness.state, BOUNDARY_SEC - 60)
+
+  const result = await respond(harness, { payloads: [CACHE_NDJSON] })
+  assert.equal(result.state.headers['x-kiln-mode'], 'build')
+  assert.equal(harness.state.spawns, 2, '只起一次全量')
+  assert.equal(harness.cache.rows('/repo').length, 2, '缓存被全量结果覆盖')
+})
+
+await check('阶段3：旧 HEAD 不是新 HEAD 的祖先（改写历史）→ 全量重读', async () => {
+  const harness = timelineHarness()
+  await respond(harness)
+  harness.state.head = 'h2'
+  harness.state.ancestor = false
+  harness.state.range = { count: 5, min: BOUNDARY_SEC + 60 }
+
+  const result = await respond(harness, { payloads: [CACHE_NDJSON] })
+  assert.equal(result.state.headers['x-kiln-mode'], 'build')
+  assert.equal(harness.cache.rows('/repo').length, 2)
+})
+
+await check('阶段3：新前缀读完都没撞到 boundary → 回退全量', async () => {
+  const harness = timelineHarness()
+  await respond(harness)
+  harness.state.head = 'h2'
+  safeIncrement(harness.state)
+
+  const truncated = `${JSON.stringify(CACHE_NEW)}\n`
+  const result = await respond(harness, { payloads: [truncated, CACHE_NDJSON] })
+
+  assert.equal(result.state.headers['x-kiln-mode'], 'build')
+  assert.equal(harness.state.spawns, 3, '一次失败的增量 + 一次全量')
+  assert.equal(harness.cache.rows('/repo').length, 2)
+  assert.deepEqual(
+    result.events()
+      .filter((event) => event.kind === 'action')
+      .map((event) => event.issueId),
+    ['a', 'b'],
+    '客户端只收到全量结果，没有半截新行',
+  )
+})
+
+await check('阶段3：读前缀期间 HEAD 又动了 → 判定过期，回退全量', async () => {
+  const harness = timelineHarness()
+  await respond(harness)
+  harness.state.head = 'h2'
+  safeIncrement(harness.state)
+  // 下一次 readHead 是 decide（h2），再下一次是读完之后复核（h3）
+  harness.state.raceFrom = harness.state.headCalls + 2
+  harness.state.raceHead = 'h3'
+
+  const payload = `${JSON.stringify(CACHE_NEW)}\n${JSON.stringify(CACHE_ROWS[0])}\n`
+  const result = await respond(harness, { payloads: [payload, CACHE_NDJSON] })
+
+  assert.equal(result.state.headers['x-kiln-mode'], 'build', '复核失败就该退回全量')
+  assert.equal(harness.state.spawns, 3, '构建 + 增量 + 全量')
+})
+
+await check('阶段3：区间提交数超过上限 → 直接全量（增量不划算）', async () => {
+  const harness = timelineHarness({ incrementMaxCommits: 2 })
+  await respond(harness)
+  harness.state.head = 'h2'
+  harness.state.ancestor = true
+  harness.state.range = { count: 9, min: BOUNDARY_SEC + 60 }
+
+  const result = await respond(harness, { payloads: [CACHE_NDJSON] })
+  assert.equal(result.state.headers['x-kiln-mode'], 'build')
+  assert.equal(harness.state.spawns, 2)
+})
+
+await check('阶段3：缓存太小时不做增量（两次 git 探测比全读还贵）', async () => {
+  const harness = timelineHarness({ incrementMinRows: 1000 })
+  await respond(harness)
+  harness.state.head = 'h2'
+  safeIncrement(harness.state)
+
+  const result = await respond(harness, { payloads: [CACHE_NDJSON] })
+  assert.equal(result.state.headers['x-kiln-mode'], 'build')
+  assert.equal(harness.state.probes.length, 0, '连探测都不该发')
 })
 
 await check('动作流缓存：超限不存半截，这一仓本会话改走 bypass', async () => {
@@ -1221,14 +1405,23 @@ await check('动作流缓存：配置换了就算 HEAD 相同也要重发（客�
 await check('动作流缓存：客户端断开 → kill 子进程，后续行不再写', async () => {
   const harness = timelineHarness()
   const fake = makeFakeRes()
-  await harness.handler('/repo', fake.res, {})
+  let finished = false
+  const running = harness.handler('/repo', fake.res, {}).finally(() => {
+    finished = true
+  })
+  // 等子进程起来（handler 里先 await 探测，再 spawn）
+  for (let i = 0; i < 500 && harness.state.children.length === 0 && finished === false; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1))
+  }
   const child = harness.state.children[0]
+  assert.ok(child !== undefined, '应该起了一个子进程')
   child.stdout.emit('data', `${JSON.stringify(CACHE_ROWS[0])}\n`)
   fake.disconnect()
   assert.equal(child.killed, 1, '连接关了就该 kill')
   const written = fake.state.chunks.length
   child.stdout.emit('data', `${JSON.stringify(CACHE_ROWS[1])}\n`)
   child.emit('close', 0)
+  await running
   assert.equal(fake.state.chunks.length, written, '关掉之后不再写')
 })
 
@@ -1365,6 +1558,16 @@ await check('动作流客户端缓存：按仓库记 HEAD，超限/换仓/刷新
   timelineCache.set('/x', { head: 'h1', rows, bytes: 1 })
   clearRepoCaches('/x')
   assert.equal(timelineCache.has('/x'), false, '刷新要连动作流缓存一起清')
+})
+
+await check('动作流客户端缓存：delta 合并——新行在前、按 sha 去重、空旧集照抄', () => {
+  const { mergeTimelineRows } = clientInternals()
+  const newer = [{ id: 'c' }]
+  const older = [{ id: 'a' }, { id: 'b' }]
+  assert.deepEqual(mergeTimelineRows(newer, older).map((row) => row.id), ['c', 'a', 'b'])
+  assert.deepEqual(mergeTimelineRows([{ id: 'a' }], older).map((row) => row.id), ['a', 'b'], '重复的 sha 不出现两次')
+  assert.deepEqual(mergeTimelineRows(newer, []).map((row) => row.id), ['c'])
+  assert.deepEqual(mergeTimelineRows([], older).map((row) => row.id), ['a', 'b'])
 })
 
 await check('搜索结果键盘：在结果里上下移动，到两端回绕', () => {
