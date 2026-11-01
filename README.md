@@ -1,5 +1,7 @@
 # dsh-kiln
 
+[![dsh.so risk](https://cdn.dsh.so/badge/dsh-kiln.svg)](https://www.dsh.so/artifact/dsh-kiln/?ref=badge)
+
 把 [kiln](https://github.com/jackiehank/kiln) 的 issue 历史搬进 DSH（DeepSeek Harness）的插件。
 
 kiln 用 git commit 的 trailer（`issue:` + `action:`）记录「问题 → 动作 → 结论」，于是「为什么这么做」
